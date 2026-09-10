@@ -690,8 +690,21 @@ def _matches_source_pattern(path: str, pattern: str) -> bool:
     return fnmatch.fnmatch(normalized.lower(), pattern.lower())
 
 
+# NTFS's own metadata files (full file-system timeline, allocation state,
+# transaction log, ...) sit at the volume's true root and carry no useful
+# name pattern in common with the registry/Linux-artifact matchers below --
+# without an explicit name check here they were never materialized at all,
+# on any NTFS volume, drive-letter-prefixed layout or not.
+_NTFS_METADATA_FILENAMES = {
+    "$MFT", "$MFTMirr", "$LogFile", "$Bitmap", "$Boot",
+    "$Secure", "$UpCase", "$AttrDef", "$BadClus", "$Volume",
+}
+
+
 def _should_materialize(path: str) -> bool:
     lower_path = path.lower()
+    if Path(path).name in _NTFS_METADATA_FILENAMES:
+        return True
     if looks_like_linux_artifact(path):
         return True
     if any(_matches_source_pattern(path, pattern) for pattern in _registry_source_patterns()):
@@ -816,6 +829,65 @@ def _materialize_volume_installation(
         warnings.append(f"skipped_deleted_directory_entries:{walk_stats.unallocated_entries_skipped}")
     if walk_stats.cycles_prevented:
         warnings.append(f"prevented_directory_cycles:{walk_stats.cycles_prevented}")
+    # When install.root_path is a drive-letter subfolder (e.g. "/C") rather
+    # than the volume's true root, the walk above never visits that true
+    # root at all -- so NTFS's own metadata files ($MFT and siblings), which
+    # always live there rather than under the drive-letter folder, would be
+    # silently missed even though _should_materialize now recognizes them.
+    # This is a narrow, non-recursive top-level scan just for those known
+    # filenames -- it deliberately does not walk the true root's other
+    # top-level entries (Volume Shadow Copy snapshots included).
+    if install.root_path not in ("", "/"):
+        try:
+            root_entries = list(fs_info.open_dir(path="/"))
+        except Exception:  # noqa: BLE001
+            root_entries = []
+        for entry in root_entries:
+            name_info = getattr(entry.info, "name", None)
+            raw_name = getattr(name_info, "name", None) if name_info else None
+            if not raw_name:
+                continue
+            decoded_name = raw_name.decode("utf-8", "replace")
+            if decoded_name not in _NTFS_METADATA_FILENAMES or not _is_allocated_entry(entry):
+                continue
+            meta = getattr(entry.info, "meta", None)
+            if meta is None or meta.type != pytsk3.TSK_FS_META_TYPE_REG:
+                continue
+            full_path = f"/{decoded_name}"
+            file_count += 1
+            if file_count > settings.disk_image_max_files_per_volume:
+                warnings.append("max_files_per_volume_exceeded")
+                break
+            try:
+                relative_path = sanitize_relative_path(full_path.lstrip("/"))
+            except ValueError:
+                warnings.append(f"skipped_invalid_path:{full_path}")
+                continue
+            target = install_dir / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                file_obj = fs_info.open(full_path)
+                size = int(getattr(meta, "size", 0) or 0)
+                data = b"" if size == 0 else file_obj.read_random(0, size)
+            except Exception:  # noqa: BLE001
+                warnings.append(f"unreadable_file:{full_path}")
+                continue
+            bytes_written += len(data)
+            if bytes_written > settings.disk_image_max_bytes_per_volume:
+                warnings.append("max_bytes_per_volume_exceeded")
+                break
+            target.write_bytes(data)
+            relative_output = str(target.relative_to(destination_root))
+            extracted_files.append(relative_output)
+            manifest_entries.append({"path": relative_output, "ignored": False, "reason": None, "size": len(data), "status": "extracted", "local_path": str(target)})
+            source_map[relative_output] = {
+                "disk_image_id": disk_image.id,
+                "disk_volume_id": volume.id,
+                "os_installation_id": install.id,
+                "original_source_path": full_path,
+                "logical_source_path": relative_output,
+                "acquisition_method": "pytsk3_readonly_materialization",
+            }
     return extracted_files, manifest_entries, source_map, warnings
 
 
