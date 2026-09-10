@@ -4384,6 +4384,31 @@ def test_browser_detection_does_not_flag_every_file_inside_browser_profile() -> 
     assert result["artifact_type"] != "browser"
 
 
+def test_extensionless_json_content_is_classified_as_generic_json(tmp_path: Path) -> None:
+    """Chrome/Edge write "Preferences", "Secure Preferences" and "Local
+    State" as plain JSON with no file extension -- disk-image extraction
+    was dumping them into generic_csv purely because classification only
+    checked the suffix, not the content."""
+    path = tmp_path / "Preferences"
+    path.write_text('{"browser": {"check_default_browser": false}}', encoding="utf-8")
+    result = classify_artifact(path)
+    assert result["artifact_type"] == "generic_json"
+    assert result["parser"] == "generic_json"
+
+
+def test_extensionless_binary_file_stays_generic_csv(tmp_path: Path) -> None:
+    path = tmp_path / "History-journal"
+    path.write_bytes(b"\x00\x01SQLite journal binary garbage\xff\xfe")
+    result = classify_artifact(path)
+    assert result["artifact_type"] == "generic_csv"
+    assert result["parser"] == "generic_csv"
+
+
+def test_extensionless_json_sniff_handles_missing_file_gracefully() -> None:
+    result = classify_artifact(Path("/nonexistent/path/without/extension/Local State"))
+    assert result["artifact_type"] == "generic_csv"
+
+
 def test_browser_sensitive_artifact_does_not_index_events(tmp_path: Path) -> None:
     path = tmp_path / "Login Data"
     path.write_text("dummy", encoding="utf-8")
