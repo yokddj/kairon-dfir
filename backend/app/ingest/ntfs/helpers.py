@@ -12,12 +12,21 @@ NTFS_NAME_HINTS = (
     "zone.identifier",
     "alternate datastream",
     "alternatedatastream",
-    "shadowcopy",
-    "shadow copy",
-    "vss",
     "indexallocation",
     "indexcsv",
     "logfileparser",
+)
+# Checked against the filename only, not the whole path (see
+# looks_like_ntfs_artifact) -- these terms are common enough as arbitrary
+# directory names (e.g. an analyst's own "VSS1" folder holding a Volume
+# Shadow Copy extracted before imaging; see
+# app.disk_images.service._root_secondary_installation_prefixes) that
+# matching them anywhere in a path swept every file living under such a
+# folder into the generic NTFS bucket, regardless of what it actually was.
+NTFS_FILENAME_ONLY_HINTS = (
+    "shadowcopy",
+    "shadow copy",
+    "vss",
 )
 NTFS_HEADER_HINTS = {
     "usn",
@@ -120,6 +129,8 @@ def looks_like_ntfs_artifact(path: Path, headers: list[str] | None = None) -> bo
     if lower_suffix in {".pf", ".lnk", ".evtx"}:
         return False
     if any(token in lower_name for token in NTFS_NAME_HINTS) or any(token in normalized_path for token in NTFS_NAME_HINTS):
+        return True
+    if any(token in lower_name for token in NTFS_FILENAME_ONLY_HINTS):
         return True
     if len(header_set & NTFS_HEADER_HINTS) >= 2:
         return True
