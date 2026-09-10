@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from app.ingest.detector import classify_artifact
+from app.ingest.browser.webcache_ese import looks_like_webcache_database
 from app.ingest.eztools.base import ensure_csv_field_limit
 from app.ingest.scheduled_tasks.helpers import looks_like_scheduled_task_xml_path
 
@@ -34,7 +35,8 @@ def list_kape_artifacts(root: Path) -> list[dict]:
         is_scheduled_task = looks_like_scheduled_task_xml_path(path)
         is_linux = bool(looks_like_linux_artifact(path))
         is_extensionless = ext == "" and path.name[0] != "." if path.name else False
-        if not is_accepted_extension and not is_scheduled_task and not is_linux and not is_extensionless:
+        is_webcache_database = looks_like_webcache_database(path)
+        if not is_accepted_extension and not is_scheduled_task and not is_linux and not is_extensionless and not is_webcache_database:
             continue
         headers = []
         if path.suffix.lower() == ".csv":
