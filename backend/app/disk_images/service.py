@@ -310,10 +310,72 @@ def _root_drive_letter_prefixes(fs_info: pytsk3.FS_Info) -> list[str]:
     return prefixes
 
 
+_ROOT_INSTALLATION_SCAN_EXCLUDED_NAMES = {"$recycle.bin", "system volume information"}
+
+
+def _root_secondary_installation_prefixes(fs_info: pytsk3.FS_Info) -> list[str]:
+    """Beyond a plain drive-letter folder (_root_drive_letter_prefixes),
+    some evidence has an entire prior installation copied into an
+    arbitrarily-named top-level folder -- most commonly an analyst (or a
+    triage tool) mounting a Volume Shadow Copy and copying its contents out
+    before imaging, rather than the snapshot being parsed at the block
+    level (which this codebase does not do). Checked as install-root
+    candidates the same way a drive-letter folder is; the marker-based
+    confidence check in _detect_installations_under is what actually
+    decides whether anything here looks like a real installation, so a
+    folder existing here never creates a false positive by itself."""
+    try:
+        root = fs_info.open_dir(path="/")
+    except Exception:
+        return []
+    prefixes = []
+    for entry in root:
+        try:
+            name = entry.info.name.name.decode("utf-8", "replace")
+        except Exception:
+            continue
+        if name in {".", ".."} or name.startswith("$") or name.lower() in _ROOT_INSTALLATION_SCAN_EXCLUDED_NAMES:
+            continue
+        if len(name) == 1 and name.isalpha() and name.isupper():
+            continue  # already covered by _root_drive_letter_prefixes
+        meta = getattr(entry.info, "meta", None)
+        if not (meta and meta.type == pytsk3.TSK_FS_META_TYPE_DIR):
+            continue
+        prefixes.append(f"/{name}")
+    return prefixes
+
+
+def _looks_like_drive_letter_root(root_path: str) -> bool:
+    """True only for the "/C"-style layout _root_drive_letter_prefixes
+    detects -- the true root's NTFS metadata files ($MFT and siblings)
+    genuinely belong to that same live filesystem, just filed as this
+    root's siblings instead of its children. A secondary installation root
+    (_root_secondary_installation_prefixes, e.g. "/VSS1") is different: its
+    own $MFT already lives *under* it and is captured by the ordinary
+    recursive walk, so the true-root metadata scan below must not also
+    misattribute the live volume's own $MFT to it."""
+    name = root_path.lstrip("/")
+    return len(name) == 1 and name.isalpha() and name.isupper()
+
+
 def _detect_installations(fs_info: pytsk3.FS_Info, volume_id: str) -> list[dict[str, Any]]:
     installations: list[dict[str, Any]] = []
     for root_prefix in ("", *_root_drive_letter_prefixes(fs_info)):
         installations.extend(_detect_installations_under(fs_info, root_prefix))
+    for root_prefix in _root_secondary_installation_prefixes(fs_info):
+        for installation in _detect_installations_under(fs_info, root_prefix):
+            installation["metadata"] = {
+                "installation_root_kind": "secondary_top_level_folder",
+                "secondary_root_folder": root_prefix.lstrip("/"),
+                "note": (
+                    "Detected under a non-drive-letter top-level folder rather than the "
+                    "volume's normal root -- commonly a Volume Shadow Copy or backup that "
+                    "was extracted onto the volume before imaging. Review whether this "
+                    "represents historical/prior-point-in-time data distinct from the "
+                    "live system."
+                ),
+            }
+            installations.append(installation)
     return installations
 
 
@@ -836,8 +898,12 @@ def _materialize_volume_installation(
     # silently missed even though _should_materialize now recognizes them.
     # This is a narrow, non-recursive top-level scan just for those known
     # filenames -- it deliberately does not walk the true root's other
-    # top-level entries (Volume Shadow Copy snapshots included).
-    if install.root_path not in ("", "/"):
+    # top-level entries. Gated to the drive-letter layout specifically (see
+    # _looks_like_drive_letter_root): a secondary installation root (e.g. a
+    # copied-out Volume Shadow Copy) has its own $MFT reachable by the
+    # ordinary walk above and must not have the *live* volume's $MFT
+    # misattributed to it here.
+    if _looks_like_drive_letter_root(install.root_path):
         try:
             root_entries = list(fs_info.open_dir(path="/"))
         except Exception:  # noqa: BLE001

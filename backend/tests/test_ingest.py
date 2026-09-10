@@ -6421,6 +6421,24 @@ def test_ntfs_heuristic_does_not_capture_vssvc_prefetch(tmp_path: Path) -> None:
     assert artifact_meta["ingest_audit"]["parser_name"] == "prefetch_raw"
 
 
+def test_ntfs_heuristic_still_matches_shadowcopy_in_the_filename_itself() -> None:
+    assert looks_like_ntfs_artifact(Path("shadowcopy.csv"))
+    assert looks_like_ntfs_artifact(Path("vss_snapshots.csv"))
+
+
+def test_ntfs_heuristic_does_not_sweep_up_every_file_under_a_vss_named_folder() -> None:
+    """A folder literally named "VSS1" -- e.g. an analyst's own manual
+    extraction of a Volume Shadow Copy before imaging, see
+    app.disk_images.service._root_secondary_installation_prefixes -- must
+    not make looks_like_ntfs_artifact swallow every file living under it
+    into the generic NTFS bucket ahead of browser/registry/etc.
+    classification, purely because "vss" appears as a path segment."""
+    assert not looks_like_ntfs_artifact(Path("/VSS1/Users/dfir/AppData/Local/Google/Chrome/User Data/Default/History"))
+    assert not looks_like_ntfs_artifact(Path("/VSS1/Windows/System32/config/SYSTEM"))
+    result = classify_artifact(Path("/VSS1/Windows/System32/config/SYSTEM"))
+    assert result["artifact_type"] != "ntfs"
+
+
 def test_finalize_artifact_status_marks_zero_event_native_prefetch_as_failed_or_partial() -> None:
     assert _finalize_artifact_status(parser_name="prefetch_raw", record_count=0, raw_parser_status=None) == "failed"
     assert _finalize_artifact_status(parser_name="prefetch_raw", record_count=0, raw_parser_status="failed") == "failed"
