@@ -190,6 +190,86 @@ def _detect_lvm_signature(blob: bytes) -> bool:
     return b"LABELONE" in blob[:4096]
 
 
+_NTFS_OEM_ID = b"NTFS    "
+_NTFS_JUMP_INSTRUCTION = b"\xeb\x52\x90"
+_NTFS_BOOT_SIGNATURE = b"\x55\xaa"
+
+
+def _looks_like_repairable_ntfs_boot_sector(blob: bytes) -> bool:
+    """A boot sector whose OEM ID says NTFS but whose jump instruction and/or
+    trailing 0x55AA signature are zeroed -- seen on images whose boot sector was
+    sanitized/redacted before being shared (e.g. to keep it from booting), while
+    the BPB fields that actually carry filesystem geometry (cluster size, MFT
+    location, offsets 0x0B-0x53) are left intact. TSK refuses to open these as a
+    filesystem at all because the signature it validates on open is missing --
+    not because the filesystem itself is unreadable. Both the primary boot
+    sector and NTFS's backup copy (last sector of the volume) are checked the
+    same way, since a sanitizer that zeroes one typically zeroes both."""
+    if len(blob) < 512:
+        return False
+    if blob[3:11] != _NTFS_OEM_ID:
+        return False
+    return blob[0:3] != _NTFS_JUMP_INSTRUCTION or blob[510:512] != _NTFS_BOOT_SIGNATURE
+
+
+def _repair_ntfs_boot_sector(blob: bytes) -> bytes:
+    """Restores only the two fields TSK's open-time validation checks --
+    changes nothing in the BPB, so the filesystem is read exactly as it always
+    was, just past a validation gate that isn't about the data itself."""
+    patched = bytearray(blob[:512])
+    patched[0:3] = _NTFS_JUMP_INSTRUCTION
+    patched[510:512] = _NTFS_BOOT_SIGNATURE
+    return bytes(patched)
+
+
+class _BootSectorPatchedReader(pytsk3.Img_Info):
+    """Wraps another Img_Info, substituting a repaired boot sector for the
+    original bytes at `boot_sector_offset` -- every other byte, including the
+    rest of the same sector, passes through unchanged. Used only as a
+    last-resort retry after the unpatched image already failed
+    pytsk3.FS_Info, to recover a filesystem whose boot sector was
+    sanitized/corrupted but whose actual metadata is intact."""
+
+    def __init__(self, inner: "_PytskFileReader | EwfImgInfo", *, boot_sector_offset: int, patched_boot_sector: bytes):
+        self._inner = inner
+        self._boot_sector_offset = boot_sector_offset
+        self._patched_boot_sector = patched_boot_sector
+        # Empty url, not a real path: every byte is served by read()/get_size()
+        # below. Same pattern EwfImgInfo already uses for a non-file-backed
+        # custom image source -- a stat-able but wrongly-sized path (e.g.
+        # /dev/null) would make TSK trust that path's own size over get_size().
+        super().__init__(url="")
+
+    def close(self) -> None:
+        try:
+            self._inner.close()
+        except Exception:
+            pass
+
+    def get_size(self) -> int:
+        return self._inner.get_size()
+
+    def read(self, offset: int, size: int) -> bytes:
+        data = bytearray(self._inner.read(offset, size))
+        patch_start = self._boot_sector_offset
+        patch_end = patch_start + len(self._patched_boot_sector)
+        overlap_start = max(offset, patch_start)
+        overlap_end = min(offset + size, patch_end, offset + len(data))
+        if overlap_start < overlap_end:
+            data[overlap_start - offset : overlap_end - offset] = self._patched_boot_sector[overlap_start - patch_start : overlap_end - patch_start]
+        return bytes(data)
+
+
+def _try_repair_ntfs_boot_sector(img: "_PytskFileReader | EwfImgInfo", offset_bytes: int, blob: bytes) -> pytsk3.FS_Info | None:
+    if not _looks_like_repairable_ntfs_boot_sector(blob):
+        return None
+    patched_reader = _BootSectorPatchedReader(img, boot_sector_offset=offset_bytes, patched_boot_sector=_repair_ntfs_boot_sector(blob))
+    try:
+        return pytsk3.FS_Info(patched_reader, offset=offset_bytes)
+    except Exception:
+        return None
+
+
 def _read_small_file(fs_info: pytsk3.FS_Info, path: str, limit: int = 32768) -> str:
     try:
         file_obj = fs_info.open(path)
@@ -755,15 +835,27 @@ def _discover_raw_volumes(context: dict[str, Any]) -> tuple[list[dict[str, Any]]
                     encrypted, encryption_type = _detect_encryption_signature(blob)
                     volume["encrypted"] = encrypted
                     volume["metadata"]["encryption_type"] = encryption_type
-                    if not encrypted and _detect_lvm_signature(blob):
-                        volume["metadata"]["container_signature"] = "lvm2_physical_volume"
-                        is_lvm_physical_volume = True
-                    # error.message is retained for server-side logs/support
-                    # only -- evidence_preflight.py's volume-diagnostic
-                    # translation never surfaces this raw exception text to
-                    # the analyst.
-                    volume["error"] = {"code": "unsupported_filesystem", "message": str(exc)}
-                    volume["status"] = "encrypted_volume" if encrypted else "unreadable_volume"
+                    repaired_fs_info = None if encrypted else _try_repair_ntfs_boot_sector(img, offset_bytes, blob)
+                    if repaired_fs_info is not None:
+                        fs_info = repaired_fs_info
+                        volume["filesystem_type"] = _filesystem_type(fs_info)
+                        volume["label"] = _filesystem_label(fs_info)
+                        volume["readable"] = True
+                        volume["status"] = "readable"
+                        volume["warnings"].append("ntfs_boot_sector_repaired")
+                        detected = _detect_installations(fs_info, str(index))
+                        for install in detected:
+                            installs.append({**install, "partition_index": index})
+                    else:
+                        if not encrypted and _detect_lvm_signature(blob):
+                            volume["metadata"]["container_signature"] = "lvm2_physical_volume"
+                            is_lvm_physical_volume = True
+                        # error.message is retained for server-side logs/support
+                        # only -- evidence_preflight.py's volume-diagnostic
+                        # translation never surfaces this raw exception text to
+                        # the analyst.
+                        volume["error"] = {"code": "unsupported_filesystem", "message": str(exc)}
+                        volume["status"] = "encrypted_volume" if encrypted else "unreadable_volume"
                 volumes.append(volume)
                 if is_lvm_physical_volume:
                     # Appended after the partition's own (unchanged) diagnostic
@@ -801,6 +893,27 @@ def _discover_raw_volumes(context: dict[str, Any]) -> tuple[list[dict[str, Any]]
             except Exception as exc:
                 blob = _safe_reader_read(img, 0)
                 encrypted, encryption_type = _detect_encryption_signature(blob)
+                repaired_fs_info = None if encrypted else _try_repair_ntfs_boot_sector(img, 0, blob)
+                if repaired_fs_info is not None:
+                    detected = _detect_installations(repaired_fs_info, "0")
+                    for install in detected:
+                        installs.append({**install, "partition_index": 0})
+                    volumes.append({
+                        "partition_index": 0,
+                        "offset_bytes": 0,
+                        "length_bytes": img.get_size(),
+                        "partition_type": "filesystem_image",
+                        "filesystem_type": _filesystem_type(repaired_fs_info),
+                        "label": _filesystem_label(repaired_fs_info),
+                        "uuid": None,
+                        "encrypted": False,
+                        "readable": True,
+                        "status": "readable",
+                        "warnings": ["ntfs_boot_sector_repaired"],
+                        "error": {},
+                        "metadata": {},
+                    })
+                    return volumes, installs, warnings
                 container_signature = None if encrypted else (_detect_lvm_signature(blob) and "lvm2_physical_volume")
                 # Whichever branch: still record this as a discovered
                 # (whole-image) volume with a translated status, rather
