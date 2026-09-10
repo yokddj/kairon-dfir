@@ -34,6 +34,7 @@ dependencies = [
   "anthropic>=0.40.0",
   "pytsk3>=20260702",
   "libewf-python>=20240506",
+  "dissect.esedb>=3.18",
 ]
 
 [project.optional-dependencies]
