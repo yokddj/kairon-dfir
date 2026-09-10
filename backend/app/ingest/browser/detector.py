@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from app.ingest.browser.webcache_ese import looks_like_webcache_database
 
 BROWSER_FILENAME_HINTS = [
     "browserhistoryview",
@@ -115,6 +116,8 @@ def _infer_browser_parser(path: Path, headers: list[str] | None = None) -> str:
     header_set = _normalized_headers(headers)
     if lower_name in SENSITIVE_BROWSER_FILES or _looks_like_sensitive_browser_name(lower_name):
         return "unsupported_sensitive_artifact"
+    if looks_like_webcache_database(path):
+        return "webcache_ese"
     if lower_name in FIREFOX_DB_NAMES or "mozilla\\firefox\\profiles\\" in lower_path:
         return "browser_firefox_places"
     if lower_name in CHROMIUM_DB_NAMES or any(token in lower_path for token in ["google\\chrome\\user data\\", "microsoft\\edge\\user data\\", "bravesoftware\\brave-browser\\user data\\", "opera software\\opera stable\\", "chromium\\user data\\"]):
@@ -151,6 +154,6 @@ def classify_browser_artifact(path: Path, headers: list[str] | None = None) -> d
         "profile": "browser_usage",
         "parser": parser,
         "browser_artifact_type": infer_browser_artifact_subtype(path, headers),
-        "source_tool": "native_browser" if parser in {"browser_chromium_history", "browser_firefox_places", "browser_chromium_downloads"} else "browser",
-        "source_format": "sqlite" if parser in {"browser_chromium_history", "browser_firefox_places", "browser_chromium_downloads"} else (path.suffix.lower().lstrip(".") or "csv"),
+        "source_tool": "native_browser" if parser in {"browser_chromium_history", "browser_firefox_places", "browser_chromium_downloads", "webcache_ese"} else "browser",
+        "source_format": "sqlite" if parser in {"browser_chromium_history", "browser_firefox_places", "browser_chromium_downloads"} else "ese" if parser == "webcache_ese" else (path.suffix.lower().lstrip(".") or "csv"),
     }
