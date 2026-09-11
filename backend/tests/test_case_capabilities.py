@@ -12,7 +12,7 @@ from app.models.artifact import Artifact
 from app.models.case import Case
 from app.models.case_host import CaseHost
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
-from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
+from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun, MemorySymbolPreparation
 from app.services.case_capabilities import CAPABILITY_REGISTRY, SURFACE_REGISTRY, surface_route_prefix
 
 
@@ -161,6 +161,40 @@ def test_case_capabilities_separates_memory_domain_from_os_platform():
     assert memory["overview"]["memory_images"][0]["route"] == f"/cases/{CASE_ID}/m/{MEMORY_EVIDENCE_ID}/overview"
     assert memory["overview"]["quick_actions"][0]["route"] == f"/cases/{CASE_ID}/m"
     assert any(action["route"] == f"/cases/{CASE_ID}/m/{MEMORY_EVIDENCE_ID}/processes" for action in memory["overview"]["quick_actions"])
+
+
+def test_windows_workbench_appears_for_memory_only_case_via_volatility_probe():
+    """Regression test: a memory-only case whose Evidence.metadata_json
+    carries none of the platform hint keys (platform/os/probable_os/
+    detected_os) -- the real-world case, since nothing in the memory
+    ingestion pipeline ever writes them there -- must still surface the
+    Windows workbench (Command History included) once Volatility's own
+    platform probe identified the OS, via MemorySymbolPreparation, even
+    though ingest never produced any disk-parsed artifacts at all."""
+    db = _db()
+    _case(db)
+    _evidence(db, MEMORY_EVIDENCE_ID, "mem.raw", EvidenceType.memory_dump, "memory")
+    db.add(
+        MemorySymbolPreparation(
+            case_id=CASE_ID,
+            evidence_id=MEMORY_EVIDENCE_ID,
+            state="ready",
+            state_reason="volatility_native_compatible",
+            active=True,
+            metadata_json={"platform_probe": {"format": "volatility_windows.info", "platform": "windows"}, "platform_adapter": "windows"},
+        )
+    )
+    db.commit()
+
+    response = _client(db).get(f"/api/cases/{CASE_ID}/capabilities")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["platforms"] == [{"id": "windows", "label": "Windows", "evidence_count": 1, "shipped": True}]
+    command_history = next(item for item in body["capabilities"] if item["id"] == "windows.execution.command_history")
+    assert command_history["visible"] is True
+    windows = next(item for item in body["workbenches"] if item["id"] == "windows")
+    assert "windows.execution.command_history" in windows["capability_ids"]
 
 
 def test_case_capabilities_aggregates_workbench_warnings():
