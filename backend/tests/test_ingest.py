@@ -14243,6 +14243,72 @@ def test_benchmark_skip_detections_cleanup_skips_detection_query(monkeypatch: py
     assert "reprocess_cleanup_pending" not in result
 
 
+def test_reprocess_cleanup_resets_stale_on_demand_indexing_counters(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Full MFT, RECmd User Activity and Defender EVTX are indexed on demand,
+    outside the core reprocess flow, and each tracks its own "already
+    indexed" state in write-once metadata counters. A reprocess that wipes
+    OpenSearch events (delete_events) used to leave those counters at their
+    old nonzero values -- merge_evidence_metadata is dict.update(), so
+    nothing clears them on its own -- which made the Indexing Plan keep
+    reporting e.g. "Full MFT is already indexed" (build_indexing_plan checks
+    mft_full_records_indexed > 0) long after the underlying documents were
+    deleted, hiding real data loss and skipping the step on any later
+    re-run."""
+    stale_metadata = {
+        "mft_full_records_indexed": 1958,
+        "mft_full_status": "completed",
+        "mft_full": {"status": "completed", "records_indexed": 1958},
+        "mft_full_runs": [{"run_id": "old-run", "status": "completed"}],
+        "mft_coverage_status": "full",
+        "registry_user_activity_records_indexed": 86,
+        "registry_user_activity_status": "completed",
+        "recmd_user_activity": {"status": "completed", "records_indexed": 86},
+        "defender_evtx_docs_indexed": 40,
+        "defender_evtx_status": "completed",
+        "reprocess_cleanup_pending": {
+            "delete_events": True,
+            "delete_artifacts": False,
+            "reset_extracted_dir": False,
+            "reset_staging_dir": False,
+            "detections_cleanup_skipped": True,
+            "detection_cleanup_reason": "usable_search_skip_detections",
+            "stale_detection_statuses": [],
+        },
+    }
+    evidence = SimpleNamespace(case_id="case-1", id="evidence-1", metadata_json=dict(stale_metadata))
+    monkeypatch.setattr("app.workers.tasks.delete_events_by_evidence", lambda evidence_id, case_id: None)
+
+    class _FakeQuery:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def update(self, *_args, **_kwargs):
+            return 0
+
+    class _FakeSession:
+        def query(self, _model):
+            return _FakeQuery()
+
+        def commit(self):
+            return None
+
+        def refresh(self, _obj):
+            return None
+
+    result = _run_pending_reprocess_cleanup(_FakeSession(), evidence, dict(stale_metadata))
+
+    assert result["mft_full_records_indexed"] == 0
+    assert result["mft_full_status"] == ""
+    assert result["mft_full"] == {}
+    assert result["mft_full_runs"] == []
+    assert result["mft_coverage_status"] == ""
+    assert result["registry_user_activity_records_indexed"] == 0
+    assert result["registry_user_activity_status"] == ""
+    assert result["recmd_user_activity"] == {}
+    assert result["defender_evtx_docs_indexed"] == 0
+    assert result["defender_evtx_status"] == ""
+
+
 def test_benchmark_bottleneck_classifier_identifies_materialization() -> None:
     report = classify_benchmark_bottleneck(
         {
