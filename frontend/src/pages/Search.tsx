@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, type CaseCapabilitiesResponse, type CaseCapability, type EventContextResponse, type EventMarking, type EventMarkingStatus, type SearchQuickFilter, type SearchV2Response, type SearchV2Result } from "../api/client";
+import { api, type CaseCapabilitiesResponse, type CaseCapability, type EventContextResponse, type EventMarking, type EventMarkingStatus, type InstallationSummary, type SearchQuickFilter, type SearchV2Response, type SearchV2Result } from "../api/client";
 import { useFindingIndicators } from "../lib/useFindingIndicators";
 import ResponsiveDetailPanel, { useMinWidthQuery } from "../components/ResponsiveDetailPanel";
 import SearchBar from "../components/SearchBar";
@@ -271,6 +271,26 @@ function SourceBadge({ result }: { result: SearchV2Result }) {
   const category = resultSourceCategory(result);
   const producer = resultSourceProducer(result);
   return <ResultBadge tone={category === "Memory" ? "success" : "muted"}>{producer && producer !== "unknown" ? `${category}: ${producer}` : category}</ResultBadge>;
+}
+
+// Distinguishes an event produced by the live system from one produced by a
+// secondary installation root -- most commonly a Volume Shadow Copy that was
+// mounted and copied out before imaging (see
+// app.disk_images.service._root_secondary_installation_prefixes). Without
+// this, that distinction was only visible by noticing the installation's
+// root folder name (e.g. "VSS1") inside the Source file column.
+function InstallationBadge({ result, installationsById }: { result: SearchV2Result; installationsById: Map<string, InstallationSummary> }) {
+  const evidenceSource = asRecord(asRecord(result.raw).evidence_source);
+  const installationId = asString(evidenceSource.os_installation_id);
+  if (!installationId) return null;
+  const installation = installationsById.get(installationId);
+  if (!installation || !installation.is_secondary) return null;
+  const label = installation.root_path.replace(/^\/+/, "") || installation.root_path;
+  return (
+    <span title={installation.note ?? "Detected under a secondary installation root, not the live system."}>
+      <ResultBadge tone="high">{`Historical: ${label}`}</ResultBadge>
+    </span>
+  );
 }
 
 function InfoCard({ label, value, children }: { label: string; value?: string; children?: ReactNode }) {
@@ -701,11 +721,12 @@ function TruncatedCell({ value, density }: { value: unknown; density: TableDensi
   );
 }
 
-function genericColumns(timezone: string): ColumnDef[] {
+function genericColumns(timezone: string, installationsById: Map<string, InstallationSummary>): ColumnDef[] {
   return [
     { key: "timestamp", label: "Timestamp", defaultWidth: 180, minWidth: 140, render: (result, _summary, _pivot, density) => <TruncatedCell value={formatTimestamp(result.timestamp, timezone)} density={density} /> },
     { key: "artifact", label: "Artifact", defaultWidth: 135, minWidth: 110, render: (result, _summary, pivot, density) => pivot({ label: "artifact type", field: "artifact.type", value: result.artifact_type, display: artifactLabel(result.artifact_type), className: cellTextClass(density) }) },
     { key: "source", label: "Source", defaultWidth: 190, minWidth: 130, render: (result) => <SourceBadge result={result} /> },
+    ...(installationsById.size > 0 ? [{ key: "installation", label: "Installation", defaultWidth: 150, minWidth: 110, render: (result: SearchV2Result) => <InstallationBadge result={result} installationsById={installationsById} /> } satisfies ColumnDef] : []),
     { key: "parser", label: "Parser", defaultWidth: 170, minWidth: 120, render: (result, _summary, pivot, density) => pivot({ label: "parser", field: "artifact.parser", value: applyCellFallbacks(result.parser, asString(asRecord(result.raw).artifact && asRecord(asRecord(result.raw).artifact).parser)), className: cellTextClass(density) }) },
     { key: "source_file", label: "Source file", defaultWidth: 260, minWidth: 150, render: (result, _summary, pivot, density) => pivot({ label: "source file", field: "source_file", value: fullSourceFile(result), operator: "contains", className: cellTextClass(density) }) },
     { key: "type", label: "Event Type / Finding Type", defaultWidth: 180, minWidth: 130, render: (result, _summary, pivot, density) => pivot({ label: "event type", field: "event.type", value: result.event_type, display: applyCellFallbacks(result.event_type), className: cellTextClass(density) }) },
@@ -792,7 +813,7 @@ function specializedColumns(view: ArtifactViewMode, timezone: string): ColumnDef
         { key: "risk", label: "Risk", render: (result) => <ResultBadge tone={riskTone(result.risk_score)}>{String(result.risk_score ?? 0)}</ResultBadge> },
       ];
     default:
-      return genericColumns(timezone);
+      return genericColumns(timezone, new Map());
   }
 }
 
@@ -1398,6 +1419,18 @@ export default function Search() {
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
+  const installationsQuery = useQuery({
+    queryKey: ["case-disk-image-installations", resolvedCaseId],
+    queryFn: () => api.getCaseDiskImageInstallations(resolvedCaseId || ""),
+    enabled: Boolean(resolvedCaseId),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const installationsById = useMemo(() => {
+    const map = new Map<string, InstallationSummary>();
+    for (const item of installationsQuery.data ?? []) map.set(item.id, item);
+    return map;
+  }, [installationsQuery.data]);
   const registry = capabilitiesQuery.data;
   const registryCapabilities = useMemo(() => selectedRegistryCapabilities(registry, state), [registry, state]);
   const registryDefaultFilters = useMemo(() => mergeRegistryDefaultFilters(registryCapabilities), [registryCapabilities]);
@@ -1695,7 +1728,7 @@ export default function Search() {
     [manualArtifactView, eventResults, state.artifact_type],
   );
   const artifactColumns = useMemo(() => specializedColumns(activeView, effectiveTimezone), [activeView, effectiveTimezone]);
-  const genericResultColumns = useMemo(() => genericColumns(effectiveTimezone), [effectiveTimezone]);
+  const genericResultColumns = useMemo(() => genericColumns(effectiveTimezone, installationsById), [effectiveTimezone, installationsById]);
   const activeFilterChips = useMemo(() => {
     const chips: Array<{ key: string; label: string; clear: Record<string, string | null> }> = [];
     if (state.q) chips.push({ key: "q", label: `query: ${state.q}`, clear: { q: null } });
