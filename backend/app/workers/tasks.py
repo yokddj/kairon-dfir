@@ -1513,6 +1513,56 @@ def _reconcile_artifact_states_on_ingest_close(
     }
 
 
+# On-demand indexing steps (Full/Summary MFT, RECmd User Activity, Defender
+# EVTX) each track their own "already indexed" state in write-once metadata
+# counters, separate from the core reprocess flow. merge_evidence_metadata
+# uses dict.update() semantics, so a reprocess wiping the underlying
+# OpenSearch documents (delete_events) must also explicitly reset these
+# counters here -- leaving them out of the patch does not clear them, and a
+# stale nonzero count makes the Indexing Plan report a step "completed" (and
+# skip offering to re-run it) even though its data no longer exists.
+_ON_DEMAND_INDEXING_METADATA_RESET: dict[str, Any] = {
+    "mft_full": {},
+    "mft_full_runs": [],
+    "mft_full_status": "",
+    "mft_full_backend": "",
+    "mft_full_records_total": 0,
+    "mft_full_records_indexed": 0,
+    "mft_full_started_at": None,
+    "mft_full_finished_at": None,
+    "mft_full_elapsed_seconds": 0,
+    "mft_full_coverage_status": "",
+    "mft_full_limits": {},
+    "mft_summary": {},
+    "mft_summary_runs": [],
+    "mft_coverage_status": "",
+    "mft_records_total": 0,
+    "mft_records_indexed": 0,
+    "mft_records_skipped": 0,
+    "mft_index_mode": "",
+    "mft_elapsed_seconds": 0,
+    "mft_phase_timings": {},
+    "mft_parser_backend": "",
+    "mft_parser_backend_version": "",
+    "recmd_user_activity": {},
+    "recmd_user_activity_runs": [],
+    "registry_user_activity_status": "",
+    "registry_user_activity_records_indexed": 0,
+    "registry_user_activity_counts": {},
+    "registry_user_activity_hives_processed": 0,
+    "registry_user_activity_hives_failed": 0,
+    "registry_user_activity_backend": "",
+    "defender_evtx": {},
+    "defender_evtx_runs": [],
+    "defender_evtx_status": "",
+    "defender_evtx_docs_indexed": 0,
+    "defender_evtx_no_data": False,
+    "defender_evtx_sources_detected": 0,
+    "defender_evtx_by_event_id": {},
+    "defender_evtx_by_threat": {},
+}
+
+
 def _run_pending_reprocess_cleanup(db: Session, evidence: Evidence, metadata: dict) -> dict:
     cleanup = dict(metadata.get("reprocess_cleanup_pending") or {})
     if not cleanup:
@@ -1520,6 +1570,8 @@ def _run_pending_reprocess_cleanup(db: Session, evidence: Evidence, metadata: di
     cleanup_report = dict(metadata.get("reprocess_cleanup_report") or {})
     if cleanup.get("delete_events"):
         delete_events_by_evidence(evidence.id, evidence.case_id)
+        metadata = dict(metadata)
+        metadata.update(_ON_DEMAND_INDEXING_METADATA_RESET)
         cleanup_report["events_cleanup_completed"] = True
         cleanup_report["events_cleanup_completed_at"] = utc_now().isoformat()
     stale_statuses = [str(item) for item in (cleanup.get("stale_detection_statuses") or []) if item]
