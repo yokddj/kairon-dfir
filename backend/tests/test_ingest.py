@@ -58,6 +58,7 @@ from app.ingest.raw_parsers.service_parser import WindowsServiceRawParser
 from app.ingest.raw_parsers.shimcache_parser import ShimcacheRawParser
 from app.ingest.raw_parsers.router import describe_raw_candidate, route_raw_parser
 from app.ingest.raw_parsers.mftecmd_backend import _prepare_full_csv_rows, _select_high_value_csv_rows, score_mft_summary_row
+from app.ingest.eztools.mftecmd import _build_mft_document_fast, _normalize_row_keys
 from app.ingest.raw_parsers.recmd_backend import _retarget_user_activity_document, find_user_activity_hives
 from app.ingest.raw_parsers.defender_evtx_backend import build_defender_document
 from app.ingest.usb.helpers import is_useful_usb_device_instance_id
@@ -3255,6 +3256,63 @@ def test_mft_normalization_specific_fields(tmp_path: Path) -> None:
     assert doc["event"]["action"] == "mft_deleted_entry_observed"
     assert doc["event"]["message"] == "Deleted MFT entry observed: C:\\Users\\Public\\evil.ps1"
     assert doc["timestamp_precision"] == "mft_si_changed"
+
+
+def test_mft_normalization_recognizes_real_mftecmd_lastmodified_columns(tmp_path: Path) -> None:
+    """The real MFTECmd tool names its Modified columns LastModified0x10/
+    LastModified0x30, not Modified0x10/Modified0x30 (confirmed by running the
+    actual bundled MFTECmd binary against a real $MFT). The candidate lists
+    only looked for the latter, so si_modified/fn_modified -- and the
+    mft_si_modified/mft_fn_modified @timestamp precision tiers -- never
+    matched a single real-world MFTECmd export."""
+    path = tmp_path / "MFTECmd.csv"
+    path.write_text(
+        "EntryNumber,SequenceNumber,ParentEntryNumber,InUse,FileName,Extension,FileSize,"
+        "Created0x10,LastModified0x10,LastAccess0x10,LastRecordChange0x10,"
+        "Created0x30,LastModified0x30,LastAccess0x30,LastRecordChange0x30,FullPath\n"
+        "42,7,5,false,evil.ps1,.ps1,2048,"
+        "2026-05-03T10:00:00Z,2026-05-03T10:01:00Z,2026-05-03T10:02:00Z,2026-05-03T10:03:00Z,"
+        "2026-05-03T10:00:00Z,2026-05-03T10:01:30Z,2026-05-03T10:02:00Z,2026-05-03T10:03:00Z,"
+        "C:\\Users\\Public\\evil.ps1\n",
+        encoding="utf-8",
+    )
+    docs = normalize_file("case-1", "ev-1", "art-1", path, {"artifact_type": "mft", "name": path.name, "source_path": path.name, "parser": "zimmerman"})
+    doc = docs[0]
+    assert doc["mft"]["si_modified"] == "2026-05-03T10:01:00+00:00"
+    assert doc["mft"]["fn_modified"] == "2026-05-03T10:01:30+00:00"
+    assert doc["file"]["modified"] == "2026-05-03T10:01:00+00:00"
+
+
+def test_mft_fast_path_populates_all_si_macb_timestamps() -> None:
+    """MFT_FAST_PATH (default on for large bulk MFTECmd imports) used to keep
+    only whichever single timestamp won the @timestamp priority race and
+    hardcode the rest to None. SI is a single small attribute already read
+    off every row, so all four of its timestamps are cheap to keep; only FN
+    (a second attribute copy) and the SI/FN timestomp comparison stay
+    skipped, preserving the point of the fast path."""
+    raw_row = {
+        "EntryNumber": "42",
+        "SequenceNumber": "7",
+        "FileName": "evil.ps1",
+        "Extension": ".ps1",
+        "InUse": "true",
+        "Created0x10": "2026-05-03 10:00:00",
+        "LastModified0x10": "2026-05-03 10:01:00",
+        "LastAccess0x10": "2026-05-03 10:02:00",
+        "LastRecordChange0x10": "2026-05-03 10:03:00",
+        "FullPath": r"C:\Users\Public\evil.ps1",
+    }
+    _, lowered = _normalize_row_keys(raw_row)
+    doc = _build_mft_document_fast("case-1", "ev-1", "art-1", Path("MFTECmd.csv"), {"name": "MFTECmd.csv", "source_path": "MFTECmd.csv"}, raw_row, lowered)
+
+    assert doc["mft"]["si_created"] == "2026-05-03T10:00:00+00:00"
+    assert doc["mft"]["si_modified"] == "2026-05-03T10:01:00+00:00"
+    assert doc["mft"]["si_accessed"] == "2026-05-03T10:02:00+00:00"
+    assert doc["mft"]["si_changed"] == "2026-05-03T10:03:00+00:00"
+    assert doc["mft"]["fn_created"] is None
+    assert doc["mft"]["fn_modified"] is None
+    assert doc["mft"]["fn_accessed"] is None
+    assert doc["mft"]["fn_changed"] is None
 
 
 def test_mft_summary_scoring_prioritizes_case_iocs_and_user_writable_paths() -> None:
