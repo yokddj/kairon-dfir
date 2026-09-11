@@ -627,11 +627,11 @@ export default function EventSummary({ event }: { event: Record<string, unknown>
     pushIf(rows, "SI created", mft.si_created);
     pushIf(rows, "SI modified", mft.si_modified);
     pushIf(rows, "SI accessed", mft.si_accessed);
-    pushIf(rows, "SI MFT modified", mft.si_mft_modified);
+    pushIf(rows, "SI changed (MFT entry modified)", mft.si_changed);
     pushIf(rows, "FN created", mft.fn_created);
     pushIf(rows, "FN modified", mft.fn_modified);
     pushIf(rows, "FN accessed", mft.fn_accessed);
-    pushIf(rows, "FN MFT modified", mft.fn_mft_modified);
+    pushIf(rows, "FN changed (MFT entry modified)", mft.fn_changed);
     pushIf(rows, "USN reason", usn.reason ?? usn.reasons);
     pushIf(rows, "USN", usn.usn);
     pushIf(rows, "USN timestamp", usn.timestamp);
