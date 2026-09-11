@@ -57,6 +57,14 @@ export type SortField =
   | "file.changed"
   | "file.size"
   | "mft.entry_number"
+  | "mft.si_created"
+  | "mft.si_modified"
+  | "mft.si_accessed"
+  | "mft.si_changed"
+  | "mft.fn_created"
+  | "mft.fn_modified"
+  | "mft.fn_accessed"
+  | "mft.fn_changed"
   | "process.name"
   | "network.source_ip"
   | "network.source_port"
@@ -75,7 +83,7 @@ export type SortField =
   | "linux.line_number"
   | "risk_score";
 export type SortOrder = "asc" | "desc";
-export type EventView = "auto" | "generic" | "evtx" | "filesystem" | "execution" | "execution_artifacts" | "browser" | "network" | "srum" | "persistence" | "registry" | "defender" | "powershell" | "recycle_bin" | "shellbags" | "jumplist" | "usb" | "bits" | "wmi" | "autoruns" | "cloud_sync";
+export type EventView = "auto" | "generic" | "evtx" | "filesystem" | "mft" | "execution" | "execution_artifacts" | "browser" | "network" | "srum" | "persistence" | "registry" | "defender" | "powershell" | "recycle_bin" | "shellbags" | "jumplist" | "usb" | "bits" | "wmi" | "autoruns" | "cloud_sync";
 
 type Props = {
   items: Record<string, unknown>[];
@@ -109,6 +117,14 @@ function sortFieldForColumn(key: string): SortField | null {
   if (key === "event_id") return "windows.event_id";
   if (key === "size") return "file.size";
   if (key === "mft_entry") return "mft.entry_number";
+  if (key === "si_created") return "mft.si_created";
+  if (key === "si_modified") return "mft.si_modified";
+  if (key === "si_accessed") return "mft.si_accessed";
+  if (key === "si_changed") return "mft.si_changed";
+  if (key === "fn_created") return "mft.fn_created";
+  if (key === "fn_modified") return "mft.fn_modified";
+  if (key === "fn_accessed") return "mft.fn_accessed";
+  if (key === "fn_changed") return "mft.fn_changed";
   if (key === "program" || key === "process") return "process.name";
   if (key === "registry_type") return "event.type";
   if (key === "registry_hive") return "artifact.type";
@@ -261,7 +277,8 @@ export function resolveView(view: EventView, items: Record<string, unknown>[]): 
   const first = items[0];
   const artifactType = String(((first?.artifact as Record<string, unknown>) ?? {}).type ?? "");
   const category = String(((first?.event as Record<string, unknown>) ?? {}).category ?? "");
-  if (artifactType === "mft" || artifactType === "usn" || category === "filesystem") return "filesystem";
+  if (artifactType === "mft") return "mft";
+  if (artifactType === "usn" || category === "filesystem") return "filesystem";
   if (artifactType === "evtx" || category === "windows_event" || category === "logon") return "evtx";
   if (artifactType === "registry" || category === "registry") return "registry";
   if (artifactType === "amcache" || artifactType === "shimcache" || artifactType === "appcompat") return "execution_artifacts";
@@ -347,6 +364,51 @@ function getColumns(view: EventView): Column[] {
         { key: "artifact", label: "Source Artifact", render: (item) => String(((item.artifact as Record<string, unknown>) ?? {}).name ?? ((item.artifact as Record<string, unknown>) ?? {}).type ?? "-") },
         tags,
       ];
+    case "mft": {
+      // NTFS keeps four timestamps on each of $STANDARD_INFORMATION (SI) and
+      // $FILE_NAME (FN) -- Created/Modified/Accessed/Changed ("MACB"; Changed
+      // is the MFT-entry-modified time, updated whenever any metadata about
+      // the file changes, and is the hardest of the four to forge since it
+      // isn't settable via SetFileTime the way the other three are). All 8
+      // are independently sortable (see sortFieldForColumn above) rather than
+      // collapsed into the single derived "timestamp" every other view uses,
+      // so an analyst isn't stuck with whichever one normalize_mft_row
+      // happened to pick as the primary @timestamp.
+      const mftDate = (field: "si_created" | "si_modified" | "si_accessed" | "si_changed" | "fn_created" | "fn_modified" | "fn_accessed" | "fn_changed") => (item: Record<string, unknown>) => String(((item.mft as Record<string, unknown>) ?? {})[field] ?? "-");
+      return [
+        timestamp,
+        { key: "si_created", label: "SI Created", render: mftDate("si_created") },
+        { key: "si_modified", label: "SI Modified", render: mftDate("si_modified") },
+        { key: "si_accessed", label: "SI Accessed", render: mftDate("si_accessed") },
+        { key: "si_changed", label: "SI Changed", render: mftDate("si_changed") },
+        { key: "fn_created", label: "FN Created", render: mftDate("fn_created") },
+        { key: "fn_modified", label: "FN Modified", render: mftDate("fn_modified") },
+        { key: "fn_accessed", label: "FN Accessed", render: mftDate("fn_accessed") },
+        { key: "fn_changed", label: "FN Changed", render: mftDate("fn_changed") },
+        severity,
+        host,
+        { key: "file_name", label: "File Name", render: (item) => String(((item.file as Record<string, unknown>) ?? {}).name ?? ((item.mft as Record<string, unknown>) ?? {}).file_name ?? "-") },
+        { key: "extension", label: "Extension", render: (item) => String(((item.file as Record<string, unknown>) ?? {}).extension ?? ((item.mft as Record<string, unknown>) ?? {}).extension ?? "-") },
+        { key: "path", label: "Path", render: (item) => filesystemPath(item) },
+        { key: "type", label: "Activity / Event Type", render: (item) => String((((item.event as Record<string, unknown>) ?? {}).type) ?? (((item.filesystem as Record<string, unknown>) ?? {}).activity) ?? "-") },
+        { key: "size", label: "Size", render: (item) => String(((item.file as Record<string, unknown>) ?? {}).size ?? "-") },
+        {
+          key: "deleted",
+          label: "In Use / Deleted",
+          render: (item) => {
+            const file = (item.file as Record<string, unknown>) ?? {};
+            const inUse = file.in_use;
+            const deleted = file.deleted;
+            if (deleted === true || deleted === "true") return "Deleted";
+            if (inUse === false || inUse === "false") return "Not in use";
+            if (inUse === true || inUse === "true") return "In use";
+            return "-";
+          },
+        },
+        { key: "artifact", label: "Source Artifact", render: (item) => String(((item.artifact as Record<string, unknown>) ?? {}).name ?? ((item.artifact as Record<string, unknown>) ?? {}).type ?? "-") },
+        tags,
+      ];
+    }
     case "execution":
       return [
         timestamp,

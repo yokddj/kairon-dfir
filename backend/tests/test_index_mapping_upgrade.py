@@ -41,6 +41,29 @@ def test_the_linux_block_declares_fields_rather_than_relying_on_dynamic_mapping(
         assert f'"{field}"' in block, field
 
 
+def test_mft_changed_timestamp_fields_are_correctly_named_and_backfilled() -> None:
+    """normalize_mft_row (app/ingest/artifact_normalizers.py) writes the
+    MFT-entry-modified ("C" in MACB) timestamp as mft.si_changed/
+    mft.fn_changed. The mapping used to declare si_mft_modified/
+    fn_mft_modified instead -- names the normalizer never actually
+    writes -- so under dynamic:false those two fields were silently never
+    indexed (present in _source, unsortable and unfilterable). Also
+    verifies the fix is sent to already-existing indices, not just new
+    ones, per the same reasoning as test_new_fields_are_sent_to_indices_that_already_exist.
+    """
+    source = _mapping_source()
+    create_at = source.index("indices.create")
+    upgrade_at = source.index("put_mapping")
+    create_block = source[create_at:upgrade_at]
+    upgrade_block = source[upgrade_at:]
+
+    assert '"si_mft_modified"' not in source
+    assert '"fn_mft_modified"' not in source
+    for field in ("si_changed", "fn_changed"):
+        assert f'"{field}"' in create_block, f"{field} missing from create()"
+        assert f'"{field}"' in upgrade_block, f"{field} missing from put_mapping() backfill"
+
+
 def test_extraction_limits_are_not_below_the_code_default() -> None:
     """config/defaults.env used to override the code default down to 2 GiB,
     which refused ordinary triage collections on a fresh install."""
