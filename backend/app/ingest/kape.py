@@ -19,7 +19,15 @@ _EXCLUDED_DIR_NAMES = {
 
 def list_kape_artifacts(root: Path) -> list[dict]:
     from app.ingest.linux.helpers import looks_like_linux_artifact
-    ACCEPTED_EXTENSIONS = {".csv", ".json", ".jsonl", ".txt", ".xml", ".log", ".yaml", ".yml", ".conf", ".service", ".timer"}
+    ACCEPTED_EXTENSIONS = {
+        ".csv", ".json", ".jsonl", ".txt", ".xml", ".log", ".yaml", ".yml", ".conf", ".service", ".timer",
+        # Standard Windows execution/persistence artifacts Kairon already has
+        # parsers for (see KAPE_NAME_MAP in detector.py), previously never
+        # reachable from a disk image because their extensions weren't on
+        # this list -- .dat covers NTUSER.DAT/UsrClass.dat (registry hives
+        # already routed by classify_artifact), not just any .dat file.
+        ".dat", ".lnk", ".pf", ".hve", ".automaticdestinations-ms", ".customdestinations-ms",
+    }
     EXPERIMENTAL_EXTENSIONS = {".pyc", ".pyo"}
     artifacts = []
     candidate_paths: list[Path] = []
