@@ -230,6 +230,24 @@ def _looks_like_json_content(path: Path) -> bool:
         return False
 
 
+def _windows_config_registry_hive_kind(path: Path) -> str | None:
+    """SYSTEM/SAM/SOFTWARE under Windows\\System32\\config -- the exact
+    physical files app.ingest.raw_parsers.{system_hive_identity,sam_identity,
+    profile_list}_parser.py already know how to read for hostname/OS version,
+    local user accounts, and user profile paths respectively. Those parsers
+    were previously only ever dispatched for Velociraptor-style collections
+    (see app.ingest.velociraptor.discovery); a disk image's own SYSTEM/SAM/
+    SOFTWARE hives were never routed to them at all, so host identity was
+    never auto-extracted for disk-image evidence. Matched by full path (not
+    just the bare filename) since "SYSTEM"/"SAM" alone are common enough
+    words that a name-only check would risk false positives."""
+    lower_path = str(path).replace("/", "\\").lower()
+    for hive_name in ("system", "sam", "software"):
+        if lower_path.endswith(f"\\windows\\system32\\config\\{hive_name}"):
+            return hive_name
+    return None
+
+
 def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
     name = path.name
     lower_name = name.lower()
@@ -831,6 +849,25 @@ def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
             "artifact_type": "user_activity",
             "profile": "registry",
             "parser": "user_activity_registry_raw",
+        }
+    registry_hive_kind = _windows_config_registry_hive_kind(path)
+    if registry_hive_kind == "system":
+        return {
+            "artifact_type": "windows_system_hive_facts",
+            "profile": "registry",
+            "parser": "windows_system_hive_facts",
+        }
+    if registry_hive_kind == "sam":
+        return {
+            "artifact_type": "windows_sam_identity",
+            "profile": "registry",
+            "parser": "windows_sam_identity",
+        }
+    if registry_hive_kind == "software":
+        return {
+            "artifact_type": "windows_profile_list",
+            "profile": "registry",
+            "parser": "windows_profile_list",
         }
     if "recentfilecache" in lower_name:
         return {

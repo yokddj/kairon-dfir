@@ -50,11 +50,11 @@ from app.ingest.velociraptor.zip_inventory import is_supported_archive_container
 from app.models.artifact import Artifact
 from app.models.case import Case
 from app.models.detection_result import DetectionResult
-from app.models.disk_image import DiskImage
+from app.models.disk_image import DiskImage, DiskVolume, OSInstallation
 from app.models.evidence import Evidence, EvidenceCustodyEvent, EvidenceCustodyEventType, EvidenceIntegrityStatus, EvidencePlatform, EvidenceStorageMode, EvidenceType, IngestStatus, detect_evidence_platform, resolve_evidence_platform
 from app.models.memory import MemoryUpload
 from app.models.rule_run import RuleRun, RuleRunStatus
-from app.schemas.disk_image import DiskImageRead
+from app.schemas.disk_image import DiskImageRead, InstallationSummary
 from app.schemas.evidence import ArtifactRead, EvidenceRead, EvidenceRunQueuedResponse, EvidenceRunRead
 from app.schemas.evidence import EvidenceBenchmarkQueuedResponse, EvidenceBenchmarkRead
 from app.schemas.rule import DetectionRead, RuleRunRead, RulesRunRequest
@@ -2576,6 +2576,36 @@ def get_evidence_disk_image(evidence_id: str, db: Session = Depends(get_db)) -> 
     if disk_image is None:
         raise HTTPException(status_code=404, detail="Disk image details not found")
     return disk_image
+
+
+@router.get("/api/cases/{case_id}/disk-image-installations", response_model=list[InstallationSummary])
+def list_case_disk_image_installations(case_id: str, db: Session = Depends(get_db)) -> list[InstallationSummary]:
+    rows = (
+        db.query(OSInstallation, DiskVolume, DiskImage)
+        .join(DiskVolume, OSInstallation.disk_volume_id == DiskVolume.id)
+        .join(DiskImage, DiskVolume.disk_image_id == DiskImage.id)
+        .filter(DiskImage.evidence_id.in_(db.query(Evidence.id).filter(Evidence.case_id == case_id)))
+        .all()
+    )
+    summaries = []
+    for install, volume, disk_image in rows:
+        metadata = install.metadata_json or {}
+        is_secondary = metadata.get("installation_root_kind") == "secondary_top_level_folder"
+        summaries.append(
+            InstallationSummary(
+                id=install.id,
+                evidence_id=disk_image.evidence_id,
+                disk_volume_id=volume.id,
+                platform=install.platform,
+                hostname=install.hostname,
+                version=install.version,
+                root_path=install.root_path,
+                confidence=install.confidence,
+                is_secondary=is_secondary,
+                note=metadata.get("note") if is_secondary else None,
+            )
+        )
+    return summaries
 
 
 @router.post("/api/cases/{case_id}/evidences/upload-folder", response_model=EvidenceRead, status_code=status.HTTP_201_CREATED)
