@@ -14,7 +14,7 @@ from app.models.case_host import CaseHost
 from app.models.detection_result import DetectionResult
 from app.models.evidence import Evidence, EvidenceType
 from app.models.finding import Finding
-from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
+from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun, MemorySymbolPreparation
 
 
 REGISTRY_VERSION = "2026.07.phase3"
@@ -413,13 +413,27 @@ def _metadata_platform(evidence: Evidence) -> str | None:
     return None
 
 
-def _os_platform(evidence: Evidence) -> str:
+def _os_platform(evidence: Evidence, memory_detected_platforms: dict[str, str] | None = None) -> str:
     for raw in (evidence.effective_platform, evidence.detected_platform, evidence.provided_platform):
         value = _value(raw).lower()
         if value in {"windows", "linux", "macos"}:
             return value
     if _evidence_domain(evidence) == "memory":
-        return _metadata_platform(evidence) or "unknown"
+        metadata_platform = _metadata_platform(evidence)
+        if metadata_platform:
+            return metadata_platform
+        # Volatility already identifies the real OS for memory evidence (see
+        # MemorySymbolPreparation.metadata_json.platform_probe) -- it's just
+        # never propagated onto Evidence's own platform fields, which are
+        # forced to the literal "memory" domain marker instead. Without this
+        # fallback, a memory-only case's Windows/Linux workbench (Command
+        # History included) never appears in the sidebar at all, even once
+        # the platform is fully known and preparation is "ready".
+        if memory_detected_platforms:
+            detected = memory_detected_platforms.get(str(evidence.id))
+            if detected:
+                return detected
+        return "unknown"
     return "unknown"
 
 
@@ -466,6 +480,19 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
     )
     memory_run_rows = db.query(MemoryScanRun.status, func.count(MemoryScanRun.id)).filter(MemoryScanRun.case_id == case_id).group_by(MemoryScanRun.status).all()
     memory_plugin_rows = db.query(MemoryPluginRun.status, func.count(MemoryPluginRun.id)).filter(MemoryPluginRun.case_id == case_id).group_by(MemoryPluginRun.status).all()
+    memory_preparation_rows = (
+        db.query(MemorySymbolPreparation.evidence_id, MemorySymbolPreparation.metadata_json)
+        .filter(MemorySymbolPreparation.case_id == case_id, MemorySymbolPreparation.active.is_(True))
+        .all()
+    )
+    memory_detected_platforms: dict[str, str] = {}
+    for prep_evidence_id, prep_metadata in memory_preparation_rows:
+        prep_metadata = prep_metadata or {}
+        candidate = str((prep_metadata.get("platform_probe") or {}).get("platform") or "").lower()
+        if candidate not in {"windows", "linux", "macos"}:
+            candidate = str(prep_metadata.get("platform_adapter") or "").lower()
+        if candidate in {"windows", "linux", "macos"}:
+            memory_detected_platforms[str(prep_evidence_id)] = candidate
     recent_detections = (
         db.query(DetectionResult)
         .filter(DetectionResult.case_id == case_id, DetectionResult.deleted_at.is_(None), DetectionResult.archived_at.is_(None))
@@ -498,7 +525,7 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
     evidence_status_by_workbench: dict[str, Counter[str]] = defaultdict(Counter)
     for evidence in evidences:
         domain = _evidence_domain(evidence)
-        platform = _os_platform(evidence)
+        platform = _os_platform(evidence, memory_detected_platforms)
         case_platforms[platform] += 1
         case_domains[domain] += 1
         payload = {
