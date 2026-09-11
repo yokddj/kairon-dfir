@@ -43,6 +43,29 @@ class DiskVolumeRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class InstallationSummary(BaseModel):
+    """A flat, case-wide view of every detected OS installation across all
+    of a case's disk images -- built for the UI to label each event/artifact
+    by which installation produced it (the live system vs. a secondary root
+    such as a manually extracted Volume Shadow Copy; see
+    app.disk_images.service._root_secondary_installation_prefixes), without
+    needing to walk the full nested DiskImage -> DiskVolume -> OSInstallation
+    tree per evidence."""
+
+    id: str
+    evidence_id: str
+    disk_volume_id: str
+    platform: str
+    hostname: str | None = None
+    version: str | None = None
+    root_path: str
+    confidence: str
+    is_secondary: bool
+    note: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class DiskImageRead(BaseModel):
     id: str
     evidence_id: str
