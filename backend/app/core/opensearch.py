@@ -566,11 +566,18 @@ def ensure_case_index(case_id: str) -> str:
                                 "si_created": {"type": "date"},
                                 "si_modified": {"type": "date"},
                                 "si_accessed": {"type": "date"},
-                                "si_mft_modified": {"type": "date"},
+                                # normalize_mft_row (app/ingest/artifact_normalizers.py)
+                                # writes the MFT-entry-modified ("C" in MACB) timestamp
+                                # under this key -- was previously mapped under an
+                                # si_/fn_ "mft_modified" name the normalizer never
+                                # actually writes, so it silently never indexed under
+                                # dynamic: False (still present in _source, just
+                                # unsortable/unfilterable).
+                                "si_changed": {"type": "date"},
                                 "fn_created": {"type": "date"},
                                 "fn_modified": {"type": "date"},
                                 "fn_accessed": {"type": "date"},
-                                "fn_mft_modified": {"type": "date"},
+                                "fn_changed": {"type": "date"},
                                 "object_id": {"type": "keyword"},
                                 "reparse_target": {"type": "keyword"},
                                 "zone_id": {"type": "keyword"},
@@ -1707,6 +1714,16 @@ def ensure_case_index(case_id: str) -> str:
                                 "query": {"type": "keyword"},
                                 "question": {"properties": {"name": {"type": "keyword"}}},
                                 "answers": {"type": "keyword"},
+                            }
+                        },
+                        # Backfill for indices created before "si_changed"/"fn_changed"
+                        # replaced the never-actually-written si_/fn_ "mft_modified"
+                        # names in the create() mapping above -- same additive-merge
+                        # reasoning as the powershell block.
+                        "mft": {
+                            "properties": {
+                                "si_changed": {"type": "date"},
+                                "fn_changed": {"type": "date"},
                             }
                         },
                         # Sent to indices created before these existed, for the

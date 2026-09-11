@@ -77,6 +77,8 @@ const SERVER_SORTABLE_FIELDS = new Set<string>([
   "artifact.name", "artifact", "windows.event_id", "file.created", "file.modified",
   "file.accessed", "file.changed", "file.size", "mft.entry_number", "process.name",
   "network.source_ip", "network.destination_ip", "risk_score",
+  "mft.si_created", "mft.si_modified", "mft.si_accessed", "mft.si_changed",
+  "mft.fn_created", "mft.fn_modified", "mft.fn_accessed", "mft.fn_changed",
 ]);
 // DNS activity is spread across sources with no shared artifact.type: the
 // dedicated network/DNS parser (event.type dns_query/dns_query_failed/
