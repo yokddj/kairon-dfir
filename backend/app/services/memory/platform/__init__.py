@@ -581,6 +581,20 @@ PLATFORM_RESOLVING_FORMATS: dict[str, tuple["PlatformFamily", "Architecture", "P
     "lime": (PlatformFamily.LINUX, Architecture.X64, ProbeConfidence.HIGH),
     "elf_core": (PlatformFamily.LINUX, Architecture.UNKNOWN, ProbeConfidence.MEDIUM),
     "linux_banner_scan": (PlatformFamily.LINUX, Architecture.UNKNOWN, ProbeConfidence.MEDIUM),
+    # Persisted by _run_volatility_plugin_bounded (the stage 4 Volatility
+    # fallback) on a successful bounded windows.info/linux.pslist probe --
+    # missing here meant a raw memory dump with no self-describing magic
+    # bytes (the common case: a plain physical-memory acquisition, not a
+    # crash dump/hiberfil/VMware snapshot) got identified correctly exactly
+    # once, by the worker process that has Volatility installed, but every
+    # subsequent readiness check -- including the one immediately following
+    # in the very same preparation run, which never re-requests the stage 4
+    # fallback -- saw this exact string in evidence.detected_format and
+    # still fell through to PLATFORM_NOT_IDENTIFIED, forever, since nothing
+    # here matched it. Confidence/architecture mirror what
+    # _run_volatility_plugin_bounded itself already assigned.
+    "volatility_windows.info": (PlatformFamily.WINDOWS, Architecture.X64, ProbeConfidence.MEDIUM),
+    "volatility_linux.pslist": (PlatformFamily.LINUX, Architecture.X64, ProbeConfidence.MEDIUM),
 }
 
 
