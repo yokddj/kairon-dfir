@@ -68,6 +68,22 @@ def test_fast_plan_downgrades_full_mft():
     assert any(item["name"] == "Full MFT" for item in plan["excluded"])
 
 
+def test_plan_reflects_a_reprocess_that_wiped_previously_indexed_mft_and_user_activity():
+    """A reprocess that deletes OpenSearch events must also reset the
+    on-demand step counters (mft_full_records_indexed, mft_coverage_status,
+    registry_user_activity_records_indexed) that this function reads --
+    otherwise it keeps reporting "already indexed" for data that no longer
+    exists (see _ON_DEMAND_INDEXING_METADATA_RESET in app/workers/tasks.py)."""
+    metadata = _metadata(registry_user_activity_status="", defender_evtx_status="")
+    mft = _mft(mft_coverage_status="", mft_full_records_indexed=0)
+
+    plan = build_indexing_plan(profile="recommended", metadata=metadata, mft_diagnostic=mft, indexed_docs=0)
+    steps = _by_id(plan)
+
+    assert steps["mft_full"]["status"] == "ready"
+    assert steps["user_activity"]["status"] == "ready"
+
+
 def test_advanced_custom_does_not_bundle_execution():
     plan = build_indexing_plan(profile="advanced_custom", metadata=_metadata(), mft_diagnostic=_mft(), indexed_docs=0)
 
