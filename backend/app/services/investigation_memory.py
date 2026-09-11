@@ -233,6 +233,36 @@ def _memory_command_history(db: Session, case_id: str, params: dict[str, Any]) -
         )
         host_name = _evidence_host_name(db, evidence)
         rows.extend(_memory_command_row(case_id, evidence, row, payload.get("selected_run"), host_name) for row in payload.get("items") or [])
+
+        # windows.consoles / linux.bash recover literal shell/console input
+        # directly from memory (cmd.exe and PowerShell console buffers on
+        # Windows, bash's in-memory history on Linux) -- a genuinely
+        # different source from the process command-line reconstruction
+        # above, and the only one with any command history at all on a
+        # Windows image where no process happened to still be resident with
+        # a recoverable command line. Both plugins are already normalized
+        # into "memory_shell_history" documents (see
+        # app.services.memory.artifact_normalizers) and already searchable
+        # via the "shell_history" family -- this was simply never routed
+        # into the Command History view before.
+        shell_history_payload = search_memory_artifacts(
+            db,
+            case_id=case_id,
+            evidence_id=str(evidence.id),
+            artifact_types=["shell_history"],
+            run_id=params.get("run_id") or params.get("memory_run_id"),
+            pid=_int_or_none(params.get("pid")),
+            ppid=_int_or_none(params.get("ppid")),
+            process_name=params.get("process_name"),
+            query=params.get("q") or params.get("command_contains"),
+            source_plugin=params.get("source_plugin") or params.get("source_plugin_or_parser"),
+            time_from=params.get("time_from"),
+            time_to=params.get("time_to"),
+            page=1,
+            page_size=500,
+            mixed_run=True,
+        )
+        rows.extend(_memory_shell_history_row(case_id, evidence, result, host_name) for result in shell_history_payload.get("results") or [])
     rows.sort(key=lambda item: (item.get("timestamp") is None, item.get("timestamp") or "", item.get("id") or ""), reverse=str(params.get("sort") or params.get("sort_order") or "").endswith("desc"))
     total = len(rows)
     start = (page - 1) * page_size
@@ -418,6 +448,60 @@ def _memory_command_row(case_id: str, evidence: Evidence, row: dict[str, Any], s
         "supporting_events": [],
         "raw_reference": {"process_entity_id": row.get("process_entity_id"), "run_id": run_id},
         "navigation_target": {"kind": "memory_process", "case_id": case_id, "evidence_id": str(evidence.id), "run_id": run_id, "process_entity_id": row.get("process_entity_id"), "tab": "graph"},
+    }
+
+
+def _memory_shell_history_row(case_id: str, evidence: Evidence, result: dict[str, Any], host_name: str | None = None) -> dict[str, Any]:
+    """windows.consoles / linux.bash recovered console/shell input -- see
+    the call site above. No timestamp is ever available from either
+    plugin (verified against volatility3's own consoles/bash plugin
+    source), so this is always "undated", unlike _memory_command_row's
+    rows which carry a real process creation time when known."""
+    raw = dict(result.get("raw") or {})
+    command = raw.get("command") or ""
+    run_id = result.get("memory_run_id")
+    document_id = result.get("result_id") or raw.get("document_id")
+    command_id = f"memory-shell-history:{evidence.id}:{document_id}"
+    process_name = raw.get("process_name") or result.get("process_name")
+    risk_score, risk_reasons = score_command(str(command), {"name": process_name, "parent_name": None}, {"name": None})
+    plugin = result.get("source_plugin") or raw.get("source_plugin") or "windows.consoles"
+    return {
+        "id": command_id,
+        "command_id": command_id,
+        "case_id": case_id,
+        "evidence_id": str(evidence.id),
+        "evidence_name": evidence.original_filename,
+        "run_id": run_id,
+        "host": host_name if host_name is not None else evidence.detected_host,
+        "timestamp": None,
+        "timestamp_status": "undated",
+        "timestamp_semantics": None,
+        "command": command,
+        "command_line": command,
+        "command_normalized": command.lower(),
+        "shell": "memory",
+        "launcher": process_name,
+        "launcher_path": None,
+        "shell_family": "memory",
+        "classification_confidence": "observed",
+        "parent_shell": None,
+        "parent_context": None,
+        "source_type": "memory",
+        "source_category": SOURCE_CATEGORY_MEMORY,
+        "source_plugin_or_parser": plugin,
+        "artifact_type": "memory_shell_history",
+        "source_event_id": command_id,
+        "source_file": evidence.original_filename,
+        "user": None,
+        "process": {"name": process_name, "pid": raw.get("pid") or result.get("pid"), "guid": None, "entity_id": raw.get("process_entity_id"), "command_line": command},
+        "parent_process": {"pid": None, "guid": None},
+        "process_entity_id": raw.get("process_entity_id"),
+        "risk_score": risk_score,
+        "risk_reasons": risk_reasons,
+        "confidence": "observed",
+        "supporting_events": [],
+        "raw_reference": {"document_id": document_id, "run_id": run_id},
+        "navigation_target": {"kind": "memory_process", "case_id": case_id, "evidence_id": str(evidence.id), "run_id": run_id, "process_entity_id": raw.get("process_entity_id"), "tab": "graph"},
     }
 
 
