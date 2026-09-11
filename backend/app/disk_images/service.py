@@ -759,8 +759,39 @@ def _matches_source_pattern(path: str, pattern: str) -> bool:
 # on any NTFS volume, drive-letter-prefixed layout or not.
 _NTFS_METADATA_FILENAMES = {
     "$MFT", "$MFTMirr", "$LogFile", "$Bitmap", "$Boot",
-    "$Secure", "$UpCase", "$AttrDef", "$BadClus", "$Volume",
+    "$Secure", "$UpCase", "$AttrDef", "$BadClus", "$Volume", "$UsnJrnl",
 }
+
+# $UsnJrnl's actual journal records live entirely in its named "$J"
+# Alternate Data Stream -- the file's own default/unnamed attribute is
+# always empty, and a plain directory listing never exposes ADS as
+# separate entries at all (verified against the real evidence: 0 of 1501
+# walked entries had a colon in their name). Sleuthkit only exposes named
+# streams by iterating a File's attributes and re-reading with an explicit
+# (type, id) pair -- see pytsk3.File.read_random's signature.
+_USN_JOURNAL_DATA_STREAM_NAME = b"$J"
+_USN_JOURNAL_MAX_BYTES = 512 * 1024 * 1024
+
+
+def _read_usn_journal_j_stream(file_obj) -> bytes | None:
+    target_id = None
+    target_size = 0
+    try:
+        for attr in file_obj:
+            info = attr.info
+            if getattr(info, "name", None) == _USN_JOURNAL_DATA_STREAM_NAME and getattr(info, "type", None) == pytsk3.TSK_FS_ATTR_TYPE_NTFS_DATA:
+                target_id = info.id
+                target_size = int(info.size or 0)
+                break
+    except Exception:  # noqa: BLE001
+        return None
+    if target_id is None or target_size <= 0:
+        return None
+    size = min(target_size, _USN_JOURNAL_MAX_BYTES)
+    try:
+        return file_obj.read_random(0, size, pytsk3.TSK_FS_ATTR_TYPE_NTFS_DATA, target_id)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _should_materialize(path: str) -> bool:
@@ -774,7 +805,11 @@ def _should_materialize(path: str) -> bool:
     legacy_patterns = (
         "/windows/system32/config/system",
         "/windows/system32/config/software",
+        "/windows/system32/config/sam",
         "/windows/system32/winevt/logs/",
+        "/windows/prefetch/",
+        "/windows/appcompat/programs/",
+        "/windows/system32/tasks/",
         "/users/",
         "/programdata/",
         "hostnamectl.txt",
@@ -865,8 +900,11 @@ def _materialize_volume_installation(
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             file_obj = fs_info.open(full_path)
-            size = int(getattr(meta, "size", 0) or 0)
-            data = b"" if size == 0 else file_obj.read_random(0, size)
+            if Path(full_path).name.lower() == "$usnjrnl":
+                data = _read_usn_journal_j_stream(file_obj) or b""
+            else:
+                size = int(getattr(meta, "size", 0) or 0)
+                data = b"" if size == 0 else file_obj.read_random(0, size)
         except Exception:
             warnings.append(f"unreadable_file:{full_path}")
             continue
@@ -904,22 +942,33 @@ def _materialize_volume_installation(
     # ordinary walk above and must not have the *live* volume's $MFT
     # misattributed to it here.
     if _looks_like_drive_letter_root(install.root_path):
-        try:
-            root_entries = list(fs_info.open_dir(path="/"))
-        except Exception:  # noqa: BLE001
-            root_entries = []
-        for entry in root_entries:
-            name_info = getattr(entry.info, "name", None)
-            raw_name = getattr(name_info, "name", None) if name_info else None
-            if not raw_name:
-                continue
-            decoded_name = raw_name.decode("utf-8", "replace")
-            if decoded_name not in _NTFS_METADATA_FILENAMES or not _is_allocated_entry(entry):
-                continue
-            meta = getattr(entry.info, "meta", None)
-            if meta is None or meta.type != pytsk3.TSK_FS_META_TYPE_REG:
-                continue
-            full_path = f"/{decoded_name}"
+
+        def _regular_file_candidates(dir_path: str, allowed_names: set[str]) -> list[tuple[str, object]]:
+            try:
+                dir_entries = list(fs_info.open_dir(path=dir_path))
+            except Exception:  # noqa: BLE001
+                return []
+            found = []
+            for dir_entry in dir_entries:
+                name_info = getattr(dir_entry.info, "name", None)
+                raw_name = getattr(name_info, "name", None) if name_info else None
+                if not raw_name:
+                    continue
+                decoded_name = raw_name.decode("utf-8", "replace")
+                if decoded_name not in allowed_names or not _is_allocated_entry(dir_entry):
+                    continue
+                dir_entry_meta = getattr(dir_entry.info, "meta", None)
+                if dir_entry_meta is None or dir_entry_meta.type != pytsk3.TSK_FS_META_TYPE_REG:
+                    continue
+                found.append((f"{dir_path.rstrip('/')}/{decoded_name}", dir_entry_meta))
+            return found
+
+        # $UsnJrnl lives nested under $Extend rather than as a true-root
+        # sibling of $MFT -- it needs its own directory scan rather than
+        # the flat top-level one above.
+        candidates = _regular_file_candidates("/", _NTFS_METADATA_FILENAMES - {"$UsnJrnl"})
+        candidates += _regular_file_candidates("/$Extend", {"$UsnJrnl"})
+        for full_path, entry_meta in candidates:
             file_count += 1
             if file_count > settings.disk_image_max_files_per_volume:
                 warnings.append("max_files_per_volume_exceeded")
@@ -933,8 +982,11 @@ def _materialize_volume_installation(
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
                 file_obj = fs_info.open(full_path)
-                size = int(getattr(meta, "size", 0) or 0)
-                data = b"" if size == 0 else file_obj.read_random(0, size)
+                if Path(full_path).name.lower() == "$usnjrnl":
+                    data = _read_usn_journal_j_stream(file_obj) or b""
+                else:
+                    size = int(getattr(entry_meta, "size", 0) or 0)
+                    data = b"" if size == 0 else file_obj.read_random(0, size)
             except Exception:  # noqa: BLE001
                 warnings.append(f"unreadable_file:{full_path}")
                 continue
