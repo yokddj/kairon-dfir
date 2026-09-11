@@ -458,10 +458,10 @@ def _apply_mft_fingerprint(document: dict) -> None:
 def _infer_timestamp_for_mft(lowered: dict[str, object]) -> tuple[str | None, str]:
     candidates = [
         ("mft_si_changed", _get(lowered, "LastRecordChange0x10", "SiMftModified", "SI_Changed")),
-        ("mft_si_modified", _get(lowered, "Modified0x10", "SiModified", "SI_Modified")),
+        ("mft_si_modified", _get(lowered, "LastModified0x10", "Modified0x10", "SiModified", "SI_Modified")),
         ("mft_si_created", _get(lowered, "Created0x10", "SiCreated", "SI_Created")),
         ("mft_fn_changed", _get(lowered, "LastRecordChange0x30", "FnMftModified", "FN_Changed")),
-        ("mft_fn_modified", _get(lowered, "Modified0x30", "FnModified", "FN_Modified")),
+        ("mft_fn_modified", _get(lowered, "LastModified0x30", "Modified0x30", "FnModified", "FN_Modified")),
         ("mft_fn_created", _get(lowered, "Created0x30", "FnCreated", "FN_Created")),
         ("mft_si_accessed", _get(lowered, "LastAccess0x10", "SiAccessed", "SI_Accessed")),
         ("mft_fn_accessed", _get(lowered, "LastAccess0x30", "FnAccessed", "FN_Accessed")),
@@ -644,11 +644,11 @@ def _build_mft_document(case_id: str, evidence_id: str, artifact_id: str, path: 
             doc["host"]["hostname"] = normalized_host
 
     si_created = _parse_timestamp(_get(lowered, "Created0x10", "SiCreated", "SI_Created"))
-    si_modified = _parse_timestamp(_get(lowered, "Modified0x10", "SiModified", "SI_Modified"))
+    si_modified = _parse_timestamp(_get(lowered, "LastModified0x10", "Modified0x10", "SiModified", "SI_Modified"))
     si_accessed = _parse_timestamp(_get(lowered, "LastAccess0x10", "SiAccessed", "SI_Accessed"))
     si_mft_modified = _parse_timestamp(_get(lowered, "LastRecordChange0x10", "SiMftModified", "SI_Changed"))
     fn_created = _parse_timestamp(_get(lowered, "Created0x30", "FnCreated", "FN_Created"))
-    fn_modified = _parse_timestamp(_get(lowered, "Modified0x30", "FnModified", "FN_Modified"))
+    fn_modified = _parse_timestamp(_get(lowered, "LastModified0x30", "Modified0x30", "FnModified", "FN_Modified"))
     fn_accessed = _parse_timestamp(_get(lowered, "LastAccess0x30", "FnAccessed", "FN_Accessed"))
     fn_mft_modified = _parse_timestamp(_get(lowered, "LastRecordChange0x30", "FnMftModified", "FN_Changed"))
 
@@ -802,6 +802,15 @@ def _build_mft_document(case_id: str, evidence_id: str, artifact_id: str, path: 
 
 def _build_mft_document_fast(case_id: str, evidence_id: str, artifact_id: str, path: Path, artifact_meta: dict, raw_row: dict, lowered: dict[str, object]) -> dict:
     timestamp, timestamp_type = _infer_timestamp_for_mft(lowered)
+    # $STANDARD_INFORMATION is a single small attribute already resident in
+    # every row read here, so capturing all four of its MACB timestamps costs
+    # a handful of extra string parses per record. $FILE_NAME's copies are
+    # skipped (left None below) along with the SI/FN timestomp comparison --
+    # those are the genuinely heavier parts this fast path exists to avoid.
+    si_created = _parse_timestamp(_get(lowered, "Created0x10", "SiCreated", "SI_Created"))
+    si_modified = _parse_timestamp(_get(lowered, "LastModified0x10", "Modified0x10", "SiModified", "SI_Modified"))
+    si_accessed = _parse_timestamp(_get(lowered, "LastAccess0x10", "SiAccessed", "SI_Accessed"))
+    si_changed = _parse_timestamp(_get(lowered, "LastRecordChange0x10", "SiMftModified", "SI_Changed"))
     source_file = _normalize_windows_path(_get(lowered, "SourceFile", "SourceFilename")) or path.name
     effective = select_filesystem_effective_path((raw_row, lowered))
     file_path = effective["path"]
@@ -838,11 +847,11 @@ def _build_mft_document_fast(case_id: str, evidence_id: str, artifact_id: str, p
             "directory": parent_path,
             "parent_path": parent_path,
             "size": _normalize_value(_get(lowered, "FileSize")),
-            "modified": timestamp if timestamp_type == "mft_si_modified" else None,
-            "created": timestamp if timestamp_type == "mft_si_created" else None,
-            "accessed": timestamp if timestamp_type == "mft_si_accessed" else None,
-            "changed": timestamp if timestamp_type == "mft_si_changed" else None,
-            "mft_modified": timestamp if timestamp_type == "mft_si_changed" else None,
+            "modified": si_modified,
+            "created": si_created,
+            "accessed": si_accessed,
+            "changed": si_changed,
+            "mft_modified": si_changed,
             "deleted": True if in_use is False else False if in_use is True else None,
             "in_use": in_use,
             "is_directory": is_directory,
