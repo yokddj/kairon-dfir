@@ -306,6 +306,19 @@ export type DiskImage = {
   volumes: DiskVolume[];
 };
 
+export type InstallationSummary = {
+  id: string;
+  evidence_id: string;
+  disk_volume_id: string;
+  platform: string;
+  hostname?: string | null;
+  version?: string | null;
+  root_path: string;
+  confidence: string;
+  is_secondary: boolean;
+  note?: string | null;
+};
+
 type UploadFormDataOptions = {
   onProgress?: (progress: UploadProgress) => void;
   transport?: UploadTransport;
@@ -6900,6 +6913,7 @@ export const api = {
     return uploadFormData<Evidence>(`/cases/${caseId}/disk-images/upload`, formData, { onProgress: options?.onProgress, transport: "xhr" });
   },
   getEvidenceDiskImage: (evidenceId: string) => request<DiskImage>(`/evidences/${evidenceId}/disk-image`),
+  getCaseDiskImageInstallations: (caseId: string) => request<InstallationSummary[]>(`/cases/${caseId}/disk-image-installations`),
   getIngestionReadiness: (caseId: string) => request<IngestionReadiness>(`/cases/${caseId}/ingestion-readiness`),
   getCaseActivity: (caseId: string) => request<ActivityCenterResponse>(`/cases/${caseId}/activity`),
   retryEvidenceOperation: (caseId: string, operationId: string) =>
