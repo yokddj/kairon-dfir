@@ -544,6 +544,27 @@ def test_timeline_around_event_returns_window(monkeypatch):
     assert response["query"]["evidence_id"] == "ev-1"
 
 
+def test_timeline_around_event_anchors_a_synthetic_mft_macb_id_on_its_own_field(monkeypatch):
+    """A synthetic MACB timeline row's id is "<real id>::<field>" (see
+    _mft_macb_timeline_points); it isn't a document of its own, so this must
+    anchor the window on that specific MACB field's timestamp -- not the
+    real document's own @timestamp, which belongs to a different MACB
+    point -- and must not 404 just because the id isn't a literal document
+    id."""
+    monkeypatch.setattr(
+        timeline_service,
+        "fetch_event_by_id",
+        lambda *args, **kwargs: {"@timestamp": "2026-05-15T10:30:00Z", "evidence_id": "ev-1", "mft": {"si_created": "2026-05-15T09:00:00Z"}},
+    )
+    captured = {}
+    monkeypatch.setattr(timeline_service, "build_timeline_response", lambda db, case_id, params: captured.update(params) or {"query": params, "items": []})
+
+    timeline_service.timeline_around_event(_FakeDb(), "case-1", "mft-1::si_created", window="30m", page_size=50)
+
+    assert captured["time_from"] == "2026-05-15T08:30:00+00:00"
+    assert captured["time_to"] == "2026-05-15T09:30:00+00:00"
+
+
 def test_timeline_around_finding_returns_finding_and_related_events(monkeypatch):
     finding = Finding(
         id="finding-1",
@@ -922,3 +943,99 @@ def test_timeline_response_stays_quiet_when_nothing_was_cut(monkeypatch):
 
     assert response["event_total"] == 3
     assert not [warning for warning in response["warnings"] if "matching events" in warning]
+
+
+def _mft_event_doc(event_id: str, *, primary_ts: str, primary_precision: str, macb: dict[str, str], path: str = "C:\\Users\\Public\\evil.ps1"):
+    return {
+        "id": event_id,
+        "kind": "event",
+        "timestamp": primary_ts,
+        "title": "MFT file observed",
+        "summary": "MFT file observed",
+        "artifact_type": "mft",
+        "event_type": "file_modified",
+        "severity": "info",
+        "risk_score": 0,
+        "host": "movistar-pc",
+        "user": None,
+        "source_file": "MFTECmd.csv",
+        "matched_fields": [],
+        "highlights": {},
+        "raw": {
+            "event_id": event_id,
+            "evidence_id": "ev-1",
+            "@timestamp": primary_ts,
+            "timestamp_precision": primary_precision,
+            "host": {"name": "movistar-pc"},
+            "artifact": {"type": "mft"},
+            "event": {"type": "file_modified", "category": "file"},
+            "file": {"path": path},
+            "mft": {"entry_number": "42", **macb},
+        },
+    }
+
+
+def test_timeline_expands_mft_macb_points_within_the_requested_window(monkeypatch):
+    """An MFT document only ever contributed one timeline entry, at whichever
+    MACB field won the @timestamp priority race. Within a bounded window,
+    this file's OTHER known MACB points should also surface -- but never a
+    duplicate of the field that's already the primary entry, and never a
+    point that falls outside the requested window."""
+    row = _mft_event_doc(
+        "mft-1",
+        primary_ts="2026-05-15T10:30:00Z",
+        primary_precision="mft_si_changed",
+        macb={
+            "si_changed": "2026-05-15T10:30:00Z",
+            "si_created": "2026-05-15T10:15:00Z",
+            "si_accessed": "2026-05-15T09:00:00Z",
+        },
+    )
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *_a, **_k: (1, [row], [], {}))
+    monkeypatch.setattr(timeline_service, "search_findings_v2", lambda *_a, **_k: (0, [], [], []))
+    monkeypatch.setattr(timeline_service, "memory_timeline_items", lambda *_a, **_k: {"items": [], "warnings": [], "undated_count": 0})
+
+    response = timeline_service.build_timeline_response(
+        _FakeDb(),
+        "case-1",
+        {"page_size": 50, "time_from": "2026-05-15T10:00:00Z", "time_to": "2026-05-15T11:00:00Z"},
+    )
+
+    items_by_title = {item["title"]: item["timestamp"] for item in response["items"]}
+    assert items_by_title["MFT file observed"] == "2026-05-15T10:30:00Z"
+    assert items_by_title["MFT: Created (SI)"] == "2026-05-15T10:15:00Z"
+    assert "MFT: Entry changed (SI)" not in items_by_title
+    assert "MFT: Accessed (SI)" not in items_by_title
+    assert len(response["items"]) == 2
+
+
+def test_timeline_does_not_expand_mft_without_a_bounded_window(monkeypatch):
+    row = _mft_event_doc(
+        "mft-1",
+        primary_ts="2026-05-15T10:30:00Z",
+        primary_precision="mft_si_changed",
+        macb={"si_changed": "2026-05-15T10:30:00Z", "si_created": "2026-05-15T10:15:00Z"},
+    )
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *_a, **_k: (1, [row], [], {}))
+    monkeypatch.setattr(timeline_service, "search_findings_v2", lambda *_a, **_k: (0, [], [], []))
+
+    response = timeline_service.build_timeline_response(_FakeDb(), "case-1", {"page_size": 50})
+
+    assert len(response["items"]) == 1
+    assert response["items"][0]["title"] == "MFT file observed"
+
+
+def test_timeline_does_not_expand_non_mft_artifact_types(monkeypatch):
+    row = _event_doc("evt-1", ts="2026-05-15T10:30:00Z", artifact_type="process")
+
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *_a, **_k: (1, [row], [], {}))
+    monkeypatch.setattr(timeline_service, "search_findings_v2", lambda *_a, **_k: (0, [], [], []))
+    monkeypatch.setattr(timeline_service, "memory_timeline_items", lambda *_a, **_k: {"items": [], "warnings": [], "undated_count": 0})
+
+    response = timeline_service.build_timeline_response(
+        _FakeDb(),
+        "case-1",
+        {"page_size": 50, "time_from": "2026-05-15T10:00:00Z", "time_to": "2026-05-15T11:00:00Z"},
+    )
+
+    assert len(response["items"]) == 1

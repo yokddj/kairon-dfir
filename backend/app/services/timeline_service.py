@@ -126,6 +126,63 @@ def _normalize_iso(value: str | datetime | None) -> str | None:
     return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
+_MFT_MACB_TIMELINE_FIELDS: dict[str, str] = {
+    "si_created": "MFT: Created (SI)",
+    "si_modified": "MFT: Modified (SI)",
+    "si_accessed": "MFT: Accessed (SI)",
+    "si_changed": "MFT: Entry changed (SI)",
+    "fn_created": "MFT: Created (FN)",
+    "fn_modified": "MFT: Modified (FN)",
+    "fn_accessed": "MFT: Accessed (FN)",
+    "fn_changed": "MFT: Entry changed (FN)",
+}
+
+
+def _mft_macb_timeline_points(compact_item: dict[str, Any], *, time_from: datetime | None, time_to: datetime | None) -> list[dict[str, Any]]:
+    """An MFT document already contributes one timeline entry at its single
+    derived @timestamp (whichever MACB field won _infer_timestamp_for_mft's
+    priority race). Browsing a specific hour should also surface this same
+    file's OTHER known MACB points if they land in that same window --
+    otherwise "this file was also modified at 14:32" never appears just
+    because "changed" (a different field) happened to win the priority race.
+    Only expands documents already fetched for the window (bounded by
+    time_from/time_to on the primary @timestamp) -- a file whose primary
+    timestamp falls outside the requested window is not retroactively
+    pulled in just because a secondary MACB point falls inside it; doing
+    that would require querying every MACB field, not just @timestamp.
+    """
+    raw = compact_item.get("raw") or {}
+    if str(compact_item.get("artifact_type") or "") != "mft":
+        return []
+    mft = raw.get("mft") if isinstance(raw.get("mft"), dict) else {}
+    if not mft:
+        return []
+    primary_precision = str(raw.get("timestamp_precision") or "")
+    primary_field = primary_precision[len("mft_") :] if primary_precision.startswith("mft_") else None
+    points: list[dict[str, Any]] = []
+    for field, label in _MFT_MACB_TIMELINE_FIELDS.items():
+        if field == primary_field:
+            continue
+        value = mft.get(field)
+        if not value:
+            continue
+        parsed = _parse_time(str(value))
+        if parsed is None:
+            continue
+        if time_from and parsed < time_from:
+            continue
+        if time_to and parsed > time_to:
+            continue
+        point = dict(compact_item)
+        point["id"] = f"{compact_item.get('id')}::{field}"
+        point["timestamp"] = value
+        point["time_bucket"] = None
+        point["title"] = label
+        point["event_type"] = f"mft_{field}"
+        points.append(point)
+    return points
+
+
 def _compact_event_row(row: dict[str, Any], *, related_finding_ids: list[str] | None = None, bookmark: TimelineBookmark | None = None) -> dict[str, Any]:
     raw = dict(row.get("raw") or {})
     return {
@@ -1842,6 +1899,14 @@ def build_timeline_response(db: Session, case_id: str, params: dict[str, Any]) -
     bookmark_map = {bookmark.event_id: bookmark for bookmark in bookmarks}
 
     compact_items = [add_event_source_provenance(_compact_event_row(row, related_finding_ids=related_finding_map.get(str(row.get("id")), []), bookmark=bookmark_map.get(str(row.get("id"))))) for row in event_rows]
+    # Only within an explicit, bounded window ("what happened this hour") --
+    # not on the default/open-ended timeline, where every MFT row could add
+    # up to 7 extra entries.
+    window_from = _parse_time(params.get("time_from")) if params.get("time_from") else None
+    window_to = _parse_time(params.get("time_to")) if params.get("time_to") else None
+    if window_from and window_to:
+        for item in list(compact_items):
+            compact_items.extend(_mft_macb_timeline_points(item, time_from=window_from, time_to=window_to))
     compact_findings = [_compact_finding_row(row) for row in finding_rows]
     compact_bookmarks = []
     if include_bookmarks:
@@ -1941,10 +2006,19 @@ def build_lightweight_timeline_response(db: Session, case_id: str, params: dict[
 
 
 def timeline_around_event(db: Session, case_id: str, event_id: str, *, window: str = "30m", page_size: int = 100) -> dict[str, Any]:
-    source = fetch_event_by_id(case_id, event_id, event_index=None, opensearch_id=event_id) or fetch_event_by_id(case_id, event_id, event_index=None, opensearch_id=None)
+    # A timeline row for one of an MFT document's non-primary MACB points
+    # (see _mft_macb_timeline_points) has a synthetic id, "<real id>::<macb
+    # field>" -- it isn't a document of its own, so anchor on the real
+    # document but read the specific MACB field's timestamp, not the
+    # document's own @timestamp (which belongs to a different MACB point).
+    base_event_id, _, macb_field = event_id.partition("::")
+    if macb_field not in _MFT_MACB_TIMELINE_FIELDS:
+        base_event_id, macb_field = event_id, ""
+    source = fetch_event_by_id(case_id, base_event_id, event_index=None, opensearch_id=base_event_id) or fetch_event_by_id(case_id, base_event_id, event_index=None, opensearch_id=None)
     if not source:
         raise HTTPException(status_code=404, detail="Event not found")
-    timestamp = _parse_time(str(source.get("@timestamp") or ""))
+    timestamp_value = ((source.get("mft") or {}).get(macb_field) if macb_field else None) or source.get("@timestamp")
+    timestamp = _parse_time(str(timestamp_value or ""))
     if not timestamp:
         raise HTTPException(status_code=400, detail="Event does not have a searchable timestamp")
     delta = _parse_window(window)
