@@ -70,6 +70,32 @@ describe("EventTable PowerShell view", () => {
   });
 });
 
+describe("EventTable mft view", () => {
+  const mftItem = {
+    id: "mft-1",
+    "@timestamp": "2024-01-01T00:00:00Z",
+    artifact: { type: "mft" },
+    file: { path: "C:\\Users\\Public\\evil.ps1", name: "evil.ps1" },
+    mft: { si_created: "2024-01-01T00:00:00Z", entry_number: "42" },
+  };
+
+  it("offers to view a file's history from an MFT row when the callback is provided", () => {
+    const onViewFileHistory = vi.fn();
+    render(<EventTable items={[mftItem]} view="mft" onViewFileHistory={onViewFileHistory} />);
+
+    fireEvent.click(screen.getByText("evil.ps1"));
+    fireEvent.click(screen.getByText("View file history"));
+
+    expect(onViewFileHistory).toHaveBeenCalledWith(mftItem);
+  });
+
+  it("does not offer file history without the callback, or for non-MFT views", () => {
+    render(<EventTable items={[mftItem]} view="mft" />);
+    fireEvent.click(screen.getByText("evil.ps1"));
+    expect(screen.queryByText("View file history")).not.toBeInTheDocument();
+  });
+});
+
 describe("EventTable network service-log profiles", () => {
   const apacheAccess = {
     id: "apache-access-1",
