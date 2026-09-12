@@ -14,7 +14,9 @@ describe("artifactRegistry", () => {
     expect(artifactEventView("linux_network")).toBe("network");
     expect(artifactEventView("linux_apache")).toBe("network");
     expect(artifactEventView("linux_exim")).toBe("network");
-    expect(artifactEventView("mft")).toBe("filesystem");
+    expect(artifactEventView("mft")).toBe("mft");
+    expect(artifactEventView("ntfs")).toBe("filesystem");
+    expect(artifactEventView("usn")).toBe("filesystem");
   });
 
   it("returns linux platform shortcuts without unrelated families", () => {
