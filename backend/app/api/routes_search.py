@@ -1496,6 +1496,110 @@ def search_by_entity(
     return search_case_v2(db, case_id, params)
 
 
+_MFT_MACB_EVENT_LABELS: dict[str, str] = {
+    "si_created": "Created (SI)",
+    "si_modified": "Modified (SI)",
+    "si_accessed": "Accessed (SI)",
+    "si_changed": "MFT entry changed (SI)",
+    "fn_created": "Created (FN)",
+    "fn_modified": "Modified (FN)",
+    "fn_accessed": "Accessed (FN)",
+    "fn_changed": "MFT entry changed (FN)",
+}
+
+_USN_EVENT_LABELS: dict[str, str] = {
+    "file_created": "File created",
+    "file_deleted": "File deleted",
+    "file_rename_old_name": "Renamed (old name)",
+    "file_rename_new_name": "Renamed (new name)",
+    "file_modified": "Data modified",
+    "file_metadata_changed": "Metadata changed",
+    "usn_record": "USN record",
+}
+
+
+@router.get("/api/cases/{case_id}/file-history")
+def get_file_history(
+    case_id: str,
+    path: str = Query(...),
+    host: str | None = None,
+    evidence_id: str | None = None,
+    max_records: int = Query(default=1000, ge=1, le=5000),
+) -> dict:
+    """A single MFT record is a snapshot: its 8 MACB fields describe what is
+    currently known about the file, not eight distinct moments someone
+    observed it change. USN Journal records are the opposite -- each one is
+    a discrete, timestamped, reason-coded event (created/deleted/renamed/
+    modified) captured as it happened. Neither alone gives a reliable
+    lifecycle; this merges both, chronologically, clearly labeled by source,
+    without trying to deduplicate one against the other -- collapsing an MFT
+    MACB point onto a USN event for the "same" change would assert a
+    precision neither source actually supports on its own.
+    """
+    normalized_path = path.strip()
+    if not normalized_path:
+        raise HTTPException(status_code=400, detail="path is required")
+    index = _resolve_index(case_id)
+    if not index_exists(get_opensearch_client(), index):
+        return {"path": normalized_path, "events": [], "mft_records": 0, "usn_records": 0}
+    client = get_opensearch_client()
+
+    filters: list[dict] = [{"term": {"case_id": case_id}}, {"term": {"file.path": normalized_path}}]
+    if host:
+        filters.append({"term": {"host.name": host}})
+    if evidence_id:
+        filters.append({"term": {"evidence_id": evidence_id}})
+
+    def _fetch(artifact_type: str) -> list[dict]:
+        body = {
+            "query": {"bool": {"filter": [*filters, {"term": {"artifact.type": artifact_type}}]}},
+            "sort": [{"@timestamp": {"order": "asc", "missing": "_last"}}],
+            "size": max_records,
+        }
+        result = client.search(index=index, body=body, params={"ignore_unavailable": "true"})
+        return [hit["_source"] for hit in result["hits"]["hits"]]
+
+    mft_docs = _fetch("mft")
+    usn_docs = _fetch("usn")
+
+    events: list[dict] = []
+    for doc in mft_docs:
+        mft = doc.get("mft") or {}
+        for field, label in _MFT_MACB_EVENT_LABELS.items():
+            timestamp = mft.get(field)
+            if not timestamp:
+                continue
+            events.append(
+                {
+                    "timestamp": timestamp,
+                    "source": "mft",
+                    "label": label,
+                    "host": (doc.get("host") or {}).get("name"),
+                    "evidence_id": doc.get("evidence_id"),
+                    "mft_entry_number": mft.get("entry_number"),
+                    "in_use": mft.get("in_use"),
+                    "extension": (doc.get("file") or {}).get("extension") or mft.get("extension"),
+                }
+            )
+    for doc in usn_docs:
+        usn = doc.get("usn") or {}
+        event_type = str((doc.get("event") or {}).get("type") or "usn_record")
+        events.append(
+            {
+                "timestamp": usn.get("timestamp") or doc.get("@timestamp"),
+                "source": "usn",
+                "label": f"USN: {_USN_EVENT_LABELS.get(event_type, event_type)}",
+                "host": (doc.get("host") or {}).get("name"),
+                "evidence_id": doc.get("evidence_id"),
+                "usn_reason": usn.get("reasons") or usn.get("reason"),
+                "usn_file_reference": usn.get("file_reference"),
+            }
+        )
+
+    events.sort(key=lambda item: str(item.get("timestamp") or ""))
+    return {"path": normalized_path, "events": events, "mft_records": len(mft_docs), "usn_records": len(usn_docs)}
+
+
 @router.post("/api/timeline", response_model=SearchResponse)
 def timeline_events(payload: SearchRequest) -> SearchResponse:
     return run_search(payload, timeline=True)
