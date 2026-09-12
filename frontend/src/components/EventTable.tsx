@@ -96,6 +96,7 @@ type Props = {
   onViewProcessTree?: (item: Record<string, unknown>) => void;
   onCreateFinding?: (item: Record<string, unknown>) => void;
   onAroundEvent?: (item: Record<string, unknown>, windowMs: number) => void;
+  onViewFileHistory?: (item: Record<string, unknown>) => void;
   onFilterField?: (field: string, value: string) => void;
   onExcludeField?: (field: string, value: string) => void;
 };
@@ -825,7 +826,7 @@ const DEFAULT_EVENT_COLUMN_WIDTHS: Record<string, number> = {
   process_name: 180,
 };
 
-export default function EventTable({ items, view = "generic", sortBy, sortOrder, onSortChange, selectedIds = [], onToggleSelect, onViewProcessTree, onCreateFinding, onAroundEvent, onFilterField, onExcludeField }: Props) {
+export default function EventTable({ items, view = "generic", sortBy, sortOrder, onSortChange, selectedIds = [], onToggleSelect, onViewProcessTree, onCreateFinding, onAroundEvent, onViewFileHistory, onFilterField, onExcludeField }: Props) {
   const { effectiveTimezone } = useTimezonePreference();
   const [openId, setOpenId] = useState<string | null>(null);
   const [showColumnChooser, setShowColumnChooser] = useState(false);
@@ -1027,6 +1028,7 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
                             {item.event_id ? <button type="button" onClick={() => void copyToClipboard(String(item.event_id))} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy event id</button> : null}
                             {onCreateFinding ? <button type="button" onClick={() => onCreateFinding(item)} className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">Create finding from this</button> : null}
                             {onViewProcessTree && hasProcessTreeContext(item) ? <button type="button" onClick={() => onViewProcessTree(item)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">View process tree</button> : null}
+                            {onViewFileHistory && view === "mft" && file.path ? <button type="button" onClick={() => onViewFileHistory(item)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">View file history</button> : null}
                             {onAroundEvent && item["@timestamp"] ? (
                               <>
                                 <button type="button" onClick={() => onAroundEvent(item, 30 * 1000)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Around this event · ±30s</button>

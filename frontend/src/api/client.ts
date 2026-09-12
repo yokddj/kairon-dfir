@@ -4820,6 +4820,26 @@ export type DetectionSummary = {
 
 export type SearchFacets = Record<string, Record<string, number>>;
 
+export type FileHistoryEvent = {
+  timestamp: string | null;
+  source: "mft" | "usn";
+  label: string;
+  host: string | null;
+  evidence_id: string | null;
+  mft_entry_number?: string | null;
+  in_use?: boolean | null;
+  extension?: string | null;
+  usn_reason?: string | null;
+  usn_file_reference?: string | null;
+};
+
+export type FileHistoryResponse = {
+  path: string;
+  events: FileHistoryEvent[];
+  mft_records: number;
+  usn_records: number;
+};
+
 export type DetectionFacets = {
   engines: Array<{ value: string; count: number }>;
   sources: Array<{ value: string; count: number }>;
@@ -7683,6 +7703,12 @@ export const api = {
     if (params?.evidenceId) query.append("evidence_id", params.evidenceId);
     if (params?.hostId) query.append("host_id", params.hostId);
     return request<SearchFacets>(`/search/facets${query.size ? `?${query.toString()}` : ""}`);
+  },
+  fileHistory: (caseId: string, params: { path: string; host?: string; evidenceId?: string }) => {
+    const query = new URLSearchParams({ path: params.path });
+    if (params.host) query.append("host", params.host);
+    if (params.evidenceId) query.append("evidence_id", params.evidenceId);
+    return request<FileHistoryResponse>(`/cases/${caseId}/file-history?${query.toString()}`);
   },
   siem: (payload: Record<string, unknown>) => request<SearchResponse>("/siem", { method: "POST", body: JSON.stringify(payload) }),
   siemFields: (caseId?: string) => request<SiemFieldsResponse>(`/siem/fields${caseId ? `?case_id=${caseId}` : ""}`),
