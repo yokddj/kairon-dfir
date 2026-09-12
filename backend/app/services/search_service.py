@@ -795,7 +795,21 @@ def _build_event_filters(case_id: str, params: dict[str, Any], db: Session | Non
             }
         )
         selected_artifact_types = set(_artifact_type_values(_dedupe(params.get("artifact_type"))))
-        if "mft" not in selected_artifact_types and "filesystem" not in selected_artifact_types and not params.get("include_filesystem_timeline", False):
+        has_text_query = bool(str(params.get("q") or "").strip())
+        if (
+            "mft" not in selected_artifact_types
+            and "filesystem" not in selected_artifact_types
+            and not params.get("include_filesystem_timeline", False)
+            and not has_text_query
+        ):
+            # The timeline hides MFT by default -- a raw disk image can carry
+            # hundreds of thousands of file records, which would otherwise
+            # drown out everything else in a general narrative view. But an
+            # explicit text search (a file name, say) is already a narrow,
+            # deliberate query, and MFT is often exactly what such a search
+            # is looking for -- excluding it here would make "search for
+            # this file" silently miss the one artifact type built to
+            # answer it.
             filters.append({"bool": {"must_not": [{"term": {"artifact.type": "mft"}}]}})
         if not params.get("include_low_confidence_timestamps", False):
             filters.append({"bool": {"must_not": [{"term": {"timestamp_precision": "unknown"}}]}})
