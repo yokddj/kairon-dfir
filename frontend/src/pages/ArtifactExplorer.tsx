@@ -944,7 +944,7 @@ export default function ArtifactExplorer() {
   }, [artifactName, artifactTypeFilter, backendVariant, caseId, pageSize, query, searchMode, persistenceType, persistenceSource, persistenceSuspiciousOnly, persistenceRiskMin, motwZoneId, motwExtension, motwRiskMin, emailType, emailClient, emailInterestingOnly, emailRiskMin]);
 
   const contextualPlaceholder =
-    artifactType === "mft" || artifactType === "usn"
+    artifactType === "mft" || artifactType === "ntfs"
       ? "Search file name, path, extension..."
       : isMotwView
         ? "Search downloaded file, Zone.Identifier, HostUrl or domain..."
