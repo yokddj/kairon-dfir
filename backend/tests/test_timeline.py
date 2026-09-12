@@ -695,6 +695,46 @@ def test_lightweight_timeline_clamps_page_size(monkeypatch):
     assert response["page_size"] == 500
 
 
+def test_lightweight_timeline_preserves_mft_fields_for_detail_and_macb_expansion(monkeypatch):
+    """_compact_event_row_lightweight used to whitelist raw fields without
+    "mft" (or "usn"), so an MFT row's mft.si_created/etc. were stripped
+    before ever reaching the frontend detail view -- and before
+    _mft_macb_timeline_points (which reads raw["mft"]) had anything to
+    expand."""
+    row = _mft_event_doc(
+        "mft-1",
+        primary_ts="2026-05-15T10:30:00Z",
+        primary_precision="mft_si_changed",
+        macb={"si_changed": "2026-05-15T10:30:00Z", "si_created": "2026-05-15T10:15:00Z"},
+    )
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *_a, **_k: (1, [row], [], {}))
+
+    response = timeline_service.build_lightweight_timeline_response(_FakeDb(), "case-1", {"page_size": 50})
+
+    assert response["items"][0]["raw"]["mft"]["si_created"] == "2026-05-15T10:15:00Z"
+
+
+def test_lightweight_timeline_expands_mft_macb_points_within_the_requested_window(monkeypatch):
+    row = _mft_event_doc(
+        "mft-1",
+        primary_ts="2026-05-15T10:30:00Z",
+        primary_precision="mft_si_changed",
+        macb={"si_changed": "2026-05-15T10:30:00Z", "si_created": "2026-05-15T10:15:00Z", "si_accessed": "2026-05-15T09:00:00Z"},
+    )
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *_a, **_k: (1, [row], [], {}))
+
+    response = timeline_service.build_lightweight_timeline_response(
+        _FakeDb(),
+        "case-1",
+        {"page_size": 50, "time_from": "2026-05-15T10:00:00Z", "time_to": "2026-05-15T11:00:00Z"},
+    )
+
+    items_by_title = {item["title"]: item["timestamp"] for item in response["items"]}
+    assert items_by_title["MFT file observed"] == "2026-05-15T10:30:00Z"
+    assert items_by_title["MFT: Created (SI)"] == "2026-05-15T10:15:00Z"
+    assert "MFT: Accessed (SI)" not in items_by_title
+
+
 def test_markdown_export_basic():
     bookmark = TimelineBookmark(
         id="bookmark-1",
