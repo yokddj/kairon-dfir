@@ -389,6 +389,31 @@ def test_build_event_filters_excludes_suspicious_timestamps_for_timeline_only() 
     assert status_filter["bool"]["must_not"][0]["terms"]["timestamp_status"] == ["invalid", "suspicious"]
 
 
+def _has_mft_exclusion(filters: list[dict]) -> bool:
+    return any(item.get("bool", {}).get("must_not") == [{"term": {"artifact.type": "mft"}}] for item in filters)
+
+
+def test_build_event_filters_excludes_mft_from_timeline_by_default() -> None:
+    filters = search_service._build_event_filters("case-1", {"timeline_only": True}, _FakeDb())
+    assert _has_mft_exclusion(filters)
+
+
+def test_build_event_filters_keeps_mft_when_timeline_has_a_text_query() -> None:
+    """A raw disk image can carry hundreds of thousands of MFT records, so
+    the timeline excludes them by default to avoid drowning out everything
+    else. But an explicit text search (e.g. a file name) is already a
+    narrow, deliberate query -- and MFT is often exactly what it's looking
+    for, so excluding it here would make "search for this file" silently
+    miss the one artifact type built to answer it."""
+    filters = search_service._build_event_filters("case-1", {"timeline_only": True, "q": "Telegram.exe"}, _FakeDb())
+    assert not _has_mft_exclusion(filters)
+
+
+def test_build_event_filters_still_excludes_mft_for_an_empty_or_blank_query() -> None:
+    filters = search_service._build_event_filters("case-1", {"timeline_only": True, "q": "   "}, _FakeDb())
+    assert _has_mft_exclusion(filters)
+
+
 def test_format_event_result_preserves_but_sanitizes_suspicious_timestamp() -> None:
     result = search_service._format_event_result(
         {
