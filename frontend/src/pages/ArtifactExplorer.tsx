@@ -9,6 +9,7 @@ import EventTable, { type EventView, type SortField, type SortOrder } from "../c
 import { SelectField, TextField } from "../components/FilterField";
 import IndicatorResolutionPanel from "../components/IndicatorResolutionPanel";
 import PaginationControls from "../components/PaginationControls";
+import ResponsiveDetailPanel from "../components/ResponsiveDetailPanel";
 import TimeField from "../components/TimeField";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
@@ -706,6 +707,12 @@ export default function ArtifactExplorer() {
   const facetsQuery = useQuery({
     queryKey: ["artifact-explorer-facets", caseId, hostIdFilter],
     queryFn: () => api.searchFacets({ caseId: caseId || undefined, hostId: hostIdFilter || undefined }),
+  });
+  const [fileHistoryTarget, setFileHistoryTarget] = useState<{ path: string; host?: string; evidenceId?: string } | null>(null);
+  const fileHistoryQuery = useQuery({
+    queryKey: ["file-history", caseId, fileHistoryTarget],
+    queryFn: () => api.fileHistory(caseId!, fileHistoryTarget!),
+    enabled: Boolean(caseId && fileHistoryTarget),
   });
   // Startup & Persistence is a derived cross-artifact view (scheduled tasks,
   // services, registry events, Defender config) with no single indexed
@@ -1473,9 +1480,49 @@ export default function ArtifactExplorer() {
             }}
             onFilterField={handleFilterField}
             onExcludeField={handleExcludeField}
+            onViewFileHistory={(item) => {
+              const path = String((item.file as Record<string, unknown> | undefined)?.path ?? "");
+              if (!path) return;
+              const host = String((item.host as Record<string, unknown> | undefined)?.name ?? "") || undefined;
+              const evidenceId = String(item.evidence_id ?? "") || undefined;
+              setFileHistoryTarget({ path, host, evidenceId });
+            }}
           />
         </>
       )}
+      <ResponsiveDetailPanel
+        open={Boolean(fileHistoryTarget)}
+        onClose={() => setFileHistoryTarget(null)}
+        heading="File history"
+        subheading={fileHistoryTarget?.path}
+        mode="stacked"
+      >
+        {fileHistoryQuery.isLoading ? (
+          <p className="text-sm text-muted">Loading...</p>
+        ) : fileHistoryQuery.isError ? (
+          <p className="text-sm text-rose-300">Could not load file history.</p>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-xs text-muted">
+              {fileHistoryQuery.data?.mft_records ?? 0} MFT record(s) &middot; {fileHistoryQuery.data?.usn_records ?? 0} USN record(s). MFT points describe the file's last-known state, not distinct observed moments; USN entries are discrete logged events. Shown together, not merged.
+            </p>
+            <ol className="space-y-2">
+              {(fileHistoryQuery.data?.events ?? []).map((event, index) => (
+                <li key={`${event.timestamp}-${index}`} className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-mono text-xs text-muted">{event.timestamp ? formatTimestamp(event.timestamp, effectiveTimezone) : "-"}</span>
+                    <span className={`rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.12em] ${event.source === "usn" ? "border-mint/40 text-mint" : "border-accent/40 text-accent"}`}>{event.source}</span>
+                  </div>
+                  <p className="mt-1 text-ink">{event.label}</p>
+                  {event.usn_reason ? <p className="mt-1 text-xs text-muted">Reason: {event.usn_reason}</p> : null}
+                  {event.host ? <p className="mt-1 text-xs text-muted">Host: {event.host}</p> : null}
+                </li>
+              ))}
+              {!fileHistoryQuery.data?.events.length ? <li className="text-sm text-muted">No history events found for this file.</li> : null}
+            </ol>
+          </div>
+        )}
+      </ResponsiveDetailPanel>
       <CreateFindingDialog
         open={findingDialogOpen}
         onClose={() => {
