@@ -778,10 +778,17 @@ def _build_event_filters(case_id: str, params: dict[str, Any], db: Session | Non
     elif has_timestamp is False:
         filters.append({"bool": {"must_not": [{"exists": {"field": "@timestamp"}}]}})
     if params.get("timeline_only"):
+        has_text_query = bool(str(params.get("q") or "").strip())
         if not params.get("include_suspicious_timestamps", False):
             filters.append({"range": {"@timestamp": {"lte": _max_reasonable_timestamp()}}})
             filters.append({"bool": {"must_not": [{"terms": {"timestamp_status": ["invalid", "suspicious"]}}]}})
-        if not params.get("include_low_value", False):
+        if not params.get("include_low_value", False) and not has_text_query:
+            # MFT's default classification for an unremarkable file is
+            # "file_observed" -- one of the types this excludes as noise.
+            # A deliberate text search (a file name, say) is already a
+            # narrow, intentional query; hiding "just observed" events here
+            # would silently drop the very MFT record such a search is
+            # usually looking for.
             filters.append({"bool": {"must_not": [{"terms": {"event.type": list(TIMELINE_LOW_VALUE_TYPES)}}]}})
         filters.append(
             {
@@ -795,7 +802,6 @@ def _build_event_filters(case_id: str, params: dict[str, Any], db: Session | Non
             }
         )
         selected_artifact_types = set(_artifact_type_values(_dedupe(params.get("artifact_type"))))
-        has_text_query = bool(str(params.get("q") or "").strip())
         if (
             "mft" not in selected_artifact_types
             and "filesystem" not in selected_artifact_types

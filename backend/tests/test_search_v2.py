@@ -414,6 +414,27 @@ def test_build_event_filters_still_excludes_mft_for_an_empty_or_blank_query() ->
     assert _has_mft_exclusion(filters)
 
 
+def _has_low_value_exclusion(filters: list[dict]) -> bool:
+    return any(item.get("bool", {}).get("must_not") and item["bool"]["must_not"][0].get("terms", {}).get("event.type") == list(search_service.TIMELINE_LOW_VALUE_TYPES) for item in filters)
+
+
+def test_build_event_filters_excludes_low_value_event_types_from_timeline_by_default() -> None:
+    filters = search_service._build_event_filters("case-1", {"timeline_only": True}, _FakeDb())
+    assert _has_low_value_exclusion(filters)
+
+
+def test_build_event_filters_keeps_low_value_events_when_timeline_has_a_text_query() -> None:
+    """An MFT record's default classification for an unremarkable file is
+    "file_observed" -- one of TIMELINE_LOW_VALUE_TYPES. Excluding low-value
+    events from the timeline by default is right for the general narrative
+    view, but a deliberate text search (a file name) is already narrow and
+    intentional; hiding "just observed" events here would silently drop the
+    very MFT record such a search is usually looking for. Same reasoning,
+    same relaxation, as the MFT artifact-type exclusion above."""
+    filters = search_service._build_event_filters("case-1", {"timeline_only": True, "q": "Telegram.exe"}, _FakeDb())
+    assert not _has_low_value_exclusion(filters)
+
+
 def test_format_event_result_preserves_but_sanitizes_suspicious_timestamp() -> None:
     result = search_service._format_event_result(
         {
