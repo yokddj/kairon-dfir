@@ -218,7 +218,7 @@ def _compact_event_row_lightweight(row: dict[str, Any], *, related_finding_ids: 
     for key in ("id", "event_id", "stable_event_id", "evidence_id", "case_id", "source_file", "risk_score", "timestamp_precision"):
         if raw.get(key) is not None:
             compact_raw[key] = raw.get(key)
-    for key in ("artifact", "event", "process", "file", "url", "browser", "network", "windows", "user", "host", "powershell", "amcache", "shimcache", "jumplist", "scheduled_task"):
+    for key in ("artifact", "event", "process", "file", "url", "browser", "network", "windows", "user", "host", "powershell", "amcache", "shimcache", "jumplist", "scheduled_task", "mft", "usn"):
         value = raw.get(key)
         if isinstance(value, dict) and value:
             compact_raw[key] = value
@@ -1986,6 +1986,11 @@ def build_lightweight_timeline_response(db: Session, case_id: str, params: dict[
     }
     total, event_rows, warnings, _ = search_events_v2(case_id, event_params, db=db)
     page_items = [_compact_event_row_lightweight(row) for row in event_rows if row.get("timestamp")]
+    window_from = _parse_time(params.get("time_from")) if params.get("time_from") else None
+    window_to = _parse_time(params.get("time_to")) if params.get("time_to") else None
+    if window_from and window_to:
+        for item in list(page_items):
+            page_items.extend(_mft_macb_timeline_points(item, time_from=window_from, time_to=window_to))
     groups = _timeline_groups(page_items, str(params.get("group_by") or "hour"))
     next_cursor = _encode_cursor(offset + page_size) if offset + page_size < total else None
     return {
