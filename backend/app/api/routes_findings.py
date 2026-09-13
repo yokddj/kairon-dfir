@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.activity import log_activity
@@ -15,10 +14,9 @@ from app.models.case import Case
 from app.models.case_host import CaseHost
 from app.models.detection_result import DetectionResult
 from app.models.evidence import Evidence
-from app.models.finding import Finding, FindingSeverity, FindingStatus
+from app.models.finding import Finding, FindingStatus
 from app.schemas.finding import FindingCreate, FindingRead, FindingUpdate
 from app.services.correlation_engine import run_correlation_engine
-from app.services.host_identity import expand_host_filter
 from app.services.hunting import update_finding_status
 
 
@@ -249,62 +247,13 @@ def correlate_case(case_id: str, payload: CorrelationRequest | None = Body(defau
     return result
 
 
-@router.get("/api/cases/{case_id}/findings", response_model=list[FindingRead])
-def list_findings(
-    case_id: str,
-    severity: FindingSeverity | None = Query(default=None),
-    confidence: str | None = Query(default=None),
-    status_filter: FindingStatus | None = Query(default=None, alias="status"),
-    finding_type: str | None = Query(default=None),
-    evidence_id: str | None = Query(default=None),
-    linked_evidence_id: str | None = Query(default=None),
-    linked_host_id: str | None = Query(default=None),
-    tag: str | None = Query(default=None),
-    q: str | None = Query(default=None),
-    include_archived: bool = Query(default=False),
-    host: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-) -> list[Finding]:
-    _get_case_or_404(db, case_id)
-    query = db.query(Finding).filter(Finding.case_id == case_id)
-    if severity:
-        query = query.filter(Finding.severity == severity)
-    if confidence:
-        query = query.filter(Finding.confidence == confidence)
-    if status_filter:
-        query = query.filter(Finding.status == status_filter)
-    if finding_type:
-        query = query.filter(Finding.finding_type == finding_type)
-    if evidence_id:
-        query = query.filter(or_(Finding.evidence_id == evidence_id, Finding.linked_evidence_id == evidence_id))
-    if linked_evidence_id:
-        query = query.filter(Finding.linked_evidence_id == linked_evidence_id)
-    if linked_host_id:
-        query = query.filter(Finding.linked_host_id == linked_host_id)
-    if not include_archived:
-        query = query.filter(Finding.status != FindingStatus.archived, Finding.archived_at.is_(None))
-    if q:
-        token = f"%{q.strip().lower()}%"
-        query = query.filter(or_(Finding.title.ilike(token), Finding.description.ilike(token)))
-    items = query.order_by(Finding.created_at.desc()).all()
-    if tag:
-        wanted = tag.strip().lower()
-        items = [item for item in items if wanted in {str(value).strip().lower() for value in (item.tags or [])}]
-    host_value = host.strip() if isinstance(host, str) else None
-    if host_value:
-        expanded_hosts = {value.lower() for value in expand_host_filter(db, case_id, host_value)}
-        items = [
-            item
-            for item in items
-            if any(str(value).strip().lower() in expanded_hosts for value in (item.related_hosts or []))
-        ]
-    return items
-
-
-@router.get("/api/cases/{case_id}/findings/{finding_id}", response_model=FindingRead)
-def get_finding(case_id: str, finding_id: str, db: Session = Depends(get_db)) -> Finding:
-    _get_case_or_404(db, case_id)
-    return _get_case_finding_or_404(db, case_id, finding_id)
+# GET /api/cases/{case_id}/findings and GET .../findings/{finding_id}
+# intentionally have no handler here, for the same reason the PATCH handler
+# doesn't (see the comment further down): routes_hunting.router is
+# registered before this one in app.main, and routes_hunting.py already
+# serves both exact paths (hunting_list_findings, hunting_get_finding) --
+# a handler here would never run. _get_case_or_404/_get_case_finding_or_404
+# stay, used by create_finding/delete_case_finding below.
 
 
 @router.post("/api/cases/{case_id}/findings", response_model=FindingRead, status_code=status.HTTP_201_CREATED)

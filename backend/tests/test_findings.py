@@ -260,19 +260,26 @@ def test_source_snapshot_too_large_is_rejected():
     assert response.status_code == 422
 
 
-def test_list_findings_filters_by_severity_status_tag_text_and_links():
+def test_list_findings_filters_by_severity_status_tag_text_and_links(monkeypatch):
+    # GET goes through the real app (see _client_with_hunting): routes_hunting's
+    # handler for this path -- registered before routes_findings' -- is the
+    # one that actually runs in production, returning a paginated
+    # {"items": [...]} envelope rather than routes_findings' bare list.
     db = _db_session()
     _seed_case_graph(db)
-    client = _client(db)
+    client = _client_with_hunting(db, monkeypatch)
     client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Critical confirmed note", "body": "malware beacon", "severity": "critical", "status": "confirmed", "tags": ["malware"], "linked_evidence_id": EVIDENCE_ID, "linked_host_id": HOST_ID})
     client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Info draft", "severity": "info", "status": "draft", "tags": ["triage"]})
 
-    assert [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?severity=critical").json()] == ["Critical confirmed note"]
-    assert [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?status=confirmed").json()] == ["Critical confirmed note"]
-    assert [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?tag=malware").json()] == ["Critical confirmed note"]
-    assert [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?q=beacon").json()] == ["Critical confirmed note"]
-    assert [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?linked_evidence_id={EVIDENCE_ID}").json()] == ["Critical confirmed note"]
-    assert [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?linked_host_id={HOST_ID}").json()] == ["Critical confirmed note"]
+    def _titles(query: str) -> list[str]:
+        return [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?{query}").json()["items"]]
+
+    assert _titles("severity=critical") == ["Critical confirmed note"]
+    assert _titles("status=confirmed") == ["Critical confirmed note"]
+    assert _titles("tag=malware") == ["Critical confirmed note"]
+    assert _titles("q=beacon") == ["Critical confirmed note"]
+    assert _titles(f"linked_evidence_id={EVIDENCE_ID}") == ["Critical confirmed note"]
+    assert _titles(f"linked_host_id={HOST_ID}") == ["Critical confirmed note"]
 
 
 def test_update_and_archive_finding_include_archived(monkeypatch):
@@ -607,18 +614,18 @@ def test_run_correlation_engine_removes_stale_correlation_findings(monkeypatch: 
 
 
 def test_case_finding_routes_list_detail_and_patch() -> None:
+    # routes_findings has no GET/PATCH handlers for these paths (see the
+    # comments where they used to be) -- routes_hunting.py's are the ones
+    # that actually run in production, so that's what this exercises.
     db = _CorrelationDb()
     item = Finding(case_id="case-1", title="Correlated", description="x", severity=FindingSeverity.high, status=FindingStatus.new, source="correlation_engine", finding_type="download_execute_detect", confidence="high")
     item.id = "finding-1"
     db.findings.append(item)
-    listed = routes_findings.list_findings("case-1", severity=None, confidence=None, status_filter=None, finding_type=None, evidence_id=None, linked_evidence_id=None, linked_host_id=None, tag=None, q=None, include_archived=False, host=None, db=db)
-    assert len(listed) == 1
-    assert listed[0].id == "finding-1"
-    detail = routes_findings.get_finding("case-1", "finding-1", db=db)
-    assert detail.id == "finding-1"
-    # routes_findings has no PATCH handler for this path (see the comment
-    # where update_case_finding used to be) -- routes_hunting.py's is the
-    # one that actually runs in production.
+    listed = routes_hunting.hunting_list_findings("case-1", status_filter=None, page=1, page_size=100, db=db)
+    assert listed["total"] == 1
+    assert listed["items"][0]["id"] == "finding-1"
+    detail = routes_hunting.hunting_get_finding("case-1", "finding-1", db=db)
+    assert detail["finding"]["id"] == "finding-1"
     updated = routes_hunting.hunting_patch_finding("case-1", "finding-1", payload={"status": "triaged"}, db=db)
     assert updated["status"] == "triaged"
 
