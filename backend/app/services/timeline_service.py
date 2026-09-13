@@ -1899,12 +1899,18 @@ def build_timeline_response(db: Session, case_id: str, params: dict[str, Any]) -
     bookmark_map = {bookmark.event_id: bookmark for bookmark in bookmarks}
 
     compact_items = [add_event_source_provenance(_compact_event_row(row, related_finding_ids=related_finding_map.get(str(row.get("id")), []), bookmark=bookmark_map.get(str(row.get("id"))))) for row in event_rows]
-    # Only within an explicit, bounded window ("what happened this hour") --
-    # not on the default/open-ended timeline, where every MFT row could add
-    # up to 7 extra entries.
+    # Either within an explicit, bounded window ("what happened this hour")
+    # or under an explicit text query (a file name, say) -- not on the
+    # default/open-ended, unfiltered timeline, where every MFT row could add
+    # up to 7 extra entries. A text query has no time bound, so
+    # time_from/time_to stay None in that case -- _mft_macb_timeline_points
+    # treats a None bound as unbounded, i.e. no field is excluded on that
+    # side, which is what "show everything about this searched-for file"
+    # needs.
     window_from = _parse_time(params.get("time_from")) if params.get("time_from") else None
     window_to = _parse_time(params.get("time_to")) if params.get("time_to") else None
-    if window_from and window_to:
+    has_text_query = bool(str(params.get("q") or "").strip())
+    if (window_from and window_to) or has_text_query:
         for item in list(compact_items):
             compact_items.extend(_mft_macb_timeline_points(item, time_from=window_from, time_to=window_to))
     compact_findings = [_compact_finding_row(row) for row in finding_rows]
@@ -1988,7 +1994,8 @@ def build_lightweight_timeline_response(db: Session, case_id: str, params: dict[
     page_items = [_compact_event_row_lightweight(row) for row in event_rows if row.get("timestamp")]
     window_from = _parse_time(params.get("time_from")) if params.get("time_from") else None
     window_to = _parse_time(params.get("time_to")) if params.get("time_to") else None
-    if window_from and window_to:
+    has_text_query = bool(str(params.get("q") or "").strip())
+    if (window_from and window_to) or has_text_query:
         for item in list(page_items):
             page_items.extend(_mft_macb_timeline_points(item, time_from=window_from, time_to=window_to))
     groups = _timeline_groups(page_items, str(params.get("group_by") or "hour"))
