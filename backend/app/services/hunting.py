@@ -1305,7 +1305,7 @@ def validate_transition(current: str, target: str, *, reason: str | None = None)
     target = _map_legacy(target)
     if target in ALLOWED_TRANSITIONS.get(current, set()):
         return
-    is_reopen = current in {"false_positive", "accepted_risk", "resolved", "suppressed"}
+    is_reopen = current in {"false_positive", "accepted_risk", "resolved", "suppressed", "archived"}
     if is_reopen and not reason:
         raise ValueError("Reopen from terminal/suppressed state requires explicit reason")
     if is_reopen:

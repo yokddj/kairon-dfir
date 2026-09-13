@@ -42,6 +42,14 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     "accepted_risk": {"investigating", "resolved"},
     "resolved": {"investigating"},
     "suppressed": {"triaged", "investigating"},
+    # CreateFindingDialog / FindingsWorkspace's manual create-and-edit form:
+    # an analyst-driven classification for manually-authored findings, not
+    # the correlation engine's staged pipeline above. "draft" is the
+    # default status for every finding created this way, and "archived" is
+    # also directly selectable there (separate from the DELETE endpoint's
+    # unconditional soft-delete, which bypasses this state machine).
+    "draft": {"review", "confirmed", "false_positive", "archived"},
+    "review": {"draft", "confirmed", "false_positive", "archived"},
 }
 
 ACTIVE_STATUSES = frozenset({"new", "triaged", "investigating", "confirmed"})
