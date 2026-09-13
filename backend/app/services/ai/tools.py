@@ -1120,7 +1120,7 @@ TOOL_SPECS: list[dict] = [
             "properties": {
                 "host": {"type": "string", "description": "Restrict to one host. A name or a host_id both work."},
                 "severity": {"type": "string", "description": "critical, high, medium, low or info."},
-                "status": {"type": "string", "description": "Detection status filter, e.g. new, triaged, dismissed."},
+                "status": {"type": "string", "description": "Detection status filter, e.g. new, reviewed, confirmed, dismissed."},
                 "rule_name": {"type": "string", "description": "Filter by (part of) the rule's name."},
                 "query": {"type": "string", "description": "Free-text filter over the match message, target path and rule name."},
                 "limit": {"type": "integer", "description": f"Max detections, 1-{MAX_ROWS_HARD}."},
