@@ -735,6 +735,21 @@ def test_lightweight_timeline_expands_mft_macb_points_within_the_requested_windo
     assert "MFT: Accessed (SI)" not in items_by_title
 
 
+def test_lightweight_timeline_expands_mft_macb_points_for_a_text_query_with_no_time_bound(monkeypatch):
+    row = _mft_event_doc(
+        "mft-1",
+        primary_ts="2026-05-15T10:30:00Z",
+        primary_precision="mft_si_changed",
+        macb={"si_changed": "2026-05-15T10:30:00Z", "si_created": "2024-01-01T00:00:00Z"},
+    )
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *_a, **_k: (1, [row], [], {}))
+
+    response = timeline_service.build_lightweight_timeline_response(_FakeDb(), "case-1", {"page_size": 50, "q": "Telegram.exe"})
+
+    titles = {item["title"] for item in response["items"]}
+    assert titles == {"MFT file observed", "MFT: Created (SI)"}
+
+
 def test_markdown_export_basic():
     bookmark = TimelineBookmark(
         id="bookmark-1",
@@ -1063,6 +1078,28 @@ def test_timeline_does_not_expand_mft_without_a_bounded_window(monkeypatch):
 
     assert len(response["items"]) == 1
     assert response["items"][0]["title"] == "MFT file observed"
+
+
+def test_timeline_expands_mft_macb_points_for_a_text_query_with_no_time_bound(monkeypatch):
+    """Searching by file name is already a narrow, deliberate query, same as
+    a bounded time window -- so it should also show everything known about
+    that file, not just whichever MACB field won the @timestamp priority
+    race. With no time bound, every populated MACB field is unbounded on
+    both sides, i.e. none gets excluded."""
+    row = _mft_event_doc(
+        "mft-1",
+        primary_ts="2026-05-15T10:30:00Z",
+        primary_precision="mft_si_changed",
+        macb={"si_changed": "2026-05-15T10:30:00Z", "si_created": "2024-01-01T00:00:00Z", "si_accessed": "2027-01-01T00:00:00Z"},
+    )
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *_a, **_k: (1, [row], [], {}))
+    monkeypatch.setattr(timeline_service, "search_findings_v2", lambda *_a, **_k: (0, [], [], []))
+    monkeypatch.setattr(timeline_service, "memory_timeline_items", lambda *_a, **_k: {"items": [], "warnings": [], "undated_count": 0})
+
+    response = timeline_service.build_timeline_response(_FakeDb(), "case-1", {"page_size": 50, "q": "Telegram.exe"})
+
+    titles = {item["title"] for item in response["items"]}
+    assert titles == {"MFT file observed", "MFT: Created (SI)", "MFT: Accessed (SI)"}
 
 
 def test_timeline_does_not_expand_non_mft_artifact_types(monkeypatch):
