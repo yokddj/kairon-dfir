@@ -1,9 +1,62 @@
+import enum
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, JSONVariant, UUIDMixin, utc_now_naive
+
+
+class DetectionStatus(str, enum.Enum):
+    """status was always a bare String(32), never an enum column -- this
+    documents the real values in use rather than changing the column type.
+    Finding.status went the native-Postgres-enum route and had to be
+    migrated back to varchar (see migrations.py v26) because adding a new
+    value meant an ALTER TYPE; keeping this one a plain string with
+    Python-side validation avoids repeating that."""
+
+    new = "new"
+    reviewed = "reviewed"
+    confirmed = "confirmed"
+    dismissed = "dismissed"
+    false_positive = "false_positive"
+    archived = "archived"
+    promoted_to_finding = "promoted_to_finding"
+    stale = "stale"
+    stale_event_link = "stale_event_link"
+
+
+# Statuses a human sets by analyst judgment, via PATCH /api/detections/{id}
+# or the bulk-action endpoints (Detections.tsx: "Mark reviewed" / "Confirm" /
+# "Dismiss" / "Reopen", plus the legacy archive/false_positive bulk actions
+# that exist server-side but aren't wired to a live UI control today).
+# Unlike Finding, detections aren't worked through a staged pipeline in
+# practice -- an analyst moves freely between "reviewed"/"confirmed"/
+# "dismissed"/etc. in either direction, and the live bulk-update endpoint
+# already applies mark_reviewed/mark_dismissed/mark_new unconditionally
+# from any prior status. So this validates only what's unambiguously wrong
+# (an unrecognized string, or a value that belongs to backend automation),
+# rather than inventing a staged graph real usage doesn't follow.
+DETECTION_HUMAN_STATUSES = frozenset({"new", "reviewed", "confirmed", "dismissed", "false_positive", "archived"})
+
+# Set only by backend automation, never by a person through a PATCH body:
+# "stale"/"stale_event_link" by reprocess cleanup and reconciliation
+# (workers/tasks.py, services/reconciliation.py) and a broken-link check on
+# GET /api/detections/{id}/event; "promoted_to_finding" by the dedicated
+# POST /api/detections/{id}/promote-to-finding endpoint, alongside creating
+# the Finding it points to. A PATCH targeting one of these directly would
+# either desync it from the automation that's supposed to own it, or (for
+# promoted_to_finding) claim a Finding exists when none was created.
+DETECTION_AUTOMATED_STATUSES = frozenset({"stale", "stale_event_link", "promoted_to_finding"})
+
+
+def validate_detection_transition(current: str, target: str) -> None:
+    if current == target:
+        return
+    if target in DETECTION_AUTOMATED_STATUSES:
+        raise ValueError(f"{target} is set automatically and cannot be assigned directly")
+    if target not in DETECTION_HUMAN_STATUSES:
+        raise ValueError(f"Unknown detection status: {target}")
 
 
 class DetectionResult(UUIDMixin, Base):

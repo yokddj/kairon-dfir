@@ -19,7 +19,14 @@ export function useFindingIndicators(
       const statusesForVisibility: Record<string, string[]> = {
         confirmed: ["confirmed"],
         confirmed_investigating: ["confirmed", "investigating"],
-        all: ["new", "triaged", "investigating", "confirmed", "false_positive", "accepted_risk", "resolved", "suppressed"],
+        // draft/review are CreateFindingDialog's manual-workflow states (see
+        // ALLOWED_TRANSITIONS in backend/app/models/finding.py) -- without
+        // them here, a manually-created finding an analyst hasn't yet moved
+        // past draft/review is invisible to indicator badges even with
+        // visibility set to "all". archived stays excluded, matching how
+        // findings list endpoints hide it by default (it's the outcome of
+        // deleting a finding).
+        all: ["new", "draft", "review", "triaged", "investigating", "confirmed", "false_positive", "accepted_risk", "resolved", "suppressed"],
         hidden: [],
       };
       try {
