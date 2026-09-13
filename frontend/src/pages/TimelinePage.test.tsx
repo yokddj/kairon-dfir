@@ -247,6 +247,50 @@ describe("TimelinePage", () => {
     expect(await screen.findByText("Windows UI")).toBeInTheDocument();
   });
 
+  it("shows an MFT row's specific MACB precision instead of the generic file_observed type", async () => {
+    getTimelineMock.mockResolvedValueOnce({
+      case_id: "case-1",
+      query: {},
+      mode: "investigation",
+      total: 2,
+      page_size: 100,
+      next_cursor: null,
+      groups: [{ key: "2026-05-15T10:00:00Z", label: "15 May 2026 10:00", count: 2, high_risk_count: 0 }],
+      facets: { artifact_type: { mft: 2 }, event_type: { file_observed: 1, file_deleted: 1 } },
+      warnings: [],
+      items: [
+        {
+          id: "evt-mft-primary",
+          kind: "event",
+          timestamp: "2026-05-15T10:00:00Z",
+          title: "MFT entry observed",
+          summary: "Telegram.exe",
+          artifact_type: "mft",
+          event_type: "file_observed",
+          risk_score: 0,
+          host: "TEST-WIN10-01",
+          raw: { timestamp_precision: "mft_si_changed" },
+        },
+        {
+          id: "evt-mft-deleted",
+          kind: "event",
+          timestamp: "2026-05-15T10:05:00Z",
+          title: "MFT entry observed",
+          summary: "old.tmp",
+          artifact_type: "mft",
+          event_type: "file_deleted",
+          risk_score: 0,
+          host: "TEST-WIN10-01",
+          raw: { timestamp_precision: "mft_si_changed" },
+        },
+      ],
+    });
+    renderPage();
+    expect(await screen.findByText("mft_si_changed")).toBeInTheDocument();
+    expect(screen.getByText("file_deleted")).toBeInTheDocument();
+    expect(screen.queryByText("file_observed")).not.toBeInTheDocument();
+  });
+
   it("mode toggle calls API with selected mode", async () => {
     renderPage();
     await screen.findByText("WINWORD.EXE -> powershell.exe");

@@ -35,6 +35,25 @@ function humanizeToken(value: string | null | undefined, fallback = "—") {
     .join(" ");
 }
 
+// An MFT row's event_type is a broad classification set at ingest
+// (created/deleted/ADS/etc.), independent of which MACB field happens to
+// win the @timestamp priority race -- so an unremarkable file lands on the
+// generic "file_observed" regardless of whether its primary timestamp is
+// Created, Modified, Accessed or Changed. The MACB-expansion rows next to
+// it (see _mft_macb_timeline_points, backend) are labeled by the specific
+// field they represent, e.g. "mft_si_created" -- display-only, matches
+// timestamp_precision already on the row. Falling back to the generic
+// label here made the primary row look inconsistent with its own expanded
+// siblings. Real classifications (file_deleted, alternate_data_stream,
+// ...) are left alone -- they carry information the MACB field doesn't.
+function timelineTypeDisplay(item: TimelineItem): string | null | undefined {
+  if (item.artifact_type === "mft" && item.event_type === "file_observed") {
+    const precision = item.raw?.timestamp_precision;
+    if (typeof precision === "string" && precision.startsWith("mft_")) return precision;
+  }
+  return item.event_type;
+}
+
 function paramValues(params: URLSearchParams, key: string) {
   const values = params.getAll(key).map((value) => value.trim()).filter(Boolean);
   if (values.length) return values;
@@ -59,7 +78,7 @@ function timelineSortValue(item: TimelineItem, key: string) {
     case "artifact":
       return item.artifact_type;
     case "type":
-      return item.event_type;
+      return timelineTypeDisplay(item);
     case "host":
       return item.host;
     case "summary":
@@ -233,7 +252,7 @@ function TimelinePage() {
         <div>Timestamp: <span className="text-ink">{itemTimestamp(selectedItem, effectiveTimezone)}</span></div>
         <div>Risk: <span className="text-ink">{selectedItem.risk_score || 0}</span></div>
         <div>Artifact: <span className="text-ink break-words">{artifactLabel(selectedItem.artifact_type)}</span></div>
-        <div>Type: <span className="text-ink break-words">{humanizeToken(selectedItem.event_type)}</span></div>
+        <div>Type: <span className="text-ink break-words">{humanizeToken(timelineTypeDisplay(selectedItem))}</span></div>
         <div>Host: <span className="text-ink break-words">{compact(selectedItem.host)}</span></div>
         {selectedObservedHost && selectedObservedHost !== selectedItem.host ? <div>Observed as: <span className="text-ink break-words">{selectedObservedHost}</span></div> : null}
         <div>User: <span className="text-ink break-words">{compact(selectedItem.user)}</span></div>
@@ -701,7 +720,7 @@ function TimelinePage() {
                       <span className={`w-fit rounded-full border px-2 py-0.5 text-xs ${riskTone(Number(item.risk_score || 0))}`}>{item.risk_score || 0}</span>
                       <span className="truncate text-muted">{item.kind}</span>
                       <span className="truncate text-muted">{artifactLabel(item.artifact_type)}</span>
-                      <span className="truncate text-muted">{compact(item.event_type)}</span>
+                      <span className="truncate text-muted">{compact(timelineTypeDisplay(item))}</span>
                       <span className="truncate text-muted">{compact(item.host)}</span>
                       <span className="truncate text-ink" title={item.summary || item.title}>
                         {hiddenMarking ? <span className="mr-2 rounded-full border border-line bg-abyss/70 px-2 py-0.5 text-[10px] uppercase text-muted">Hidden</span> : null}
