@@ -18,7 +18,7 @@ from app.core.opensearch import count_documents, fetch_event_by_id, get_events_i
 from app.core.config import get_settings
 from app.ingest.archive import extract_archive
 from app.models.case import Case
-from app.models.detection_result import DetectionResult
+from app.models.detection_result import DetectionResult, validate_detection_transition
 from app.models.evidence import Evidence
 from app.models.finding import Finding, FindingSeverity
 from app.models.rule import Rule, RuleEngine
@@ -3991,10 +3991,18 @@ def update_detection(detection_id: str, payload: DetectionUpdate, db: Session = 
     item = db.get(DetectionResult, detection_id)
     if not item:
         raise HTTPException(status_code=404, detail="Detection not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    if updates.get("status") is not None:
+        try:
+            validate_detection_transition(item.status, str(updates["status"]))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    for key, value in updates.items():
         setattr(item, key, value)
     if payload.status == "archived":
         item.archived_at = utc_now()
+    elif updates.get("status") is not None:
+        item.archived_at = None
     db.commit()
     db.refresh(item)
     return item
