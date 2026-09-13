@@ -19,6 +19,7 @@ from app.models.finding import Finding, FindingSeverity, FindingStatus
 from app.schemas.finding import FindingCreate, FindingRead, FindingUpdate
 from app.services.correlation_engine import run_correlation_engine
 from app.services.host_identity import expand_host_filter
+from app.services.hunting import update_finding_status
 
 
 router = APIRouter(tags=["findings"])
@@ -333,34 +334,11 @@ def create_finding(case_id: str, payload: FindingCreate, db: Session = Depends(g
     return item
 
 
-@router.patch("/api/cases/{case_id}/findings/{finding_id}", response_model=FindingRead)
-def update_case_finding(case_id: str, finding_id: str, payload: FindingUpdate, db: Session = Depends(get_db)) -> Finding:
-    item = _get_case_finding_or_404(db, case_id, finding_id)
-    updates = payload.model_dump(exclude_unset=True)
-    if "linked_evidence_id" in updates and updates["linked_evidence_id"]:
-        evidence = db.get(Evidence, updates["linked_evidence_id"])
-        if not evidence or evidence.case_id != case_id:
-            raise HTTPException(status_code=400, detail="Linked evidence must belong to the selected case.")
-    if "evidence_id" in updates and updates["evidence_id"]:
-        evidence = db.get(Evidence, updates["evidence_id"])
-        if not evidence or evidence.case_id != case_id:
-            raise HTTPException(status_code=400, detail="Linked evidence must belong to the selected case.")
-    if "linked_host_id" in updates and updates["linked_host_id"]:
-        host = db.get(CaseHost, updates["linked_host_id"])
-        if not host or host.case_id != case_id:
-            raise HTTPException(status_code=400, detail="Linked host must belong to the selected case.")
-    if "linked_artifact_id" in updates and updates["linked_artifact_id"]:
-        artifact = db.get(Artifact, updates["linked_artifact_id"])
-        if not artifact or artifact.case_id != case_id:
-            raise HTTPException(status_code=400, detail="Linked artifact must belong to the selected case.")
-    if "evidence_id" in updates and "linked_evidence_id" not in updates:
-        updates["linked_evidence_id"] = updates["evidence_id"]
-    for key, value in updates.items():
-        setattr(item, key, value)
-    db.commit()
-    db.refresh(item)
-    log_activity(db, activity_type="finding_updated", title="Finding updated", message=f"Updated finding {item.title}", case_id=case_id, metadata={"finding_id": item.id})
-    return item
+# PATCH /api/cases/{case_id}/findings/{finding_id} intentionally has no
+# handler here: app.main registers routes_hunting.router before this one,
+# and routes_hunting.hunting_patch_finding already serves that exact path
+# (with status-transition validation this file's version never had) --
+# a handler here would never run, shadowed by route registration order.
 
 
 @router.delete("/api/cases/{case_id}/findings/{finding_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -378,7 +356,18 @@ def update_finding(finding_id: str, payload: FindingUpdate, db: Session = Depend
     item = db.get(Finding, finding_id)
     if not item:
         raise HTTPException(status_code=404, detail="Finding not found")
-    for key, value in payload.model_dump(exclude_none=True).items():
+    updates = payload.model_dump(exclude_none=True)
+    if "status" in updates:
+        raw_status = updates.pop("status")
+        # model_dump() keeps this as a real FindingStatus instance, and
+        # str() on a str+Enum mixin gives "FindingStatus.confirmed", not
+        # "confirmed" -- .value is the actual value in both cases.
+        status_value = raw_status.value if hasattr(raw_status, "value") else str(raw_status)
+        try:
+            item = update_finding_status(db, item, status=status_value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    for key, value in updates.items():
         setattr(item, key, value)
     db.commit()
     db.refresh(item)
