@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.core.activity import log_activity
 from app.core.database import get_db, utc_now
 from app.models.artifact import Artifact
 from app.models.case import Case
@@ -292,7 +293,10 @@ def hunting_patch_finding(case_id: str, finding_id: str, payload: dict = Body(..
         if not artifact or artifact.case_id != case_id:
             raise HTTPException(status_code=400, detail="Linked artifact must belong to the selected case.")
     if "status" in payload:
-        finding = update_finding_status(db, finding, status=str(payload["status"]), analyst=str(payload.get("analyst") or "analyst"), note=payload.get("note"), reason=payload.get("reason"))
+        try:
+            finding = update_finding_status(db, finding, status=str(payload["status"]), analyst=str(payload.get("analyst") or "analyst"), note=payload.get("note"), reason=payload.get("reason"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if "assigned_to" in payload:
         if payload["assigned_to"]:
             finding = assign_finding(db, finding, assignee=str(payload["assigned_to"]), assigned_by=str(payload.get("assigned_by") or "analyst"))
@@ -311,32 +315,45 @@ def hunting_patch_finding(case_id: str, finding_id: str, payload: dict = Body(..
         finding.linked_evidence_id = payload["evidence_id"]
     db.commit()
     db.refresh(finding)
+    log_activity(db, activity_type="finding_updated", title="Finding updated", message=f"Updated finding {finding.title}", case_id=case_id, metadata={"finding_id": finding.id})
     return finding_to_dict(finding)
 
 
 @router.post("/api/cases/{case_id}/findings/{finding_id}/status")
 def hunting_finding_status(case_id: str, finding_id: str, payload: FindingStatusRequest, db: Session = Depends(get_db)) -> dict:
-    return finding_to_dict(update_finding_status(db, _finding_or_404(db, case_id, finding_id), status=payload.status, analyst=payload.analyst, note=payload.note))
+    try:
+        return finding_to_dict(update_finding_status(db, _finding_or_404(db, case_id, finding_id), status=payload.status, analyst=payload.analyst, note=payload.note))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/api/cases/{case_id}/findings/{finding_id}/suppress")
 def hunting_suppress_finding(case_id: str, finding_id: str, payload: FindingSuppressRequest | None = Body(default=None), db: Session = Depends(get_db)) -> dict:
     request = payload or FindingSuppressRequest()
-    return finding_to_dict(suppress_finding(db, _finding_or_404(db, case_id, finding_id), analyst=request.analyst, reason=request.reason))
+    try:
+        return finding_to_dict(suppress_finding(db, _finding_or_404(db, case_id, finding_id), analyst=request.analyst, reason=request.reason))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/api/cases/{case_id}/findings/bulk-status")
 def hunting_bulk_status(case_id: str, payload: FindingBulkStatusRequest, db: Session = Depends(get_db)) -> dict:
     _case_or_404(db, case_id)
     updated = []
-    for finding_id in payload.finding_ids:
-        updated.append(finding_to_dict(update_finding_status(db, _finding_or_404(db, case_id, finding_id), status=payload.status, analyst=payload.analyst, note=payload.note, reason=payload.reason)))
+    try:
+        for finding_id in payload.finding_ids:
+            updated.append(finding_to_dict(update_finding_status(db, _finding_or_404(db, case_id, finding_id), status=payload.status, analyst=payload.analyst, note=payload.note, reason=payload.reason)))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"updated": len(updated), "items": updated}
 
 
 @router.post("/api/cases/{case_id}/findings/{finding_id}/unsuppress")
 def hunting_unsuppress_finding(case_id: str, finding_id: str, payload: FindingUnsuppressRequest, db: Session = Depends(get_db)) -> dict:
-    return finding_to_dict(unsuppress_finding(db, _finding_or_404(db, case_id, finding_id), analyst=payload.analyst, reason=payload.reason, target_status=payload.target_status))
+    try:
+        return finding_to_dict(unsuppress_finding(db, _finding_or_404(db, case_id, finding_id), analyst=payload.analyst, reason=payload.reason, target_status=payload.target_status))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/api/cases/{case_id}/findings/{finding_id}/assign")

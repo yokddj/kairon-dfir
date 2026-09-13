@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api import routes_findings
+from app.api import routes_findings, routes_hunting
 from app.core.database import Base, get_db
 from app.main import app, settings
 from app.models.activity import AppActivityEvent
@@ -17,7 +17,7 @@ from app.models.evidence import Evidence
 from app.models.evidence import EvidenceStorageMode, EvidenceType, IngestStatus
 from app.models.finding import Finding, FindingSeverity, FindingStatus
 from app.schemas.finding import FindingCreate, FindingUpdate
-from app.services import correlation_engine
+from app.services import correlation_engine, hunting
 
 
 CASE_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
@@ -39,6 +39,21 @@ def _client(db):
     test_app.include_router(routes_findings.router)
     test_app.dependency_overrides[get_db] = lambda: db
     return TestClient(test_app)
+
+
+def _client_with_hunting(db, monkeypatch):
+    """PATCH/GET /api/cases/{case_id}/findings/{finding_id} are registered
+    in both routes_hunting.router and routes_findings.router; app.main
+    includes routes_hunting first, so its handlers are the ones that
+    actually run in production -- routes_findings' own versions of those
+    same paths never execute. Use the real, fully-assembled app (route
+    order and all) rather than _client's findings-router-only app for any
+    test that needs to observe what a real request actually hits.
+    monkeypatch.setitem scopes the override to this test -- app is a
+    shared, module-level singleton, so a plain assignment would leak the
+    override into whichever test runs next."""
+    monkeypatch.setitem(app.dependency_overrides, get_db, lambda: db)
+    return TestClient(app)
 
 
 def _seed_case_graph(db):
@@ -260,23 +275,37 @@ def test_list_findings_filters_by_severity_status_tag_text_and_links():
     assert [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?linked_host_id={HOST_ID}").json()] == ["Critical confirmed note"]
 
 
-def test_update_and_archive_finding_include_archived():
+def test_update_and_archive_finding_include_archived(monkeypatch):
+    """PATCH goes through the real app (see _client_with_hunting) because
+    routes_hunting.router's handler for this exact path -- registered
+    before routes_findings.router's -- is the one that actually runs in
+    production, and it validates the status transition (routes_findings'
+    own PATCH handler for this path never executes at all). "draft" is the
+    status CreateFindingDialog actually sends for a manually-created
+    finding (the model's own column default is "new", not "draft" --
+    passing it explicitly here matches what real usage exercises)."""
     db = _db_session()
     _seed_case_graph(db)
-    client = _client(db)
-    created = client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Draft note", "source_snapshot_json": {"summary": "preserved"}}).json()
+    client = _client_with_hunting(db, monkeypatch)
+    created = client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Draft note", "status": "draft", "source_snapshot_json": {"summary": "preserved"}}).json()
 
     updated = client.patch(f"/api/cases/{CASE_ID}/findings/{created['id']}", json={"title": "Confirmed finding", "severity": "critical", "status": "confirmed"})
     assert updated.status_code == 200
     assert updated.json()["title"] == "Confirmed finding"
+    assert updated.json()["status"] == "confirmed"
 
+    # DELETE isn't duplicated across the two routers, so it's unambiguous
+    # which handler runs; verify the archive directly against the DB rather
+    # than GET (also duplicated, and routes_hunting's version returns a
+    # paginated {"items": [...]} envelope, not routes_findings' bare list --
+    # a real, separate shape difference this fix doesn't take on).
     deleted = client.delete(f"/api/cases/{CASE_ID}/findings/{created['id']}")
     assert deleted.status_code == 204
-    assert client.get(f"/api/cases/{CASE_ID}/findings").json() == []
-    archived = client.get(f"/api/cases/{CASE_ID}/findings?include_archived=true").json()
-    assert archived[0]["status"] == "archived"
-    assert archived[0]["archived_at"] is not None
-    assert archived[0]["source_snapshot_json"] == {"summary": "preserved"}
+    db.expire_all()
+    archived = db.get(Finding, created["id"])
+    assert archived.status == FindingStatus.archived
+    assert archived.archived_at is not None
+    assert archived.source_snapshot_json == {"summary": "preserved"}
 
 
 def test_linked_evidence_and_host_must_belong_to_case():
@@ -300,12 +329,14 @@ def test_invalid_severity_and_status_fail():
     assert client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Bad", "status": "todo"}).status_code == 422
 
 
-def test_finding_events_are_recorded():
+def test_finding_events_are_recorded(monkeypatch):
+    # PATCH goes through the real app (see _client_with_hunting) -- see
+    # test_update_and_archive_finding_include_archived for why.
     db = _db_session()
     _seed_case_graph(db)
-    client = _client(db)
+    client = _client_with_hunting(db, monkeypatch)
 
-    created = client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Linked", "linked_evidence_id": EVIDENCE_ID}).json()
+    created = client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Linked", "status": "draft", "linked_evidence_id": EVIDENCE_ID}).json()
     client.patch(f"/api/cases/{CASE_ID}/findings/{created['id']}", json={"status": "review"})
     client.delete(f"/api/cases/{CASE_ID}/findings/{created['id']}")
 
@@ -585,5 +616,68 @@ def test_case_finding_routes_list_detail_and_patch() -> None:
     assert listed[0].id == "finding-1"
     detail = routes_findings.get_finding("case-1", "finding-1", db=db)
     assert detail.id == "finding-1"
-    updated = routes_findings.update_case_finding("case-1", "finding-1", FindingUpdate(status=FindingStatus.dismissed), db=db)
-    assert updated.status == FindingStatus.dismissed
+    # routes_findings has no PATCH handler for this path (see the comment
+    # where update_case_finding used to be) -- routes_hunting.py's is the
+    # one that actually runs in production.
+    updated = routes_hunting.hunting_patch_finding("case-1", "finding-1", payload={"status": "triaged"}, db=db)
+    assert updated["status"] == "triaged"
+
+
+def test_manual_workflow_statuses_transition_freely_among_each_other():
+    """draft/review (CreateFindingDialog / FindingsWorkspace's manual form)
+    used to be entirely outside ALLOWED_TRANSITIONS -- any transition
+    to/from them fell through to validate_transition's final "raise
+    ValueError", uncaught, all the way up through hunting_patch_finding to
+    an unhandled 500. These are the transitions that form actually offers."""
+    for current, target in [
+        ("draft", "review"),
+        ("review", "draft"),
+        ("draft", "confirmed"),
+        ("review", "confirmed"),
+        ("draft", "false_positive"),
+        ("review", "false_positive"),
+        ("draft", "archived"),
+        ("review", "archived"),
+    ]:
+        hunting.validate_transition(current, target)  # must not raise
+
+
+def test_reopening_from_archived_requires_a_reason_like_other_terminal_states():
+    with pytest.raises(ValueError, match="Reopen from terminal/suppressed state requires explicit reason"):
+        hunting.validate_transition("archived", "review")
+    hunting.validate_transition("archived", "review", reason="Re-opened after new evidence")  # must not raise
+
+
+def test_patch_finding_returns_400_not_500_for_an_invalid_transition(monkeypatch):
+    """The real, production PATCH handler for this path is
+    routes_hunting.hunting_patch_finding (routes_findings' own version of
+    this path never runs, shadowed by route registration order in
+    app.main) -- it calls validate_transition with no exception handling,
+    so any transition ALLOWED_TRANSITIONS doesn't recognize used to crash
+    with an unhandled 500 instead of a clean 400."""
+    db = _db_session()
+    _seed_case_graph(db)
+    client = _client_with_hunting(db, monkeypatch)
+    created = client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Fresh", "status": "new"}).json()
+
+    response = client.patch(f"/api/cases/{CASE_ID}/findings/{created['id']}", json={"status": "confirmed"})
+
+    assert response.status_code == 400
+    assert "Invalid transition" in response.json()["detail"]
+
+
+def test_flat_patch_finding_endpoint_validates_status_transitions(monkeypatch):
+    """PATCH /api/findings/{finding_id} (no case_id) has no shadowing
+    route in routes_hunting.py, so it always ran, but with zero status
+    validation -- any transition, valid or not, silently succeeded."""
+    db = _db_session()
+    _seed_case_graph(db)
+    client = _client_with_hunting(db, monkeypatch)
+    created = client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Fresh", "status": "new"}).json()
+
+    invalid = client.patch(f"/api/findings/{created['id']}", json={"status": "confirmed"})
+    assert invalid.status_code == 400
+
+    valid = client.patch(f"/api/findings/{created['id']}", json={"status": "triaged"})
+    assert valid.status_code == 200
+    assert valid.json()["status"] == "triaged"
