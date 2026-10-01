@@ -1545,6 +1545,23 @@ def ensure_case_index(case_id: str) -> str:
                             }
                         },
                         "macos": {"type": "object", "enabled": True},
+                        "netscaler": {
+                            "properties": {
+                                "artifact_family": {"type": "keyword"},
+                                "artifact_type": {"type": "keyword"},
+                                "source_file": {"type": "keyword"},
+                                "line_number": {"type": "long"},
+                                "command_verb": {"type": "keyword"},
+                                "object_type": {"type": "keyword"},
+                                "object_subtype": {"type": "keyword"},
+                                "object_name": {"type": "keyword"},
+                                "is_backup_config": {"type": "boolean"},
+                                "ns_version": {"type": "keyword"},
+                                "ns_build": {"type": "keyword"},
+                                "hostname": {"type": "keyword"},
+                                "message": {"type": "text"},
+                            }
+                        },
                         "raw": {"type": "object", "enabled": False},
                         "data_quality": {"type": "keyword"},
                     }

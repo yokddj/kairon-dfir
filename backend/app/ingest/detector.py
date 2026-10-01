@@ -21,6 +21,7 @@ from app.ingest.usb.helpers import looks_like_usb_artifact
 from app.ingest.windows_ui.helpers import looks_like_windows_ui_artifact
 from app.ingest.wmi.helpers import looks_like_wmi_artifact
 from app.ingest.linux.helpers import looks_like_linux_artifact
+from app.ingest.netscaler.helpers import looks_like_netscaler_artifact
 from app.disk_images.service import detect_disk_image_format
 from app.ingest.evidence_classifier import EvidenceCategory, get_evidence_classifier
 from app.models.evidence import EvidenceType
@@ -913,6 +914,17 @@ def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
             "parser": parser,
             "linux_artifact_type": artifact_type,
             "reason": "Detected Linux artifact",
+        }
+    netscaler_result = looks_like_netscaler_artifact(path)
+    if netscaler_result:
+        family, artifact_type, parser = netscaler_result
+        return {
+            "artifact_type": family,
+            "artifact_family": family,
+            "profile": "netscaler_activity",
+            "parser": parser,
+            "netscaler_artifact_type": artifact_type,
+            "reason": "Detected NetScaler artifact",
         }
     # Generic CSV header fallbacks (Linux-unrelated)
     for token, (artifact_type, profile, parser) in VELOCI_ARTIFACT_MAP.items():

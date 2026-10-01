@@ -26,6 +26,7 @@ from app.disk_images.lvm.img_info import LogicalVolumeImgInfo
 from app.disk_images.registry import ewf_series_members, get_image_format_registry
 from app.ingest.linux.helpers import looks_like_linux_artifact
 from app.ingest.linux.os_detection import detect_linux_release
+from app.ingest.netscaler.helpers import looks_like_netscaler_artifact
 from app.models.disk_image import DiskImage, DiskVolume, OSInstallation
 from app.models.evidence import Evidence, EvidencePlatform
 from app.services.parser_registry import get_parser_registry
@@ -452,7 +453,10 @@ def _detect_installations_under(fs_info: pytsk3.FS_Info, root_prefix: str) -> li
                 "detection_reasons": release.reasons + [marker for marker in linux_markers if _exists(fs_info, marker)],
             }
         )
-    installations.extend(_detect_bsd_installations_under(fs_info, root_prefix))
+    netscaler_installations = _detect_netscaler_installation_under(fs_info, root_prefix)
+    installations.extend(netscaler_installations)
+    if not netscaler_installations:
+        installations.extend(_detect_bsd_installations_under(fs_info, root_prefix))
     return installations
 
 
@@ -503,6 +507,42 @@ def _detect_bsd_installations_under(fs_info: pytsk3.FS_Info, root_prefix: str) -
             "root_path": root_prefix or "/",
             "confidence": "high" if motd_match else "medium",
             "detection_reasons": present,
+        }
+    ]
+
+
+# Citrix NetScaler/ADC's own root filesystem has no /etc/master.passwd,
+# /etc/login.conf or /etc/rc.conf -- it is not a general-purpose BSD
+# userland, just a FreeBSD-based appliance whose entire configuration
+# surface is /nsconfig/ns.conf (see app.ingest.netscaler.helpers), so it
+# needs its own detection rather than falling through _detect_bsd_installations_under's
+# generic markers (which correctly find nothing here).
+_NETSCALER_HEADER_VERSION_RE = re.compile(r"^#NS(?P<version>\S+)\s+Build\s+(?P<build>\S+)", re.IGNORECASE)
+_NETSCALER_HOSTNAME_RE = re.compile(r"^\s*set\s+ns\s+hostName\s+(\S+)", re.IGNORECASE | re.MULTILINE)
+
+
+def _detect_netscaler_installation_under(fs_info: pytsk3.FS_Info, root_prefix: str) -> list[dict[str, Any]]:
+    ns_conf_path = f"{root_prefix}/nsconfig/ns.conf"
+    if not _exists(fs_info, ns_conf_path):
+        return []
+    content = _read_small_file(fs_info, ns_conf_path, limit=1024 * 1024)
+    version = None
+    build = None
+    for line in content.splitlines()[:2]:
+        header_match = _NETSCALER_HEADER_VERSION_RE.match(line.strip())
+        if header_match:
+            version, build = header_match.group("version"), header_match.group("build")
+            break
+    hostname_match = _NETSCALER_HOSTNAME_RE.search(content)
+    return [
+        {
+            "platform": EvidencePlatform.bsd.value,
+            "hostname": hostname_match.group(1) if hostname_match else None,
+            "version": f"{version} Build {build}" if version else None,
+            "distro": "Citrix NetScaler/ADC",
+            "root_path": root_prefix or "/",
+            "confidence": "high",
+            "detection_reasons": [ns_conf_path],
         }
     ]
 
@@ -878,6 +918,8 @@ def _should_materialize(path: str) -> bool:
     if Path(path).name in _NTFS_METADATA_FILENAMES:
         return True
     if looks_like_linux_artifact(path):
+        return True
+    if looks_like_netscaler_artifact(path):
         return True
     if any(_matches_source_pattern(path, pattern) for pattern in _registry_source_patterns()):
         return True
