@@ -52,6 +52,7 @@ from app.ingest.email import (
     parse_email_artifact_file,
 )
 from app.ingest.linux.dispatch import LinuxParserDispatchError, LinuxParserExecutionError, parse_linux_artifact_file
+from app.ingest.netscaler.dispatch import NetscalerParserDispatchError, NetscalerParserExecutionError, parse_netscaler_artifact_file
 from app.ingest.ntfs import (
     looks_like_ntfs_artifact,
     normalize_ntfs_row,
@@ -140,6 +141,7 @@ from app.ingest.artifact_normalizers import (
     normalize_linux_row,
     normalize_lnk_row,
     normalize_mft_row,
+    normalize_netscaler_row,
     normalize_prefetch_row,
     normalize_process_row,
     normalize_recycle_bin_row,
@@ -720,6 +722,8 @@ def base_document(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
     artifact_family = str(artifact_meta.get("artifact_family") or "")
     if artifact_family.startswith("linux_"):
         os_type = "linux"
+    elif artifact_family.startswith("netscaler_"):
+        os_type = "bsd"
     else:
         os_type = artifact_meta.get("os_type", "windows" if artifact_meta.get("parser") in {"velociraptor", "kape", "zimmerman", "hayabusa", "generic_csv"} else "unknown")
     artifact_type = artifact_meta.get("artifact_type") or "unknown"
@@ -1934,6 +1938,9 @@ def normalize_row(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
     elif artifact_family.startswith("linux_"):
         detected_host = document["host"]["hostname"]
         document = normalize_linux_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
+    elif artifact_family.startswith("netscaler_"):
+        detected_host = document["host"]["hostname"]
+        document = normalize_netscaler_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
     elif artifact_type not in {"network", "wlan", "dns"} and (artifact_type in {"defender", "detection"} or looks_like_defender_artifact(artifact_path, list(row.keys()))):
         document = normalize_defender_row(document, row, artifact_meta)
     elif looks_like_autoruns_artifact(artifact_path, list(row.keys())):
@@ -3954,6 +3961,44 @@ def normalize_file(case_id: str, evidence_id: str, artifact_id: str, path: Path,
             )
         except (LinuxParserDispatchError, LinuxParserExecutionError) as exc:
             artifact_meta["raw_parser_status"] = "failed_dispatch" if isinstance(exc, LinuxParserDispatchError) else "failed"
+            artifact_meta["raw_parser_errors"] = [str(exc)]
+            artifact_meta["ingest_audit"] = {
+                "artifact": str(artifact_meta.get("name") or path.name),
+                "parser": parser,
+                "records_read": 0,
+                "records_parsed": 0,
+                "events_indexed": 0,
+                "records_indexed": 0,
+                "parser_status": artifact_meta["raw_parser_status"],
+                "parse_warnings": [],
+                "parser_errors": [str(exc)],
+                "bulk_index_errors": 0,
+            }
+            raise
+        documents = [normalize_row(case_id, evidence_id, artifact_id, row, artifact_meta) for row in rows]
+        parser_status = "parsed" if documents else "parsed_empty"
+        artifact_meta["raw_parser_status"] = parser_status
+        artifact_meta["raw_parser_errors"] = []
+        artifact_meta["ingest_audit"] = {
+            "artifact": str(artifact_meta.get("name") or path.name),
+            "parser": parser,
+            "records_read": len(rows),
+            "records_parsed": len(documents),
+            "events_indexed": len(documents),
+            "records_indexed": len(documents),
+            "parser_status": parser_status,
+            "parse_warnings": [],
+            "parser_errors": [],
+            "bulk_index_errors": 0,
+        }
+        return documents
+    if artifact_family.startswith("netscaler_"):
+        parser = str(artifact_meta.get("parser") or "").lower()
+        source_path_value = str(artifact_meta.get("source_path") or path)
+        try:
+            rows = parse_netscaler_artifact_file(path, parser=parser, source_path=source_path_value)
+        except (NetscalerParserDispatchError, NetscalerParserExecutionError) as exc:
+            artifact_meta["raw_parser_status"] = "failed_dispatch" if isinstance(exc, NetscalerParserDispatchError) else "failed"
             artifact_meta["raw_parser_errors"] = [str(exc)]
             artifact_meta["ingest_audit"] = {
                 "artifact": str(artifact_meta.get("name") or path.name),

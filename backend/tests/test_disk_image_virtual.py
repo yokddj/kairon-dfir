@@ -423,6 +423,79 @@ def test_vmdk_materialize_detects_freebsd_installation(sqlite_session, tmp_path:
     assert installation.confidence == "high"
 
 
+@pytest.mark.skipif(subprocess.run(["bash", "-lc", "command -v qemu-img >/dev/null 2>&1"], check=False).returncode != 0, reason="needs qemu-img")
+def test_vmdk_materialize_detects_netscaler_installation_and_parses_config(sqlite_session, tmp_path: Path) -> None:
+    import hashlib
+
+    from app.core.database import utc_now_naive
+    from app.disk_images.service import materialize_disk_image_sources
+    from app.ingest.kape import list_kape_artifacts
+    from app.models.case import Case
+    from app.models.evidence import Evidence, EvidenceIntegrityStatus, EvidenceStorageMode, EvidenceType, IngestStatus
+
+    ns_conf = (
+        '#NS14.1 Build 73.37\n'
+        '# Last modified by `save config`, Mon Jan 01 00:00:00 2026\n'
+        'set ns hostName HOST-REDACTED\n'
+        'add system user svc-account-example 0000000000000000 -encrypted -timeout 900\n'
+    )
+    fs_image = tmp_path / "netscaler.img"
+    _mkfat_image(fs_image, {
+        "nsconfig/ns.conf": ns_conf,
+        "nsconfig/ns.conf.bak": ns_conf,
+        "boot.config": "",
+    })
+    vmdk = tmp_path / "netscaler.vmdk"
+    subprocess.run(["qemu-img", "convert", "-O", "vmdk", str(fs_image), str(vmdk)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    evidence = Evidence(
+        case_id="case-1",
+        original_filename=vmdk.name,
+        stored_path=str(vmdk),
+        original_path=str(vmdk.parent),
+        storage_mode=EvidenceStorageMode.uploaded,
+        is_external=False,
+        copy_to_storage=True,
+        evidence_type=EvidenceType.disk_image,
+        sha256=hashlib.sha256(vmdk.read_bytes()).hexdigest(),
+        size_bytes=vmdk.stat().st_size,
+        ingest_status=IngestStatus.pending,
+        integrity_status=EvidenceIntegrityStatus.unknown,
+        path_validation={},
+        ingest_source={"mode": "uploaded", "disk_image": True},
+        metadata_json={},
+        error_log={},
+        uploaded_at=utc_now_naive(),
+        first_seen_at=utc_now_naive(),
+    )
+    case = Case(id="case-1", name="NetScaler VMDK Test")
+    sqlite_session.add(case)
+    sqlite_session.add(evidence)
+    sqlite_session.commit()
+
+    result = materialize_disk_image_sources(sqlite_session, evidence, extract_dir=tmp_path / "extract-netscaler")
+
+    assert len(result.installations) == 1
+    installation = result.installations[0]
+    assert installation.platform == "bsd"
+    assert installation.distro == "Citrix NetScaler/ADC"
+    assert installation.version == "14.1 Build 73.37"
+    assert installation.hostname == "HOST-REDACTED"
+
+    # ns.conf (and its backup) must actually have been copied out of the
+    # volume -- before this support existed, _should_materialize had no
+    # NetScaler pattern at all, so these files were silently dropped and
+    # never reached list_kape_artifacts/classify_artifact below.
+    assert any(path.endswith("nsconfig/ns.conf") for path in result.extracted_files)
+    assert any(path.endswith("nsconfig/ns.conf.bak") for path in result.extracted_files)
+
+    artifacts = list_kape_artifacts(result.extract_dir)
+    current = next(item for item in artifacts if item["source_path"].endswith("nsconfig/ns.conf"))
+    assert current["artifact_family"] == "netscaler_config"
+    assert current["parser"] == "netscaler_config_raw"
+    backup = next(item for item in artifacts if item["source_path"].endswith("nsconfig/ns.conf.bak"))
+    assert backup["artifact_family"] == "netscaler_config"
+
+
 def test_filesystem_type_resolves_pytsk3_int_constants_to_names() -> None:
     # Regression test: pytsk3.TSK_FS_TYPE_* are plain ints in this build, not
     # a str()-able Enum, so the old `str(ftype).split(".")[-1]` logic always

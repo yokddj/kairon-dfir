@@ -2,6 +2,7 @@ from app.parsers.base import ArtifactCandidate, ParsedRecord, ParserPlugin, Pars
 
 # Import parser plugins so @register_parser decorators fire
 import app.parsers.linux.triage  # noqa: F401
+import app.parsers.netscaler.triage  # noqa: F401
 import app.parsers.windows.velociraptor  # noqa: F401
 import app.parsers.windows.kape  # noqa: F401
 import app.parsers.windows.evtx  # noqa: F401

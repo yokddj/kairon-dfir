@@ -3894,6 +3894,50 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     return doc
 
 
+def normalize_netscaler_row(doc: dict, row: dict, *, source_path: str = "", artifact_type: str = "", detected_host: str | None = None) -> dict:
+    """Normalize a NetScaler ns.conf command row into the base document."""
+    doc = dict(doc or {})
+    netscaler_data = dict(doc.get("netscaler") or {})
+
+    netscaler_data["artifact_family"] = row.get("artifact_family", artifact_type or "")
+    netscaler_data["artifact_type"] = row.get("artifact_type", "")
+    netscaler_data["source_file"] = row.get("source_file", source_path)
+    netscaler_data["line_number"] = row.get("line_number", None)
+    netscaler_data["command_verb"] = row.get("command_verb", "")
+    netscaler_data["object_type"] = row.get("object_type", "")
+    netscaler_data["object_subtype"] = row.get("object_subtype", "")
+    netscaler_data["object_name"] = row.get("object_name", "")
+    netscaler_data["is_backup_config"] = bool(row.get("is_backup_config"))
+    netscaler_data["ns_version"] = row.get("ns_version", "")
+    netscaler_data["ns_build"] = row.get("ns_build", "")
+    netscaler_data["message"] = row.get("message", "")
+    # "set ns hostName <name>" rows (see app.ingest.netscaler.config) carry
+    # their own row["hostname"] -- the real host identity, not a filename/
+    # path guess -- and take priority over whatever detected_host (the
+    # document's existing host.hostname going in) already had.
+    effective_hostname = row.get("hostname") or detected_host or netscaler_data.get("hostname") or ""
+    netscaler_data["hostname"] = effective_hostname
+
+    if effective_hostname:
+        doc["host"]["hostname"] = effective_hostname
+        doc["host"]["name"] = effective_hostname
+
+    if row.get("timestamp"):
+        doc["@timestamp"] = row["timestamp"]
+
+    doc["host"]["os"] = "BSD"
+    doc["netscaler"] = netscaler_data
+    family = netscaler_data.get("artifact_family", "")
+    doc["artifact"]["type"] = family
+    doc["artifact"]["family"] = family
+    doc["event"]["category"] = family
+    doc["event"]["type"] = netscaler_data.get("artifact_type", "netscaler_record")
+    doc["event"]["action"] = netscaler_data.get("command_verb", "") or netscaler_data.get("artifact_type", "")
+    doc["event"]["message"] = netscaler_data.get("message", "")
+    doc["title"] = netscaler_data.get("message") or "NetScaler config command"
+    return doc
+
+
 def normalize_generic_row(document: dict, row: dict, artifact_meta: dict) -> dict:
     document["event"].update({"category": "unknown", "type": "generic_record", "message": first_value(row, ["Message", "Description", "Path", "Name"]) or artifact_meta["name"]})
     return document
