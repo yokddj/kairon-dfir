@@ -16,6 +16,16 @@ def test_auto_platform_resolves_to_detected_windows() -> None:
     assert effective == "windows"
 
 
+def test_auto_platform_resolves_to_detected_bsd() -> None:
+    detected = detect_evidence_platform(paths=["etc/master.passwd", "etc/login.conf", "etc/rc.conf"])
+
+    provided, detected, effective = resolve_evidence_platform("auto", detected)
+
+    assert provided == "auto"
+    assert detected == "bsd"
+    assert effective == "bsd"
+
+
 def test_effective_platform_never_auto_for_unknown_detection() -> None:
     provided, detected, effective = resolve_evidence_platform(None, "unknown")
 

@@ -192,7 +192,12 @@ def _parse_vmdk_descriptor(descriptor_path: Path) -> dict[str, Any]:
     lines = content.splitlines()
     extents = []
     errors = []
+    create_type = None
     for line in lines:
+        if line.strip().lower().startswith("createtype"):
+            _, _, value = line.partition("=")
+            create_type = value.strip().strip('"').strip("'") or create_type
+            continue
         parts = line.strip().split()
         if not parts or parts[0].upper() not in {"RW", "RDONLY", "NOACCESS"}:
             continue
@@ -213,7 +218,24 @@ def _parse_vmdk_descriptor(descriptor_path: Path) -> dict[str, Any]:
             errors.append(f"path_traversal_rejected:{raw_path}")
             continue
         extents.append(raw_path)
-    return {"valid": len(errors) == 0, "extents": extents, "errors": errors}
+    return {"valid": len(errors) == 0, "extents": extents, "errors": errors, "create_type": create_type}
+
+
+# monolithicSparse and streamOptimized VMDKs embed their sole extent's grain
+# data in the descriptor file itself (see _parse_vmdk_descriptor); the extent
+# line's quoted filename is just a label carried over from the export tool
+# and is routinely something generic like "generated-stream.vmdk" that never
+# matches the file's real name on disk -- real VMware/ESXi exports (vmkfstools,
+# ovftool) do this routinely, unlike qemu-img's own default output, which
+# happens to name the extent after the real file. qemu-img/VMware never open
+# a separate file for these types, so that extent must not be checked against
+# the authorized/missing-file rules meant for genuinely separate extent files
+# (twoGbMaxExtentSparse, monolithicFlat, vmfsSparse, ...).
+_SELF_CONTAINED_VMDK_CREATE_TYPES = {"monolithicsparse", "streamoptimized"}
+
+
+def _vmdk_extent_is_self_contained(create_type: str | None, extent_count: int) -> bool:
+    return extent_count == 1 and (create_type or "").strip().lower() in _SELF_CONTAINED_VMDK_CREATE_TYPES
 
 
 def _validate_vmdk_extents(
