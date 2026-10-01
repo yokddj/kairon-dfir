@@ -190,6 +190,63 @@ def test_resumable_upload_persists_session_before_bytes_and_resumes_from_offset(
     assert Path(session.staged_path).read_bytes() == b"abc"
 
 
+def test_create_resumable_upload_session_reuses_in_flight_session_for_same_file(tmp_path, monkeypatch):
+    # A second POST .../resumable for the same filename+size while the first is
+    # still uploading must resume the existing session, not stage a duplicate
+    # copy of a multi-GB file from scratch (the wizard reopening after a reload
+    # and re-selecting the same file, without resolving it as a resume target).
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+
+    first = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=10)
+    append_resumable_upload_chunk(db, first, offset=0, body=BytesIO(b"abc"))
+    db.refresh(first)
+
+    second = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=10)
+
+    assert second.id == first.id
+    assert second.bytes_received == 3
+
+
+def test_create_resumable_upload_session_reuses_staged_session_for_same_file(tmp_path, monkeypatch):
+    # Once a session reaches "staged" (fully uploaded, preflight-reviewable), a
+    # new upload attempt for the same file must resume it too -- "staged" is not
+    # a terminal status like "promoted"/"cancelled", and the whole point of
+    # staging is to never retransmit those bytes.
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+
+    payload = b"abcdefghij"
+    first = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=len(payload))
+    append_resumable_upload_chunk(db, first, offset=0, body=BytesIO(payload))
+    db.refresh(first)
+    first, _report = finalize_resumable_upload_session(db, first)
+    assert first.status == EvidenceUploadSessionStatus.staged.value
+
+    second = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=len(payload))
+
+    assert second.id == first.id
+    assert second.status == EvidenceUploadSessionStatus.staged.value
+
+
+def test_create_resumable_upload_session_does_not_reuse_cancelled_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+
+    first = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=10)
+    cancel_upload_session(db, first)
+
+    second = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=10)
+
+    assert second.id != first.id
+
+
 def test_resumable_upload_syncs_actionable_operation_state(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)

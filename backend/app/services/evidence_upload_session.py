@@ -60,7 +60,7 @@ from app.core.storage import ensure_within_directory, sanitize_relative_path
 from app.core.timing import timed_phase
 from app.models.case import Case
 from app.models.evidence import Evidence
-from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
+from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus, REUSABLE_EVIDENCE_UPLOAD_SESSION_STATUSES
 from app.schemas.evidence_preflight import PreflightReport
 from app.services.evidence_operations import get_operation_for_session, sync_upload_operation, transition_operation
 from app.services.evidence_preflight import run_preflight
@@ -204,6 +204,25 @@ def create_resumable_upload_session(
         raise UploadSessionError("case_not_found", "Case not found")
     if expected_size_bytes <= 0:
         raise UploadSessionError("invalid_size", "Expected upload size must be greater than zero.")
+    # A new resumable session for a filename+size that already has one in flight (or
+    # already fully staged) is almost always the analyst reselecting the same file --
+    # e.g. the wizard reopened after a reload and didn't surface the existing session
+    # as a resume target -- rather than a deliberate second upload. Reuse it instead of
+    # staging a second multi-GB copy from scratch; the byte-offset append endpoint
+    # already requires the resumed file to match this filename+size anyway.
+    existing = (
+        db.query(EvidenceUploadSession)
+        .filter(
+            EvidenceUploadSession.case_id == case_id,
+            EvidenceUploadSession.original_filename == Path(filename or "upload.bin").name,
+            EvidenceUploadSession.expected_size_bytes == expected_size_bytes,
+            EvidenceUploadSession.status.in_(REUSABLE_EVIDENCE_UPLOAD_SESSION_STATUSES),
+        )
+        .order_by(EvidenceUploadSession.created_at.desc())
+        .first()
+    )
+    if existing is not None and Path(existing.staged_path).exists():
+        return existing
     settings = get_settings()
     session_id = str(uuid4())
     root = _session_root(session_id)
