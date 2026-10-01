@@ -124,6 +124,7 @@ export function formatPlatform(value: string | null | undefined) {
   if (!normalized) return "-";
   if (normalized === "auto") return "Auto-detect";
   if (normalized === "macos") return "macOS";
+  if (normalized === "bsd") return "BSD";
   return normalized.replaceAll("_", " ").replace(/^./, (char) => char.toUpperCase());
 }
 

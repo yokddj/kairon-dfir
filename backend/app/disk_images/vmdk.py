@@ -13,6 +13,7 @@ from app.disk_images.qemu import (
     _tool_functional,
     _validate_resource_limits,
     _validate_vmdk_extents,
+    _vmdk_extent_is_self_contained,
     qemu_img_check,
     qemu_img_convert_to_raw,
     qemu_img_info,
@@ -70,8 +71,9 @@ class VmdkImageAdapter:
             return {"format": self.key, "supported": False, "error": "missing_dependency", "reason": readiness["reason"]}
         authorized = _build_authorized_set(path.parent, companions)
         descriptor_parse = _parse_vmdk_descriptor(path)
-        if descriptor_parse.get("extents"):
-            extent_validation = _validate_vmdk_extents(path.parent, descriptor_parse["extents"], authorized_paths=authorized)
+        extents = descriptor_parse.get("extents") or []
+        if extents and not _vmdk_extent_is_self_contained(descriptor_parse.get("create_type"), len(extents)):
+            extent_validation = _validate_vmdk_extents(path.parent, extents, authorized_paths=authorized)
             if not extent_validation["valid"]:
                 if extent_validation.get("external"):
                     return {"format": self.key, "supported": False, "error": "external_extent_rejected", "external_extents": extent_validation["external"]}

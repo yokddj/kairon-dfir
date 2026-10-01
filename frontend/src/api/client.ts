@@ -88,7 +88,7 @@ export type EvidenceIntent = "raw" | "parsed" | "mounted" | "auto";
 export type EvidencePackaging = "single_file" | "archive" | "directory" | "mounted_path";
 export type IngestMode = "full_forensic" | "usable_search";
 export type EvtxProfile = "fast_high_value" | "full" | "custom";
-export type EvidencePlatform = "auto" | "windows" | "linux" | "macos" | "memory" | "mixed" | "unknown";
+export type EvidencePlatform = "auto" | "windows" | "linux" | "macos" | "bsd" | "memory" | "mixed" | "unknown";
 
 export type CaseCapabilityPlatform = "windows" | "linux" | "macos" | "unknown" | string;
 export type CaseCapabilityEvidenceDomain = "filesystem" | "memory" | string;
