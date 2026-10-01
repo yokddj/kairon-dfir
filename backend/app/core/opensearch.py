@@ -1560,6 +1560,10 @@ def ensure_case_index(case_id: str) -> str:
                                 "ns_build": {"type": "keyword"},
                                 "hostname": {"type": "keyword"},
                                 "message": {"type": "text"},
+                                "finding_type": {"type": "keyword"},
+                                "severity": {"type": "keyword"},
+                                "reasons": {"type": "text"},
+                                "sha256": {"type": "keyword"},
                             }
                         },
                         "raw": {"type": "object", "enabled": False},
