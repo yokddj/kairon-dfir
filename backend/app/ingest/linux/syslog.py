@@ -8,11 +8,34 @@ _MONTH_MAP = {
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 
+# The optional "<facility.severity>" tag (e.g. "<auth.err>") appears between
+# the timestamp and hostname on BSD syslogd installs (seen on a NetScaler
+# appliance's own /var/log/messages) whenever the message came through a
+# non-default facility -- its own "newsyslog"/rotation notices are the only
+# lines logged without it, which is why only those previously matched at
+# all; every forwarded auth/kernel-tagged line fell through to the
+# no-match branch (timestamp/host/process all None) instead.
 _SYSLOG_RE = re.compile(
-    r"^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(\S+?)(?:\[(\d+)\])?\s*:\s+(.*)$"
+    r"^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(?:<([\w.]+)>\s+)?(\S+)\s+(\S+?)(?:\[(\d+)\])?\s*:\s+(.*)$"
 )
 
 _SEVERITY_RE = re.compile(r"<(\d)>")
+
+# A device can be configured to forward its own native audit/event log to
+# this host's syslog (seen as a NetScaler "audit syslogAction" relaying
+# its ns.log-style lines through local0): the BSD envelope wraps a second,
+# inner timestamp in NetScaler's own "MM/DD/YYYY:HH:MM:SS GMT" format,
+# followed by the *source* device's hostname and an internal unit id
+# (e.g. "0-PPE-2") standing in for a process name -- a completely
+# different shape _SYSLOG_RE's single "host process[pid]: message" slot
+# can't capture, which is why these lines still had no timestamp/host
+# even after that fix (confirmed: every line that fails this pattern on
+# real affected files already matches _SYSLOG_RE, and vice versa -- the
+# two are mutually exclusive, not competing for the same lines).
+_FORWARDED_AUDIT_RE = re.compile(
+    r"^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+<([\w.]+)>\s+(\S+)\s+"
+    r"(\d{2}/\d{2}/\d{4}:\d{2}:\d{2}:\d{2})\s+GMT\s+(\S+)\s+(\S+)\s*:\s+(.*)$"
+)
 
 
 def _parse_syslog_timestamp(ts_str: str, year: int | None = None) -> str | None:
@@ -33,6 +56,18 @@ def _parse_syslog_timestamp(ts_str: str, year: int | None = None) -> str | None:
         return None
 
 
+def _parse_forwarded_audit_timestamp(ts_str: str) -> str | None:
+    match = re.match(r"^(\d{2})/(\d{2})/(\d{4}):(\d{2}):(\d{2}):(\d{2})$", ts_str.strip())
+    if not match:
+        return None
+    month_str, day_str, year_str, hour_str, minute_str, second_str = match.groups()
+    try:
+        dt = datetime(int(year_str), int(month_str), int(day_str), int(hour_str), int(minute_str), int(second_str), tzinfo=timezone.utc)
+        return dt.isoformat()
+    except (ValueError, OverflowError):
+        return None
+
+
 def parse_syslog(
     content: str,
     *,
@@ -46,16 +81,37 @@ def parse_syslog(
             continue
         raw_excerpt = stripped[:2000]
 
+        forwarded_match = _FORWARDED_AUDIT_RE.match(stripped)
+        if forwarded_match:
+            outer_ts_str, facility, source_ip, inner_ts_str, host, unit_id, message = forwarded_match.groups()
+            timestamp = _parse_forwarded_audit_timestamp(inner_ts_str) or _parse_syslog_timestamp(outer_ts_str)
+            results.append({
+                "artifact_family": "linux_syslog",
+                "artifact_type": "syslog",
+                "source_file": source_path,
+                "line_number": line_number,
+                "timestamp": timestamp,
+                "host": host,
+                "process": unit_id,
+                "pid": None,
+                "severity": facility,
+                "message": f"[forwarded from {source_ip}] {message}"[:2000],
+                "raw_excerpt": raw_excerpt,
+            })
+            continue
+
         syslog_match = _SYSLOG_RE.match(stripped)
         if syslog_match:
-            ts_str, host, process_raw, pid_str, message = syslog_match.groups()
+            ts_str, facility, host, process_raw, pid_str, message = syslog_match.groups()
             timestamp = _parse_syslog_timestamp(ts_str)
             process = process_raw.rstrip(":") if process_raw else None
             pid = int(pid_str) if pid_str else None
-            severity = None
             sev_match = _SEVERITY_RE.match(stripped)
-            if sev_match:
-                severity = sev_match.group(1)
+            # Prefer the numeric PRI tag ("<N>" at line start) when present;
+            # otherwise the "<facility.severity>" tag this regex just
+            # captured (e.g. "auth.err") is itself a real severity signal,
+            # not nothing.
+            severity = sev_match.group(1) if sev_match else facility
             results.append({
                 "artifact_family": "linux_syslog",
                 "artifact_type": "syslog",
