@@ -7,6 +7,7 @@ import fnmatch
 from functools import lru_cache
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import time
@@ -143,6 +144,28 @@ def _hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+@lru_cache(maxsize=1)
+def _tsk_fs_type_names() -> dict[int, str]:
+    # pytsk3.TSK_FS_TYPE_* are plain ints in this build (not an Enum with a
+    # dotted str()), so str(fs_info.info.ftype) is just the bare number
+    # ("64") with nothing to resolve a name from -- built once from whatever
+    # TSK_FS_TYPE_* constants this pytsk3 build actually exposes, so it stays
+    # correct across pytsk3/Sleuthkit versions instead of a hand-maintained
+    # table. Prefers the shortest matching constant name (e.g. "FFS2" over
+    # "FFS2_DETECT") since several *_DETECT/_ARCH aliases share a value.
+    names: dict[int, str] = {}
+    for attr in dir(pytsk3):
+        if not attr.startswith("TSK_FS_TYPE_"):
+            continue
+        value = getattr(pytsk3, attr)
+        if not isinstance(value, int):
+            continue
+        label = attr[len("TSK_FS_TYPE_"):].lower()
+        if value not in names or len(label) < len(names[value]):
+            names[value] = label
+    return names
+
+
 def _filesystem_label(fs_info: pytsk3.FS_Info) -> str | None:
     try:
         return str(getattr(fs_info.info, "ftype", "") or "") or None
@@ -152,7 +175,11 @@ def _filesystem_label(fs_info: pytsk3.FS_Info) -> str | None:
 
 def _filesystem_type(fs_info: pytsk3.FS_Info) -> str | None:
     try:
-        return str(fs_info.info.ftype).split(".")[-1].lower()
+        ftype = fs_info.info.ftype
+        raw = str(ftype).split(".")[-1].lower()
+        if raw.isdigit():
+            return _tsk_fs_type_names().get(int(ftype), raw)
+        return raw
     except Exception:
         return None
 
@@ -425,7 +452,59 @@ def _detect_installations_under(fs_info: pytsk3.FS_Info, root_prefix: str) -> li
                 "detection_reasons": release.reasons + [marker for marker in linux_markers if _exists(fs_info, marker)],
             }
         )
+    installations.extend(_detect_bsd_installations_under(fs_info, root_prefix))
     return installations
+
+
+# master.passwd and login.conf are BSD's own account-database files (Linux
+# uses /etc/shadow and has no login.conf equivalent), so requiring one of
+# them among the matched markers below keeps this from false-positiving on
+# Linux distros that happen to also ship an /etc/rc.conf (Gentoo, Alpine).
+_BSD_STRONG_MARKERS = ("/etc/master.passwd", "/etc/login.conf")
+_BSD_MARKERS = (*_BSD_STRONG_MARKERS, "/etc/rc.conf", "/etc/periodic", "/boot/kernel", "/etc/defaults/rc.conf")
+_BSD_MOTD_VERSION_RE = re.compile(r"\b(FreeBSD|NetBSD|OpenBSD)\s+([0-9][\w.\-]*)", re.IGNORECASE)
+_BSD_RC_CONF_HOSTNAME_RE = re.compile(r'^\s*hostname\s*=\s*"?([^"\s]+)"?', re.MULTILINE)
+
+
+def _detect_bsd_installations_under(fs_info: pytsk3.FS_Info, root_prefix: str) -> list[dict[str, Any]]:
+    markers = [f"{root_prefix}{path}" for path in _BSD_MARKERS]
+    present = [marker for marker in markers if _exists(fs_info, marker)]
+    has_strong_marker = any(_exists(fs_info, f"{root_prefix}{path}") for path in _BSD_STRONG_MARKERS)
+    if not has_strong_marker or len(present) < 3:
+        return []
+    if _exists(fs_info, f"{root_prefix}/netbsd"):
+        distro = "NetBSD"
+    elif _exists(fs_info, f"{root_prefix}/bsd") or _exists(fs_info, f"{root_prefix}/bsd.rd"):
+        distro = "OpenBSD"
+    elif _exists(fs_info, f"{root_prefix}/boot/kernel/kernel") or _exists(fs_info, f"{root_prefix}/bin/freebsd-version"):
+        distro = "FreeBSD"
+    else:
+        distro = None
+    version = None
+    motd = _read_small_file(fs_info, f"{root_prefix}/etc/motd", limit=4096)
+    motd_match = _BSD_MOTD_VERSION_RE.search(motd) if motd else None
+    if motd_match:
+        distro = motd_match.group(1)
+        version = motd_match.group(2)
+    hostname = None
+    if distro == "OpenBSD":
+        myname = _read_small_file(fs_info, f"{root_prefix}/etc/myname", limit=4096)
+        hostname = myname.splitlines()[0].strip() if myname else None
+    if not hostname:
+        rc_conf = _read_small_file(fs_info, f"{root_prefix}/etc/rc.conf", limit=65536)
+        rc_match = _BSD_RC_CONF_HOSTNAME_RE.search(rc_conf) if rc_conf else None
+        hostname = rc_match.group(1) if rc_match else None
+    return [
+        {
+            "platform": EvidencePlatform.bsd.value,
+            "hostname": hostname,
+            "version": version,
+            "distro": distro,
+            "root_path": root_prefix or "/",
+            "confidence": "high" if motd_match else "medium",
+            "detection_reasons": present,
+        }
+    ]
 
 
 # Base + per-container multiplier for a logical volume's synthetic

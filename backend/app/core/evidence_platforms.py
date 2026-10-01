@@ -11,6 +11,7 @@ class EvidencePlatform(str, enum.Enum):
     windows = "windows"
     linux = "linux"
     macos = "macos"
+    bsd = "bsd"
     memory = "memory"
     mixed = "mixed"
     unknown = "unknown"
@@ -67,6 +68,15 @@ _MACOS_MARKERS = (
     "/system/library/",
     "/private/var/",
 )
+# BSD's own account-database files, distinct from Linux's /etc/shadow (no
+# login.conf equivalent there) -- keeps this from matching Linux distros
+# that also happen to ship /etc/rc.conf (Gentoo, Alpine).
+_BSD_MARKERS = (
+    "/etc/master.passwd",
+    "master.passwd",
+    "/etc/login.conf",
+    "login.conf",
+)
 
 PLATFORM_REGISTRY: dict[str, dict[str, Any]] = {
     EvidencePlatform.windows.value: {
@@ -86,6 +96,13 @@ PLATFORM_REGISTRY: dict[str, dict[str, Any]] = {
         "label": "macOS",
         "upload_label": "macOS planned",
         "upload_description": "Visible for roadmap clarity. macOS artifacts are not supported yet.",
+        "disabled": True,
+    },
+    EvidencePlatform.bsd.value: {
+        "id": EvidencePlatform.bsd.value,
+        "label": "BSD",
+        "upload_label": "BSD planned",
+        "upload_description": "Visible for roadmap clarity. FreeBSD/NetBSD/OpenBSD installations are detected inside disk images (UFS/FFS), but dedicated BSD artifact collection is not supported yet.",
         "disabled": True,
     },
     EvidencePlatform.memory.value: {
@@ -127,6 +144,7 @@ def _count_platform_hits(lowered: list[str]) -> dict[str, int]:
         EvidencePlatform.windows.value: 0,
         EvidencePlatform.linux.value: 0,
         EvidencePlatform.macos.value: 0,
+        EvidencePlatform.bsd.value: 0,
     }
     for path in lowered:
         if any(marker in path for marker in _WINDOWS_MARKERS) or path.endswith((".evtx", ".pf", ".lnk")):
@@ -135,6 +153,8 @@ def _count_platform_hits(lowered: list[str]) -> dict[str, int]:
             hits[EvidencePlatform.linux.value] += 1
         if any(marker in path for marker in _MACOS_MARKERS):
             hits[EvidencePlatform.macos.value] += 1
+        if any(marker in path for marker in _BSD_MARKERS):
+            hits[EvidencePlatform.bsd.value] += 1
     return hits
 
 

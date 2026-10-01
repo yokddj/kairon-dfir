@@ -383,15 +383,17 @@ def test_disk_image_volume_discovery(tmp_path):
     assert report.classification.partitions == 1
     assert report.classification.container == "RAW disk image"
     assert report.classification.contained_object and "volume" in report.classification.contained_object
-    # pytsk3 reports this synthetic FAT32 volume's filesystem_type as a bare
-    # numeric code ("4"), not a name -- confirmed directly against
-    # app.disk_images.service._discover_raw_volumes in this environment.
+    # Previously asserted [] here: pytsk3 reported this volume's
+    # filesystem_type as a bare numeric code ("4"), and
     # _collect_display_filesystems (see evidence_preflight.py) deliberately
-    # excludes a raw numeric code from the "Filesystems:" summary rather
-    # than exposing it to an analyst (LVM V1 UX alignment sprint) -- so
-    # nothing ends up in this list for this particular volume, which is the
-    # correct, intentional behavior, not a bug.
-    assert report.classification.filesystems == []
+    # excludes raw numeric codes from the "Filesystems:" summary rather than
+    # exposing a meaningless number to an analyst. app.disk_images.service's
+    # _filesystem_type now resolves pytsk3's TSK_FS_TYPE_* ints to their real
+    # names (diagnosed from a UFS2/FFS2 volume showing up as "64"), so this
+    # FAT volume surfaces as "fat16" -- pytsk3's own name for whatever it
+    # detected here, not a mislabel introduced by this translation layer --
+    # and the numeric-hiding filter is simply dormant for this case now.
+    assert report.classification.filesystems == ["fat16"]
     assert report.resource_check.estimated_extracted_bytes and report.resource_check.estimated_extracted_bytes > 0
     assert len(report.classification.volume_diagnostics) == 1
     assert report.classification.volume_diagnostics[0].ok is True

@@ -77,7 +77,7 @@ from app.models.case_analysis_job import CaseAnalysisJob, CaseAnalysisJobStatus
 from app.models.detection_result import DetectionResult
 from app.models.disk_image import DiskImage
 from app.models.rule_run import RuleRun, RuleRunStatus
-from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidenceType, IngestStatus, detect_evidence_platform, resolve_evidence_platform, resolve_public_evidence_type
+from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidencePlatform, EvidenceType, IngestStatus, detect_evidence_platform, resolve_evidence_platform, resolve_public_evidence_type
 from app.models.rule import Rule
 from app.models.rule_set import RuleSet
 from app.rules_engine.heuristic import build_heuristic_query, load_heuristic_rule
@@ -5241,13 +5241,23 @@ def ingest_evidence(evidence_id: str) -> None:
         }
         metadata["extraction_diagnostics"] = extraction_diagnostics
         provided_platform = str(metadata.get("provided_platform") or evidence.provided_platform or "auto")
+        path_detected_platform = detect_evidence_platform(
+            filename=evidence.original_filename,
+            paths=extracted_files,
+            evidence_type=getattr(evidence.evidence_type, "value", evidence.evidence_type),
+        )
+        # For disk images, the path-marker heuristic above only sees whatever
+        # KAPE-style artifact rules happened to extract -- empty or near-empty
+        # for a platform with no artifact rules defined yet (e.g. BSD), even
+        # though materialize_disk_image_sources already identified the volume's
+        # OS installation(s) directly from the filesystem root. Prefer that
+        # firsthand signal whenever the path heuristic came back empty-handed.
+        installation_platforms = {i.platform for i in (disk_image_materialization.installations if disk_image_materialization else [])}
+        if path_detected_platform == EvidencePlatform.unknown.value and installation_platforms:
+            path_detected_platform = next(iter(installation_platforms)) if len(installation_platforms) == 1 else EvidencePlatform.mixed.value
         provided, detected, effective = resolve_evidence_platform(
             provided_platform,
-            detect_evidence_platform(
-                filename=evidence.original_filename,
-                paths=extracted_files,
-                evidence_type=getattr(evidence.evidence_type, "value", evidence.evidence_type),
-            ),
+            path_detected_platform,
             evidence_type=getattr(evidence.evidence_type, "value", evidence.evidence_type),
         )
         evidence.provided_platform = provided

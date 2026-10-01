@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -17,12 +18,13 @@ from app.disk_images.qemu import (
     _parse_vmdk_descriptor,
     _validate_backing_file,
     _validate_vmdk_extents,
+    _vmdk_extent_is_self_contained,
     qemu_img_check,
     qemu_img_convert_to_raw,
     qemu_img_info,
 )
 from app.disk_images.registry import get_image_format_registry
-from app.disk_images.service import detect_disk_image_format
+from app.disk_images.service import _filesystem_type, _tsk_fs_type_names, detect_disk_image_format
 from app.disk_images.vmdk import VmdkImageAdapter
 from app.disk_images.vhd import VhdImageAdapter
 from app.disk_images.qcow import QcowImageAdapter
@@ -136,6 +138,78 @@ RW 8388608 FLAT "../../outside.vmdk" 0
     result = _parse_vmdk_descriptor(descriptor)
     assert len(result["extents"]) == 0
     assert any("path_traversal" in err for err in result["errors"])
+
+
+def test_vmdk_descriptor_parse_captures_create_type(tmp_path: Path) -> None:
+    # Real ESXi/vCenter streamOptimized exports (vmkfstools, ovftool) label their
+    # sole self-contained extent with a generic placeholder name carried over
+    # from the export tool, not the file's actual name on disk -- unlike
+    # qemu-img's own default output, which happens to name the extent after
+    # the real file.
+    descriptor = tmp_path / "EVIDENCE-REDACTED.vmdk"
+    descriptor.write_text(
+        """# Disk DescriptorFile
+version=1
+CID=c373ef1b
+parentCID=ffffffff
+createType="streamOptimized"
+# Extent description
+RDONLY 62914560 SPARSE "generated-stream.vmdk"
+""",
+        encoding="utf-8",
+    )
+    result = _parse_vmdk_descriptor(descriptor)
+    assert result["valid"] is True
+    assert result["create_type"] == "streamOptimized"
+    assert result["extents"] == ["generated-stream.vmdk"]
+
+
+def test_vmdk_extent_self_contained_for_streamoptimized_single_extent() -> None:
+    assert _vmdk_extent_is_self_contained("streamOptimized", 1) is True
+    assert _vmdk_extent_is_self_contained("monolithicSparse", 1) is True
+
+
+def test_vmdk_extent_not_self_contained_for_split_or_flat_formats() -> None:
+    # A real companion file (twoGbMaxExtentSparse split parts, monolithicFlat's
+    # separate -flat.vmdk) must still be authorized/existence-checked.
+    assert _vmdk_extent_is_self_contained("twoGbMaxExtentSparse", 1) is False
+    assert _vmdk_extent_is_self_contained("monolithicFlat", 1) is False
+    assert _vmdk_extent_is_self_contained(None, 1) is False
+    # Multiple declared extents are never self-contained, even if labeled
+    # streamOptimized -- that combination isn't a real single-file export.
+    assert _vmdk_extent_is_self_contained("streamOptimized", 2) is False
+
+
+def test_vmdk_expose_readonly_accepts_mismatched_self_referential_extent_name(tmp_path: Path) -> None:
+    # Regression test for the real-world failure this was diagnosed from: a
+    # genuine ESXi streamOptimized export whose embedded extent name doesn't
+    # match the uploaded filename must not be rejected as an unauthorized/
+    # missing external extent -- qemu-img always reads straight from `path`
+    # for this format; the extent name is never dereferenced as a file.
+    _require_qemu()
+    fs_image = tmp_path / "linux.img"
+    _mkfat_image(fs_image, {"etc/passwd": "root:x:0:0:root:/root:/bin/bash\n"})
+    vmdk = tmp_path / "EVIDENCE-REDACTED.vmdk"
+    subprocess.run(
+        ["qemu-img", "convert", "-O", "vmdk", "-o", "subformat=streamOptimized", str(fs_image), str(vmdk)],
+        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    # Overwrite the real (qemu-img-correct) extent filename with the kind of
+    # generic placeholder real ESXi exports actually ship, to reproduce the
+    # mismatch without needing a real VMware-produced fixture file.
+    raw = vmdk.read_bytes()
+    header = raw[:65536]
+    rewritten = header.replace(f'"{vmdk.name}"'.encode(), b'"generated-stream.vmdk"')
+    assert rewritten != header, "fixture did not contain the expected self-referencing extent name"
+    vmdk.write_bytes(rewritten + raw[65536:])
+
+    adapter = VmdkImageAdapter()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    result = adapter.expose_readonly(evidence_id="evid-1", path=vmdk, companions=[], workspace=workspace)
+
+    assert result.get("error") not in {"extent_not_in_authorized_set", "missing_extent", "external_extent_rejected"}
+    assert result.get("format") == "vmdk"
 
 
 def test_vmdk_extent_validation_missing(tmp_path: Path) -> None:
@@ -292,6 +366,74 @@ def test_vmdk_materialize_and_index_linux(sqlite_session, tmp_path: Path) -> Non
     assert any(item["artifact_type"] == "linux_auth" for item in artifacts)
 
     assert not (tmp_path / f"disk-image-{evidence.id}").exists()
+
+
+@pytest.mark.skipif(subprocess.run(["bash", "-lc", "command -v qemu-img >/dev/null 2>&1"], check=False).returncode != 0, reason="needs qemu-img")
+def test_vmdk_materialize_detects_freebsd_installation(sqlite_session, tmp_path: Path) -> None:
+    import hashlib
+
+    from app.core.database import utc_now_naive
+    from app.disk_images.service import materialize_disk_image_sources
+    from app.models.case import Case
+    from app.models.evidence import Evidence, EvidenceIntegrityStatus, EvidenceStorageMode, EvidenceType, IngestStatus
+
+    fs_image = tmp_path / "bsd.img"
+    _mkfat_image(fs_image, {
+        "etc/master.passwd": "root:*:0:0::0:0:Charlie &:/root:/bin/csh\n",
+        "etc/login.conf": "default:\\\n\t:passwd_format=sha512:\n",
+        "etc/rc.conf": 'hostname="fw-edge-01.example.net"\nsshd_enable="YES"\n',
+        "etc/motd": "FreeBSD 13.2-RELEASE (GENERIC)\n",
+        "boot/kernel/kernel": "",
+    })
+    vmdk = tmp_path / "bsd.vmdk"
+    subprocess.run(["qemu-img", "convert", "-O", "vmdk", str(fs_image), str(vmdk)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    evidence = Evidence(
+        case_id="case-1",
+        original_filename=vmdk.name,
+        stored_path=str(vmdk),
+        original_path=str(vmdk.parent),
+        storage_mode=EvidenceStorageMode.uploaded,
+        is_external=False,
+        copy_to_storage=True,
+        evidence_type=EvidenceType.disk_image,
+        sha256=hashlib.sha256(vmdk.read_bytes()).hexdigest(),
+        size_bytes=vmdk.stat().st_size,
+        ingest_status=IngestStatus.pending,
+        integrity_status=EvidenceIntegrityStatus.unknown,
+        path_validation={},
+        ingest_source={"mode": "uploaded", "disk_image": True},
+        metadata_json={},
+        error_log={},
+        uploaded_at=utc_now_naive(),
+        first_seen_at=utc_now_naive(),
+    )
+    case = Case(id="case-1", name="BSD VMDK Test")
+    sqlite_session.add(case)
+    sqlite_session.add(evidence)
+    sqlite_session.commit()
+
+    result = materialize_disk_image_sources(sqlite_session, evidence, extract_dir=tmp_path / "extract-bsd")
+
+    assert len(result.installations) == 1
+    installation = result.installations[0]
+    assert installation.platform == "bsd"
+    assert installation.distro == "FreeBSD"
+    assert installation.version == "13.2-RELEASE"
+    assert installation.hostname == "fw-edge-01.example.net"
+    assert installation.confidence == "high"
+
+
+def test_filesystem_type_resolves_pytsk3_int_constants_to_names() -> None:
+    # Regression test: pytsk3.TSK_FS_TYPE_* are plain ints in this build, not
+    # a str()-able Enum, so the old `str(ftype).split(".")[-1]` logic always
+    # returned the bare number (e.g. "64") for every filesystem, not just
+    # UFS2/FFS2 -- diagnosed from a real FreeBSD/NetScaler evidence item
+    # whose filesystem_type showed up as "64" instead of a name.
+    names = _tsk_fs_type_names()
+    assert names.get(1) == "ntfs"
+    assert names.get(64) == "ffs2"
+    fake_fs = SimpleNamespace(info=SimpleNamespace(ftype=64))
+    assert _filesystem_type(fake_fs) == "ffs2"
 
 
 def test_qemu_check_cleanup_sets_status_on_image_with_absent_qemu() -> None:
