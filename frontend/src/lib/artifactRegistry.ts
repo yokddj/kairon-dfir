@@ -66,6 +66,7 @@ const ARTIFACT_REGISTRY: UiArtifactDefinition[] = [
   { id: "linux_packages", label: "Linux Packages", platforms: ["linux"], view: "auto", platformShortcut: true },
   { id: "linux_os_info", label: "Linux OS Info", platforms: ["linux"], view: "auto", platformShortcut: true },
   { id: "linux_timezone", label: "Linux Timezone", platforms: ["linux"], view: "auto", platformShortcut: true },
+  { id: "netscaler_config", label: "NetScaler Config (ns.conf)", platforms: ["bsd"], view: "persistence", platformShortcut: true },
   { id: "process", label: "Processes", platforms: ["memory"], view: "execution" },
   { id: "vads", label: "VADs", aliases: ["vad"], platforms: ["memory"], view: "auto" },
   { id: "dlls", label: "DLLs", aliases: ["dll"], platforms: ["memory"], view: "auto" },

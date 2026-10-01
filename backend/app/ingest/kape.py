@@ -19,6 +19,7 @@ _EXCLUDED_DIR_NAMES = {
 
 def list_kape_artifacts(root: Path) -> list[dict]:
     from app.ingest.linux.helpers import looks_like_linux_artifact
+    from app.ingest.netscaler.helpers import looks_like_netscaler_artifact
     ACCEPTED_EXTENSIONS = {
         ".csv", ".json", ".jsonl", ".txt", ".xml", ".log", ".yaml", ".yml", ".conf", ".service", ".timer",
         # Standard Windows execution/persistence artifacts Kairon already has
@@ -42,9 +43,15 @@ def list_kape_artifacts(root: Path) -> list[dict]:
         is_accepted_extension = ext in ACCEPTED_EXTENSIONS
         is_scheduled_task = looks_like_scheduled_task_xml_path(path)
         is_linux = bool(looks_like_linux_artifact(path))
+        # ns.conf's rotated/versioned backups (ns.conf.bak, ns.conf.0,
+        # ns.conf.NS14.1-73.37, ...) don't end in .conf -- Path.suffix only
+        # ever sees the last segment -- so they'd otherwise be dropped here
+        # even though _should_materialize already copied them out of the
+        # volume specifically because they matched this same helper.
+        is_netscaler = bool(looks_like_netscaler_artifact(path))
         is_extensionless = ext == "" and path.name[0] != "." if path.name else False
         is_webcache_database = looks_like_webcache_database(path)
-        if not is_accepted_extension and not is_scheduled_task and not is_linux and not is_extensionless and not is_webcache_database:
+        if not is_accepted_extension and not is_scheduled_task and not is_linux and not is_netscaler and not is_extensionless and not is_webcache_database:
             continue
         headers = []
         if path.suffix.lower() == ".csv":
