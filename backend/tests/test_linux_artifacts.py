@@ -787,6 +787,72 @@ class TestShellHistoryParser:
         assert results[0]["username"] == "root"
 
 
+class TestBsdShellAuditLog:
+    # BSD systems (seen on a FreeBSD-based appliance) can audit-log every
+    # interactive shell command through syslog to a dedicated file
+    # (bash.log/sh.log) instead of -- or alongside -- the shell's own
+    # ~/.bash_history. Diagnosed from a real evidence item where these
+    # files were unrecognized by any filename pattern at all, misclassified
+    # as generic_csv, and produced zero events -- every command run on the
+    # box was invisible to search despite ingest reporting success.
+
+    def test_looks_like_linux_artifact_recognizes_bash_log_and_rotations(self):
+        from app.ingest.linux.helpers import looks_like_linux_artifact
+        assert looks_like_linux_artifact("bash.log") == ("linux_shell_history", "bsd_shell_audit", "linux_shell_raw_bsd_audit")
+        assert looks_like_linux_artifact("bash.log.9")[1] == "bsd_shell_audit"
+        assert looks_like_linux_artifact("sh.log.12")[1] == "bsd_shell_audit"
+
+    def test_parses_timestamp_user_terminal_and_command(self):
+        from app.ingest.linux.shell_history import parse_bsd_shell_audit_log
+        content = (
+            'Sep 29 09:00:17 <local7.notice> exampleHost bash[20358]: root on (null) shell_command="ls -la /var/log"\n'
+        )
+        results = parse_bsd_shell_audit_log(content, source_path="log/bash.log")
+        assert len(results) == 1
+        row = results[0]
+        assert row["artifact_family"] == "linux_shell_history"
+        assert row["username"] == "root"
+        assert row["terminal"] == "(null)"
+        assert row["hostname"] == "exampleHost"
+        assert row["process"] == "bash"
+        assert row["pid"] == 20358
+        assert row["command"] == "ls -la /var/log"
+        assert row["timestamp"] is not None
+
+    def test_non_command_lines_in_the_same_file_are_skipped(self):
+        # newsyslog rotation notices and other non-audit lines share the
+        # file but aren't this artifact's actual content.
+        from app.ingest.linux.shell_history import parse_bsd_shell_audit_log
+        content = (
+            "Sep 29 09:00:00 exampleHost newsyslog[1]: logfile turned over due to size>100k\n"
+            'Sep 29 09:00:17 <local7.notice> exampleHost bash[20358]: root on (null) shell_command="whoami"\n'
+        )
+        results = parse_bsd_shell_audit_log(content, source_path="log/bash.log")
+        assert len(results) == 1
+        assert results[0]["command"] == "whoami"
+
+    def test_normalize_file_indexes_commands_as_searchable_events(self, tmp_path):
+        from app.ingest.normalizer import normalize_file
+
+        path = tmp_path / "bash.log"
+        path.write_text(
+            'Sep 29 09:00:17 <local7.notice> exampleHost bash[20358]: root on (null) shell_command="cat /etc/passwd"\n',
+            encoding="utf-8",
+        )
+        artifact_meta = {
+            "artifact_family": "linux_shell_history",
+            "artifact_type": "bsd_shell_audit",
+            "parser": "linux_shell_raw_bsd_audit",
+            "name": "bash.log",
+            "source_path": "log/bash.log",
+        }
+        docs = normalize_file("case-1", "ev-1", "art-1", path, artifact_meta)
+        assert len(docs) == 1
+        assert docs[0]["linux"]["command"] == "cat /etc/passwd"
+        assert docs[0]["linux"]["username"] == "root"
+        assert docs[0]["@timestamp"] is not None
+
+
 class TestCronParser:
     @pytest.fixture
     def crontab_content(self):
