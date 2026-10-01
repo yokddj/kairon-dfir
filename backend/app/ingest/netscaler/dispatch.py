@@ -25,10 +25,16 @@ class NetscalerParserTarget:
     parser: str
     module: str
     function: str
+    binary: bool = False
 
 
 NETSCALER_PARSER_TARGETS: dict[str, NetscalerParserTarget] = {
     "netscaler_config_raw": NetscalerParserTarget("netscaler_config_raw", "config", "parse_ns_conf"),
+    "netscaler_webshell_scan_raw": NetscalerParserTarget("netscaler_webshell_scan_raw", "compromise_indicators", "scan_logonpoint_custom_file"),
+    "netscaler_httpd_conf_raw": NetscalerParserTarget("netscaler_httpd_conf_raw", "compromise_indicators", "parse_httpd_conf_for_tampering"),
+    "netscaler_ns_log_raw": NetscalerParserTarget("netscaler_ns_log_raw", "compromise_indicators", "parse_ns_log_for_exploitation"),
+    "netscaler_httpaccess_vpn_log_raw": NetscalerParserTarget("netscaler_httpaccess_vpn_log_raw", "compromise_indicators", "parse_httpaccess_vpn_log_for_payloads"),
+    "netscaler_deb_hash_raw": NetscalerParserTarget("netscaler_deb_hash_raw", "compromise_indicators", "check_deb_hash", binary=True),
 }
 
 
@@ -47,8 +53,10 @@ def resolve_netscaler_parser(parser: str | None) -> tuple[NetscalerParserTarget,
 
 
 def parse_netscaler_artifact_file(path: Path, *, parser: str | None, source_path: str) -> list[dict[str, Any]]:
-    _target, parse_func = resolve_netscaler_parser(parser)
+    target, parse_func = resolve_netscaler_parser(parser)
     try:
+        if target.binary:
+            return parse_func(path.read_bytes(), source_path=source_path)
         return parse_func(path.read_text(encoding="utf-8", errors="replace"), source_path=source_path)
     except NetscalerParserDispatchError:
         raise
