@@ -416,11 +416,16 @@ function getColumns(view: EventView): Column[] {
         severity,
         host,
         user,
-        { key: "program", label: "Program/Process", render: (item) => String(((item.execution as Record<string, unknown>) ?? {}).program_name ?? ((item.process as Record<string, unknown>) ?? {}).name ?? "-") },
+        // Linux shell-history rows (bash_history/zsh_history/the BSD
+        // "<user> on <tty> shell_command=..." audit-log shape) have no
+        // Windows-style execution/prefetch/process block at all -- without
+        // these linux.* fallbacks every column here rendered "-" despite
+        // the command itself being fully indexed and searchable.
+        { key: "program", label: "Program/Process", render: (item) => String(((item.execution as Record<string, unknown>) ?? {}).program_name ?? ((item.process as Record<string, unknown>) ?? {}).name ?? ((item.linux as Record<string, unknown>) ?? {}).command ?? "-") },
         { key: "run_count", label: "Run count", render: (item) => String(((item.execution as Record<string, unknown>) ?? {}).run_count ?? ((item.prefetch as Record<string, unknown>) ?? {}).run_count ?? "-") },
         { key: "last_run", label: "Last run", render: (item) => String(((item.execution as Record<string, unknown>) ?? {}).last_run ?? ((item.prefetch as Record<string, unknown>) ?? {}).last_run ?? "-") },
-        { key: "path", label: "Path", render: (item) => String(((item.file as Record<string, unknown>) ?? {}).path ?? ((item.process as Record<string, unknown>) ?? {}).path ?? "-") },
-        { key: "source_pf", label: "Source PF", render: (item) => String(((item.prefetch as Record<string, unknown>) ?? {}).source_file ?? "-") },
+        { key: "path", label: "Path", render: (item) => String(((item.file as Record<string, unknown>) ?? {}).path ?? ((item.process as Record<string, unknown>) ?? {}).path ?? ((item.linux as Record<string, unknown>) ?? {}).terminal ?? "-") },
+        { key: "source_pf", label: "Source PF", render: (item) => String(((item.prefetch as Record<string, unknown>) ?? {}).source_file ?? ((item.linux as Record<string, unknown>) ?? {}).source_file ?? "-") },
         { key: "artifact", label: "Source artifact", render: (item) => String(((item.artifact as Record<string, unknown>) ?? {}).name ?? "-") },
         tags,
       ];
