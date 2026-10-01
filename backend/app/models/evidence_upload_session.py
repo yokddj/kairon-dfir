@@ -15,6 +15,14 @@ from app.core.database import Base, JSONVariant, TimestampMixin, UUIDMixin, utc_
 # when they transition, mirroring app.services.memory.upload_sessions).
 ACTIVE_EVIDENCE_UPLOAD_SESSION_STATUSES = ("created", "uploading", "interrupted", "staged", "preflight_running")
 
+# Subset of ACTIVE_EVIDENCE_UPLOAD_SESSION_STATUSES that create_resumable_upload_session
+# reuses rather than duplicates: a brand-new POST .../resumable for a filename+size that
+# already has one of these in flight is almost always the analyst reselecting the same
+# file (wizard reopened after a reload, "staged" not recognized, etc.), not a deliberate
+# second upload. "preflight_running" is excluded here since that status is only reachable
+# post-staging when a hash reverify is already running against the finished copy.
+REUSABLE_EVIDENCE_UPLOAD_SESSION_STATUSES = ("created", "uploading", "interrupted", "staged")
+
 
 class EvidenceUploadSessionStatus(str, enum.Enum):
     created = "created"
