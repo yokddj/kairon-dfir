@@ -35,6 +35,7 @@ LINUX_PARSER_TARGETS: dict[str, LinuxParserTarget] = {
     "linux_apache_raw": LinuxParserTarget("linux_apache_raw", "apache", "parse_apache"),
     "linux_exim_raw": LinuxParserTarget("linux_exim_raw", "exim", "parse_exim"),
     "linux_shell_raw": LinuxParserTarget("linux_shell_raw", "shell_history", "parse_shell_history"),
+    "linux_shell_raw_bsd_audit": LinuxParserTarget("linux_shell_raw_bsd_audit", "shell_history", "parse_bsd_shell_audit_log"),
     "linux_cron_raw": LinuxParserTarget("linux_cron_raw", "cron", "parse_cron"),
     "linux_systemd_raw": LinuxParserTarget("linux_systemd_raw", "systemd", "parse_systemd"),
     "linux_ssh_raw": LinuxParserTarget("linux_ssh_raw", "ssh_artifacts", "parse_ssh_artifacts"),
