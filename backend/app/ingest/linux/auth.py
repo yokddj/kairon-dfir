@@ -15,8 +15,14 @@ _AUTH_PATTERNS = [
     re.compile(r"(authentication|Authentication)\s+failure", re.IGNORECASE),
 ]
 
+# See app.ingest.linux.syslog's _SYSLOG_RE for why the "<facility.severity>"
+# tag (e.g. "<auth.err>") needs to be an optional, skippable group here: BSD
+# syslogd (seen on a NetScaler appliance's own auth.log) inserts it between
+# the timestamp and hostname on most lines, and without accounting for it
+# the whole line falls through to "no match" -- timestamp/host/process all
+# None -- for everything except the rare line logged without that tag.
 _SYSLOG_TIMESTAMP_RE = re.compile(
-    r"^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+(\S+?)(?:\[(\d+)\])?\s*:\s+(.*)$"
+    r"^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(?:<[\w.]+>\s+)?(\S+)\s+(\S+?)(?:\[(\d+)\])?\s*:\s+(.*)$"
 )
 
 _IP_RE = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")

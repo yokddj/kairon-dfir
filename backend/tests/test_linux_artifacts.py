@@ -508,11 +508,80 @@ class TestSyslogParser:
         for result in results:
             assert result["artifact_family"] == "linux_syslog"
 
+    def test_facility_severity_tag_still_extracts_host_and_process(self):
+        # BSD syslogd (seen on a FreeBSD-based appliance's own
+        # /var/log/messages) inserts an optional "<facility.severity>" tag
+        # between the timestamp and hostname on most lines -- only its own
+        # unrelated rotation notices are logged without it. Diagnosed from a
+        # real evidence item where this left ~99.7% of syslog lines with no
+        # timestamp/host/process at all.
+        from app.ingest.linux.syslog import parse_syslog
+        content = (
+            "Sep 28 21:00:21 <auth.err> exampleHost sshd[1234]: error message here\n"
+            "Sep 28 21:00:25 <auth.err> exampleHost syslogd: last message repeated 1 times\n"
+        )
+        results = parse_syslog(content, source_path="/var/log/messages")
+        assert len(results) == 2
+        for result in results:
+            assert result["timestamp"] is not None
+            assert result["host"] == "exampleHost"
+        assert results[0]["process"] == "sshd"
+        assert results[0]["pid"] == 1234
+        assert results[0]["severity"] == "auth.err"
+
+    def test_lines_without_facility_tag_still_parse(self):
+        from app.ingest.linux.syslog import parse_syslog
+        content = "Sep 28 21:00:00 exampleHost newsyslog[1]: logfile turned over due to size>100k\n"
+        results = parse_syslog(content, source_path="/var/log/messages")
+        assert results[0]["timestamp"] is not None
+        assert results[0]["host"] == "exampleHost"
+        assert results[0]["process"] == "newsyslog"
+
+    def test_forwarded_native_audit_line_extracts_inner_timestamp_and_host(self):
+        # A device forwarding its own native audit/event log through this
+        # host's syslog (e.g. a NetScaler "audit syslogAction" relaying its
+        # ns.log-style lines) wraps a second, inner timestamp in
+        # "MM/DD/YYYY:HH:MM:SS GMT" format, with the *source* device's own
+        # hostname and an internal unit id standing in for a process name --
+        # a shape the plain "host process[pid]: message" branch can't
+        # capture at all. Diagnosed from a real evidence item where this
+        # left the majority of one host's forwarded log lines with no
+        # timestamp even after the facility-tag fix.
+        from app.ingest.linux.syslog import parse_syslog
+        content = (
+            'Sep 24 07:00:11 <local0.err> 203.0.113.10  09/24/2026:07:00:11 GMT exampleRemoteHost 0-PPE-2 : '
+            'default SSLVPN Message 38475819 0 :  "example diagnostic text"\n'
+        )
+        results = parse_syslog(content, source_path="/var/log/messages")
+        assert len(results) == 1
+        row = results[0]
+        assert row["timestamp"] == "2026-09-24T07:00:11+00:00"
+        assert row["host"] == "exampleRemoteHost"
+        assert row["process"] == "0-PPE-2"
+        assert row["severity"] == "local0.err"
+        assert "203.0.113.10" in row["message"]
+        assert "SSLVPN" in row["message"]
+
     def test_source_file_tracked(self, syslog_content):
         from app.ingest.linux.syslog import parse_syslog
         results = parse_syslog(syslog_content, source_path="/var/log/kern.log")
         for result in results:
             assert result["source_file"] == "/var/log/kern.log"
+
+
+class TestAuthLogFacilityTag:
+    def test_facility_severity_tag_still_extracts_timestamp_and_host(self):
+        # Same BSD syslogd convention as TestSyslogParser's facility-tag
+        # test, exercised through the auth.log-specific parser's own
+        # (duplicated) timestamp regex.
+        from app.ingest.linux.auth import parse_auth
+        content = "Sep 28 21:00:21 <auth.err> exampleHost sshd[1234]: Failed password for root from 203.0.113.5 port 22 ssh2\n"
+        results = parse_auth(content, source_path="/var/log/auth.log")
+        assert len(results) == 1
+        assert results[0]["timestamp"] is not None
+        assert results[0]["detected_host"] == "exampleHost"
+        assert results[0]["process"] == "sshd"
+        assert results[0]["pid"] == 1234
 
 
 class TestAuditParser:
