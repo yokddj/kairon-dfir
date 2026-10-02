@@ -5,6 +5,7 @@ import { api, type CaseNextAction } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { compareValues, nextSortDirection, type SortDirection } from "../lib/sorting";
 import { StageProgress, type Stage } from "../components/common/StageProgress";
+import CaseSummaryCard from "../components/ai/CaseSummaryCard";
 
 function Stat({ label, value }: { label: string; value: string | number }) {
   return (
@@ -342,6 +343,8 @@ export default function CaseOverviewPage() {
         <Stat label="Parser errors" value={context.summary.parser_errors} />
         <Stat label="Warnings" value={context.summary.warnings.length} />
       </section>
+
+      <CaseSummaryCard caseId={caseId} />
 
       <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
         <div className="flex items-center justify-between gap-3">

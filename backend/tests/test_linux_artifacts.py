@@ -508,11 +508,80 @@ class TestSyslogParser:
         for result in results:
             assert result["artifact_family"] == "linux_syslog"
 
+    def test_facility_severity_tag_still_extracts_host_and_process(self):
+        # BSD syslogd (seen on a FreeBSD-based appliance's own
+        # /var/log/messages) inserts an optional "<facility.severity>" tag
+        # between the timestamp and hostname on most lines -- only its own
+        # unrelated rotation notices are logged without it. Diagnosed from a
+        # real evidence item where this left ~99.7% of syslog lines with no
+        # timestamp/host/process at all.
+        from app.ingest.linux.syslog import parse_syslog
+        content = (
+            "Sep 28 21:00:21 <auth.err> exampleHost sshd[1234]: error message here\n"
+            "Sep 28 21:00:25 <auth.err> exampleHost syslogd: last message repeated 1 times\n"
+        )
+        results = parse_syslog(content, source_path="/var/log/messages")
+        assert len(results) == 2
+        for result in results:
+            assert result["timestamp"] is not None
+            assert result["host"] == "exampleHost"
+        assert results[0]["process"] == "sshd"
+        assert results[0]["pid"] == 1234
+        assert results[0]["severity"] == "auth.err"
+
+    def test_lines_without_facility_tag_still_parse(self):
+        from app.ingest.linux.syslog import parse_syslog
+        content = "Sep 28 21:00:00 exampleHost newsyslog[1]: logfile turned over due to size>100k\n"
+        results = parse_syslog(content, source_path="/var/log/messages")
+        assert results[0]["timestamp"] is not None
+        assert results[0]["host"] == "exampleHost"
+        assert results[0]["process"] == "newsyslog"
+
+    def test_forwarded_native_audit_line_extracts_inner_timestamp_and_host(self):
+        # A device forwarding its own native audit/event log through this
+        # host's syslog (e.g. a NetScaler "audit syslogAction" relaying its
+        # ns.log-style lines) wraps a second, inner timestamp in
+        # "MM/DD/YYYY:HH:MM:SS GMT" format, with the *source* device's own
+        # hostname and an internal unit id standing in for a process name --
+        # a shape the plain "host process[pid]: message" branch can't
+        # capture at all. Diagnosed from a real evidence item where this
+        # left the majority of one host's forwarded log lines with no
+        # timestamp even after the facility-tag fix.
+        from app.ingest.linux.syslog import parse_syslog
+        content = (
+            'Sep 24 07:00:11 <local0.err> 203.0.113.10  09/24/2026:07:00:11 GMT exampleRemoteHost 0-PPE-2 : '
+            'default SSLVPN Message 38475819 0 :  "example diagnostic text"\n'
+        )
+        results = parse_syslog(content, source_path="/var/log/messages")
+        assert len(results) == 1
+        row = results[0]
+        assert row["timestamp"] == "2026-09-24T07:00:11+00:00"
+        assert row["host"] == "exampleRemoteHost"
+        assert row["process"] == "0-PPE-2"
+        assert row["severity"] == "local0.err"
+        assert "203.0.113.10" in row["message"]
+        assert "SSLVPN" in row["message"]
+
     def test_source_file_tracked(self, syslog_content):
         from app.ingest.linux.syslog import parse_syslog
         results = parse_syslog(syslog_content, source_path="/var/log/kern.log")
         for result in results:
             assert result["source_file"] == "/var/log/kern.log"
+
+
+class TestAuthLogFacilityTag:
+    def test_facility_severity_tag_still_extracts_timestamp_and_host(self):
+        # Same BSD syslogd convention as TestSyslogParser's facility-tag
+        # test, exercised through the auth.log-specific parser's own
+        # (duplicated) timestamp regex.
+        from app.ingest.linux.auth import parse_auth
+        content = "Sep 28 21:00:21 <auth.err> exampleHost sshd[1234]: Failed password for root from 203.0.113.5 port 22 ssh2\n"
+        results = parse_auth(content, source_path="/var/log/auth.log")
+        assert len(results) == 1
+        assert results[0]["timestamp"] is not None
+        assert results[0]["detected_host"] == "exampleHost"
+        assert results[0]["process"] == "sshd"
+        assert results[0]["pid"] == 1234
 
 
 class TestAuditParser:
@@ -716,6 +785,72 @@ class TestShellHistoryParser:
         )
         assert len(results) == 1
         assert results[0]["username"] == "root"
+
+
+class TestBsdShellAuditLog:
+    # BSD systems (seen on a FreeBSD-based appliance) can audit-log every
+    # interactive shell command through syslog to a dedicated file
+    # (bash.log/sh.log) instead of -- or alongside -- the shell's own
+    # ~/.bash_history. Diagnosed from a real evidence item where these
+    # files were unrecognized by any filename pattern at all, misclassified
+    # as generic_csv, and produced zero events -- every command run on the
+    # box was invisible to search despite ingest reporting success.
+
+    def test_looks_like_linux_artifact_recognizes_bash_log_and_rotations(self):
+        from app.ingest.linux.helpers import looks_like_linux_artifact
+        assert looks_like_linux_artifact("bash.log") == ("linux_shell_history", "bsd_shell_audit", "linux_shell_raw_bsd_audit")
+        assert looks_like_linux_artifact("bash.log.9")[1] == "bsd_shell_audit"
+        assert looks_like_linux_artifact("sh.log.12")[1] == "bsd_shell_audit"
+
+    def test_parses_timestamp_user_terminal_and_command(self):
+        from app.ingest.linux.shell_history import parse_bsd_shell_audit_log
+        content = (
+            'Sep 29 09:00:17 <local7.notice> exampleHost bash[20358]: root on (null) shell_command="ls -la /var/log"\n'
+        )
+        results = parse_bsd_shell_audit_log(content, source_path="log/bash.log")
+        assert len(results) == 1
+        row = results[0]
+        assert row["artifact_family"] == "linux_shell_history"
+        assert row["username"] == "root"
+        assert row["terminal"] == "(null)"
+        assert row["hostname"] == "exampleHost"
+        assert row["process"] == "bash"
+        assert row["pid"] == 20358
+        assert row["command"] == "ls -la /var/log"
+        assert row["timestamp"] is not None
+
+    def test_non_command_lines_in_the_same_file_are_skipped(self):
+        # newsyslog rotation notices and other non-audit lines share the
+        # file but aren't this artifact's actual content.
+        from app.ingest.linux.shell_history import parse_bsd_shell_audit_log
+        content = (
+            "Sep 29 09:00:00 exampleHost newsyslog[1]: logfile turned over due to size>100k\n"
+            'Sep 29 09:00:17 <local7.notice> exampleHost bash[20358]: root on (null) shell_command="whoami"\n'
+        )
+        results = parse_bsd_shell_audit_log(content, source_path="log/bash.log")
+        assert len(results) == 1
+        assert results[0]["command"] == "whoami"
+
+    def test_normalize_file_indexes_commands_as_searchable_events(self, tmp_path):
+        from app.ingest.normalizer import normalize_file
+
+        path = tmp_path / "bash.log"
+        path.write_text(
+            'Sep 29 09:00:17 <local7.notice> exampleHost bash[20358]: root on (null) shell_command="cat /etc/passwd"\n',
+            encoding="utf-8",
+        )
+        artifact_meta = {
+            "artifact_family": "linux_shell_history",
+            "artifact_type": "bsd_shell_audit",
+            "parser": "linux_shell_raw_bsd_audit",
+            "name": "bash.log",
+            "source_path": "log/bash.log",
+        }
+        docs = normalize_file("case-1", "ev-1", "art-1", path, artifact_meta)
+        assert len(docs) == 1
+        assert docs[0]["linux"]["command"] == "cat /etc/passwd"
+        assert docs[0]["linux"]["username"] == "root"
+        assert docs[0]["@timestamp"] is not None
 
 
 class TestCronParser:

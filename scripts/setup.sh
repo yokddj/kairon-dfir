@@ -166,6 +166,7 @@ preserve_secrets_from_env() {
   # Read existing secrets
   KAIRON_SESSION_SECRET_EXISTING=$(grep '^KAIRON_SESSION_SECRET=' "$env_file" | sed 's/^KAIRON_SESSION_SECRET=//' || echo "")
   KAIRON_CSRF_SECRET_EXISTING=$(grep '^KAIRON_CSRF_SECRET=' "$env_file" | sed 's/^KAIRON_CSRF_SECRET=//' || echo "")
+  KAIRON_AI_SECRET_KEY_EXISTING=$(grep '^KAIRON_AI_SECRET_KEY=' "$env_file" | sed 's/^KAIRON_AI_SECRET_KEY=//' || echo "")
   POSTGRES_PASSWORD_EXISTING=$(grep '^POSTGRES_PASSWORD=' "$env_file" | sed 's/^POSTGRES_PASSWORD=//' || echo "")
   OPENSEARCH_INITIAL_ADMIN_PASSWORD_EXISTING=$(grep '^OPENSEARCH_INITIAL_ADMIN_PASSWORD=' "$env_file" | sed 's/^OPENSEARCH_INITIAL_ADMIN_PASSWORD=//' || echo "")
 
@@ -179,6 +180,7 @@ preserve_secrets_from_env() {
 
   export KAIRON_SESSION_SECRET_EXISTING
   export KAIRON_CSRF_SECRET_EXISTING
+  export KAIRON_AI_SECRET_KEY_EXISTING
   export POSTGRES_PASSWORD_EXISTING
   export OPENSEARCH_INITIAL_ADMIN_PASSWORD_EXISTING
   export MEMORY_EVIDENCE_SHARED_GID_EXISTING
@@ -210,6 +212,9 @@ write_env() {
   # Use preserved secrets if available, otherwise generate new
   local session_secret="${KAIRON_SESSION_SECRET_EXISTING:-$(generate_secret)}"
   local csrf_secret="${KAIRON_CSRF_SECRET_EXISTING:-$(generate_secret)}"
+  # Seals AI provider API keys. Kept distinct from the session secret so
+  # rotating sessions does not invalidate the stored provider credentials.
+  local ai_secret="${KAIRON_AI_SECRET_KEY_EXISTING:-$(generate_secret)}"
   local postgres_pwd="${POSTGRES_PASSWORD_EXISTING:-$(generate_secret)}"
   local opensearch_pwd="${OPENSEARCH_INITIAL_ADMIN_PASSWORD_EXISTING:-$(generate_secret)}"
 
@@ -236,6 +241,7 @@ KAIRON_AUTH_ENABLED=${AUTH_ENABLED}
 # ---- Secrets ----
 KAIRON_SESSION_SECRET=${session_secret}
 KAIRON_CSRF_SECRET=${csrf_secret}
+KAIRON_AI_SECRET_KEY=${ai_secret}
 POSTGRES_PASSWORD=${postgres_pwd}
 OPENSEARCH_INITIAL_ADMIN_PASSWORD=${opensearch_pwd}
 

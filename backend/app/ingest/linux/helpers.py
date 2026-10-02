@@ -21,6 +21,13 @@ _LINUX_ARTIFACT_MAP: dict[str, tuple[str, str, str]] = {
     ".zsh_history": ("linux_shell_history", "zsh_history", "linux_shell_raw"),
     "bash_history": ("linux_shell_history", "bash_history", "linux_shell_raw"),
     "zsh_history": ("linux_shell_history", "zsh_history", "linux_shell_raw"),
+    # BSD shell-command audit logging (seen on a FreeBSD-based appliance):
+    # every interactive command is syslogged to its own file instead of
+    # (or alongside) the shell's ~/.bash_history -- see
+    # app.ingest.linux.shell_history.parse_bsd_shell_audit_log for the
+    # "<user> on <tty> shell_command=\"...\"" message shape this routes to.
+    "bash.log": ("linux_shell_history", "bsd_shell_audit", "linux_shell_raw_bsd_audit"),
+    "sh.log": ("linux_shell_history", "bsd_shell_audit", "linux_shell_raw_bsd_audit"),
     "crontab": ("linux_cron", "crontab", "linux_cron_raw"),
     "/cron.d/": ("linux_cron", "cron_file", "linux_cron_raw"),
     "/cron.daily/": ("linux_cron", "cron_file", "linux_cron_raw"),
