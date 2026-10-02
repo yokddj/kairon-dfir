@@ -11,6 +11,7 @@ from app.ingest.autoruns.discovery import looks_like_startup_folder_path
 from app.ingest.cloud_sync.helpers import detect_cloud_provider_from_path
 from app.ingest.identity_extraction import extract_host, extract_user, extract_user_from_path, is_valid_hostname, normalize_hostname
 from app.ingest.browser.normalizer import normalize_browser_event
+from app.ingest.linux.process_context import apply_process_context
 from app.ingest.eztools.lecmd import select_lnk_effective_target, _suffix as lecmd_suffix, _basename as lecmd_basename
 from app.ingest.velociraptor.path_utils import normalize_velociraptor_path
 from app.ingest.windows_event_mapping import classify_windows_event
@@ -3672,6 +3673,18 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["record_size"] = row.get("record_size", None)
     linux_data["timestamp_status"] = row.get("timestamp_status", "")
     linux_data["log_format"] = row.get("log_format", "")
+    # auditd fields, declared in the index mapping and mapped by the Sigma engine.
+    linux_data["exe"] = row.get("exe") or ""
+    linux_data["cwd"] = row.get("cwd") or ""
+    linux_data["euid"] = row.get("euid") or ""
+    linux_data["syscall"] = row.get("syscall") or ""
+    linux_data["audit_type"] = row.get("audit_type") or ""
+    linux_data["audit_key"] = row.get("audit_key") or ""
+    linux_data["audit_name"] = row.get("audit_name") or ""
+    for _arg_index in range(8):
+        _arg = row.get(f"audit_a{_arg_index}")
+        if _arg:
+            linux_data[f"audit_a{_arg_index}"] = _arg
     linux_data["lastlog_host"] = row.get("lastlog_host", "")
     linux_data["lastlog_tty"] = row.get("lastlog_tty", "")
     linux_data["remote_host"] = row.get("remote_host", "")
@@ -3869,6 +3882,7 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     doc["message"] = row.get("message", row.get("raw_excerpt", ""))
     doc["search_text"] = " ".join(str(v) for v in linux_data.values() if v)
     doc["linux"] = linux_data
+    apply_process_context(doc, row, family)
 
     # Platform-agnostic Host Facts contract (see app.services.host_facts /
     # app.ingest.host_facts_extraction): any normalizer, on any platform,
