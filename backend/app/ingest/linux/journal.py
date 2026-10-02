@@ -4,6 +4,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.ingest.linux.netfilter import enrich_with_netfilter
+
 
 def _normalize_timestamp(value: object) -> str | None:
     raw = str(value or "").strip()
@@ -30,7 +32,7 @@ def _row_from_fields(fields: dict[str, object], source_path: str) -> dict[str, o
     pid = str(fields.get("_PID") or fields.get("pid") or "").strip() or None
     priority = str(fields.get("PRIORITY") or fields.get("priority") or "").strip() or None
     action = str(fields.get("_SYSTEMD_UNIT") or fields.get("UNIT") or fields.get("unit") or process or "journal_event").strip()
-    return {
+    row = {
         "timestamp": _normalize_timestamp(fields.get("__REALTIME_TIMESTAMP") or fields.get("timestamp") or fields.get("_SOURCE_REALTIME_TIMESTAMP")),
         "message": message,
         "hostname": hostname,
@@ -43,6 +45,7 @@ def _row_from_fields(fields: dict[str, object], source_path: str) -> dict[str, o
         "artifact_type": "linux_journal",
         "source_path": source_path,
     }
+    return enrich_with_netfilter(row, message)
 
 
 def _parse_export_blocks(text: str, source_path: str) -> list[dict[str, object]]:

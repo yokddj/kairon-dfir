@@ -3748,6 +3748,15 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["http_severity"] = row.get("http_severity", "")
     linux_data["apache_module"] = row.get("apache_module", "")
     linux_data["web_server"] = row.get("web_server", "")
+    # Netfilter packet fields (see app.ingest.linux.netfilter).
+    linux_data["firewall_action"] = row.get("firewall_action", "")
+    linux_data["firewall_prefix"] = row.get("firewall_prefix", "")
+    linux_data["destination_ip"] = row.get("destination_ip", "")
+    linux_data["destination_port"] = row.get("destination_port", None)
+    linux_data["network_protocol"] = row.get("network_protocol", "")
+    linux_data["interface_in"] = row.get("interface_in", "")
+    linux_data["interface_out"] = row.get("interface_out", "")
+    linux_data["tcp_flags"] = row.get("tcp_flags") or []
     linux_data["x_forwarded_for"] = row.get("x_forwarded_for", "")
     linux_data["server_name"] = row.get("server_name", "")
     linux_data["upstream"] = row.get("upstream", "")
@@ -3884,6 +3893,20 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         event_severity = "info"
     doc["event"]["severity"] = event_severity
 
+    if row.get("firewall_action"):
+        action = row["firewall_action"]
+        source = f"{row.get('source_ip')}:{row.get('source_port')}" if row.get("source_port") is not None else str(row.get("source_ip"))
+        target = f"{row.get('destination_ip')}:{row.get('destination_port')}" if row.get("destination_port") is not None else str(row.get("destination_ip"))
+        doc["network"]["source_ip"] = row.get("source_ip") or None
+        doc["network"]["source_port"] = row.get("source_port")
+        doc["network"]["destination_ip"] = row.get("destination_ip") or None
+        doc["network"]["destination_port"] = row.get("destination_port")
+        doc["network"]["protocol"] = row.get("network_protocol") or None
+        doc["destination"]["ip"] = row.get("destination_ip") or None
+        doc["destination"]["port"] = row.get("destination_port")
+        doc["event"]["action"] = f"firewall_{action}"
+        doc["event"]["outcome"] = "failure" if action in {"block", "reject", "drop", "limit"} else "success" if action == "allow" else doc["event"].get("outcome")
+        doc["title"] = f"Firewall {action}: {source} -> {target}" + (f" ({row.get('network_protocol')})" if row.get("network_protocol") else "")
     doc["message"] = row.get("message", row.get("raw_excerpt", ""))
     doc["search_text"] = " ".join(str(v) for v in linux_data.values() if v)
     doc["linux"] = linux_data
