@@ -3748,6 +3748,8 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["http_severity"] = row.get("http_severity", "")
     linux_data["apache_module"] = row.get("apache_module", "")
     linux_data["web_server"] = row.get("web_server", "")
+    linux_data["jail"] = row.get("jail", "")
+    linux_data["component"] = row.get("component", "")
     # Netfilter packet fields (see app.ingest.linux.netfilter).
     linux_data["firewall_action"] = row.get("firewall_action", "")
     linux_data["firewall_prefix"] = row.get("firewall_prefix", "")
@@ -3825,6 +3827,14 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         if linux_data.get("http_status") is not None:
             doc["event"]["outcome"] = "failure" if int(linux_data["http_status"]) >= 400 else "success"
         doc["title"] = linux_data.get("message") or f"{(linux_data.get('web_server') or 'web server').capitalize()} log event"
+    elif family == "linux_fail2ban":
+        action = linux_data.get("event_action") or "log"
+        doc["event"]["type"] = "fail2ban"
+        doc["event"]["action"] = f"fail2ban_{action}"
+        doc["network"]["source_ip"] = linux_data.get("source_ip") or None
+        jail = linux_data.get("jail")
+        ip = linux_data.get("source_ip")
+        doc["title"] = f"fail2ban {action.replace('_', ' ')}" + (f": {ip}" if ip else "") + (f" [{jail}]" if jail else "")
     elif family == "linux_exim":
         doc["event"]["type"] = linux_data.get("artifact_type") or "exim_log"
         doc["event"]["action"] = linux_data.get("event_action") or linux_data.get("artifact_type") or "exim_log"
