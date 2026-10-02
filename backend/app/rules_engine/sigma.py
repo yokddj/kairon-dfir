@@ -42,6 +42,27 @@ SIGMA_FIELD_MAP = {
     "GrantedAccess": ["process.granted_access", "windows.event_data.GrantedAccess", "winlog.event_data.GrantedAccess"],
     "ScriptBlockText": ["powershell.script_block_text", "search_text"],
     "Url": ["url.full", "download.url"],
+    # Linux auditd. Sigma's auditd rules use the raw record keys, lower-case
+    # (type, exe, key, a0..a7 ...), so they cannot be reused as-is for another
+    # product: each is mapped to the field the audit parser populates and the
+    # index declares. Not mapped, because nothing here carries them: unit
+    # (systemd), LogonId and Initiated (Windows).
+    "type": ["linux.audit_type"],
+    "exe": ["process.executable", "linux.exe"],
+    "key": ["linux.audit_key"],
+    "euid": ["linux.euid"],
+    "SYSCALL": ["linux.syscall"],
+    "name": ["linux.audit_name"],
+    "cwd": ["process.working_directory", "linux.cwd"],
+    "CurrentDirectory": ["process.working_directory", "linux.cwd"],
+    "a0": ["linux.audit_a0"],
+    "a1": ["linux.audit_a1"],
+    "a2": ["linux.audit_a2"],
+    "a3": ["linux.audit_a3"],
+    "a4": ["linux.audit_a4"],
+    "a5": ["linux.audit_a5"],
+    "a6": ["linux.audit_a6"],
+    "a7": ["linux.audit_a7"],
     # Added after measuring a real SigmaHQ import against a live index. Every
     # target below was checked to exist AND to be populated with the shape the
     # Sigma field means -- a mapping onto a field that is declared but empty, or
@@ -86,7 +107,11 @@ SIGMA_EVENT_ID_HINTS = {
     "powershell": [400, 403, 4103, 4104, 600, 800],
 }
 SIGMA_CATEGORY_EVENT_TYPE_HINTS = {
-    "process_creation": ["process_creation", "process_created", "sysmon_process_created", "security_process_created"],
+    # The Linux entries are the records that are a command being run: a line of shell
+    # history, an auditd EXECVE record, a sudo USER_CMD record. Without them every
+    # Linux process_creation rule failed the logsource gate on every Linux document
+    # and could never fire, whatever its fields said.
+    "process_creation": ["process_creation", "process_created", "sysmon_process_created", "security_process_created", "linux_shell_history", "execve", "user_cmd"],
     "registry_set": ["registry_set", "registry_value_set", "sysmon_registry_set"],
     "file_event": ["file_event", "file_create", "file_created", "sysmon_file_created"],
     "network_connection": ["network_connection", "network_connected", "sysmon_network_connection"],
@@ -612,6 +637,13 @@ _ARTIFACT_PRODUCT_MARKERS = {
 }
 
 
+_LINUX_PROFILE_FIELDS = (
+    "command", "process", "username", "exe", "cwd", "euid", "syscall",
+    "audit_type", "audit_key", "audit_name",
+    *(f"audit_a{index}" for index in range(8)),
+)
+
+
 def build_sigma_case_profile(events: list[dict], *, total_events: int | None = None) -> dict:
     artifact_types: Counter[str] = Counter()
     parsers: Counter[str] = Counter()
@@ -733,6 +765,12 @@ def build_sigma_case_profile(events: list[dict], *, total_events: int | None = N
         _mark_field("registry.event_type", bool(registry.get("event_type")))
         _mark_field("powershell.script_block_text", bool(powershell.get("script_block_text")))
         _mark_field("search_text", bool(event.get("search_text")))
+        _mark_field("process.working_directory", bool(process.get("working_directory") or process.get("current_directory")))
+        # Without these a Linux-only case never reported linux.command / linux.username
+        # as available, so the preflight skipped even a plain CommandLine rule as
+        # "missing fields" before it was ever evaluated.
+        for linux_field in _LINUX_PROFILE_FIELDS:
+            _mark_field(f"linux.{linux_field}", bool(linux.get(linux_field)))
 
     aliases = {
         sigma_field: mapped_fields
@@ -1019,7 +1057,7 @@ def _document_event_id(document: dict) -> int | None:
 
 def _document_event_labels(document: dict) -> set[str]:
     labels: set[str] = set()
-    for field in ("event.type", "event.action", "artifact.type", "artifact.parser"):
+    for field in ("event.type", "event.action", "artifact.type", "artifact.parser", "linux.audit_type"):
         value = _get_nested_value(document, field)
         for item in _stringify_values(value):
             normalized = item.strip().lower().replace("-", "_").replace(" ", "_")
@@ -1123,6 +1161,42 @@ def apply_value_transforms(values: list[str], transforms: set[str]) -> list[str]
     return values
 
 
+# Sigma Linux process_creation rules identify a binary by path suffix
+# (Image|endswith: '/wget'). Shell history records the command as it was typed --
+# "wget http://..." -- with no path, so the suffix test can never match even though the
+# rule is exactly about that binary. Inventing a path would be fabricating evidence;
+# instead a bare-basename suffix is also allowed to equal the process name. A value
+# with any other directory component is left strictly as written.
+_BASENAME_ALTERNATE_FIELDS = {
+    "Image": "process.name",
+    "ProcessName": "process.name",
+    "ParentImage": "process.parent_name",
+}
+
+
+def basename_alternates(base_field: str, modifier: str | None, expected: object) -> tuple[str | None, list[str]]:
+    """The name field and bare basenames a ``'/name'`` endswith value may also match."""
+    name_field = _BASENAME_ALTERNATE_FIELDS.get(str(base_field or ""))
+    if not name_field or modifier != "endswith":
+        return None, []
+    names = []
+    for value in _flatten_values(expected):
+        text = str(value)
+        if len(text) > 1 and text.startswith("/") and "/" not in text[1:]:
+            names.append(text[1:])
+    return (name_field, names) if names else (None, [])
+
+
+def _match_basename_alternate(document: dict, base_field: str, modifier: str | None, expected: object) -> tuple[str, list[str]] | None:
+    name_field, names = basename_alternates(base_field, modifier, expected)
+    if not name_field:
+        return None
+    actual_values = _stringify_values(_get_nested_value(document, name_field))
+    if _match_scalar(actual_values, names, None):
+        return name_field, actual_values
+    return None
+
+
 def _match_scalar(actual_values: list[str], expected: object, modifier: str | None) -> bool:
     expected_values = [str(item) for item in _flatten_values(expected)]
     if modifier == "all":
@@ -1161,6 +1235,13 @@ def _match_selection(selection_name: str, selection: object, document: dict) -> 
                 if used_fallback:
                     data_quality.append("sigma_field_fallback_search_text")
                 break
+        if not found:
+            base_field, _, _ = parse_field_modifiers(str(sigma_field))
+            alternate = _match_basename_alternate(document, base_field, modifier, expected)
+            if alternate:
+                matched_fields[str(sigma_field)] = {"mapped_field": alternate[0], "expected": expected, "actual": alternate[1][:5]}
+                data_quality.append("sigma_image_matched_by_process_name")
+                found = True
         if not found:
             return False, {}, data_quality
     return True, matched_fields, data_quality
@@ -1331,6 +1412,16 @@ def evaluate_compiled_sigma_rule(compiled_rule: dict, document: dict) -> dict:
                                 qualities.append("sigma_field_fallback_search_text")
                             break
                     if not actual_hit:
+                        alternate = _match_basename_alternate(document, str(clause.get("base_field") or ""), modifier, expected)
+                        if alternate:
+                            matched_fields[str(clause.get("sigma_field") or clause.get("base_field"))] = {
+                                "mapped_field": alternate[0],
+                                "expected": expected,
+                                "actual": alternate[1][:5],
+                            }
+                            qualities.append("sigma_image_matched_by_process_name")
+                            actual_hit = True
+                    if not actual_hit:
                         matched = False
                         matched_fields = {}
                         break
@@ -1404,6 +1495,9 @@ def build_sigma_query_from_compiled(compiled_rule: dict) -> dict:
             mapped_fields = [str(item) for item in (clause.get("mapped_fields") or [])]
             modifier = str(clause.get("modifier") or "") or None
             values = [str(item) for item in _flatten_values(clause.get("expected"))]
+            alt_field, alt_names = basename_alternates(str(clause.get("base_field") or ""), modifier, values)
+            for alt_name in alt_names:
+                should.append({"term": {alt_field: {"value": alt_name, "case_insensitive": True}}})
             for mapped_field in mapped_fields:
                 if modifier is None and len(values) == 1:
                     should.append({"term": {mapped_field: values[0]}})

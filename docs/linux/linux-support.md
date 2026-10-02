@@ -79,6 +79,22 @@ Current Linux parsers cover 12 families. Coverage is calculated from detected ar
 - Events: Generic syslog lines with timestamp, host, process, pid, severity
 - Fields: `timestamp`, `detected_host`, `process`, `pid`, `severity`, `message`
 
+### Sigma rules on Linux logs
+Sigma rules with `logsource: product: linux` run against Linux events. What each source contributes:
+
+| Source | Treated as `process_creation` | Fields Sigma can use |
+| --- | --- | --- |
+| Shell history (`.bash_history`, `.zsh_history`, BSD `bash.log`/`sh.log`) | yes, one command per line | `CommandLine`, `Image` (by name, see below), `User` |
+| auditd `EXECVE` record | yes (the canonical process-creation record) | `CommandLine`, `Image`, `a0`..`a7`, `type`, `User` |
+| auditd `USER_CMD` record (sudo) | yes | `CommandLine`, `exe`, `cwd` |
+| auditd `SYSCALL`, `PATH`, `PROCTITLE` | no (auditd rules without a category still match them) | `exe`, `key`, `euid`, `SYSCALL`, `name`, `type`, `cwd` |
+
+- **`Image` without a path.** Shell history records a command as typed (`wget http://...`), never the path it resolved to, and Kairon does not invent one. A rule value that is a bare name with a single leading slash (`Image|endswith: '/wget'`) therefore also matches when the process **name** equals `wget`; such matches carry the data-quality flag `sigma_image_matched_by_process_name`. A value with a directory (`'/usr/bin/wget'`) stays strict and only matches a real path (an auditd `exe`, or a path typed in full). Launchers (`sudo`, `env`, `nohup`...) and leading `VAR=value` assignments are skipped when naming the program.
+- **auditd command lines.** `EXECVE` argv is rebuilt from `a0..aN`, including the hex-encoded form auditd uses for arguments with spaces or special characters. Fields inside `msg='...'` (as in `USER_CMD`) are extracted. For records without a command line, `linux.command` keeps its earlier meaning (`comm=`).
+- **Index fields.** `linux.exe`, `linux.cwd`, `linux.euid`, `linux.syscall`, `linux.audit_type`, `linux.audit_key`, `linux.audit_name`, `linux.audit_a0`..`a7`, `linux.timestamp_status` and `linux.log_format` are declared in the index mapping, so they are searchable and filterable. Documents indexed before this change have them only in the stored document: reprocess the evidence to make those events searchable by the new fields.
+- **Not supported yet.** Keyword-only rules (a bare `keywords:` list with no field, common for `auth`, `syslog` and `sshd`) are still refused, as are fields no Linux source carries (`unit`, `LogonId`). Linux rules with `category: file_event` or `category: network_connection` do not match yet: no Linux source is labelled with those categories.
+- **Shell history is not proof of execution.** A history line shows a command was typed, not that it ran or succeeded; a Sigma hit on it is a lead to verify.
+
 ### Other Text Logs (`linux_generic_log`)
 - Sources: any `.log`, `.out` or `.err` file (plain, rotated such as `app.log.1` / `app.log-20240101`, or compressed with gzip, bzip2 or xz) under `/var/log`, `/var/lib/docker/containers`, `/var/www`, `/opt`, `/srv`, `/usr/local`, `/home`, `/root` or `/tmp`; plus `.txt` files and a short list of well-known extensionless logs (`dmesg`, `debug`, `daemon`, `mail`, `ufw`...) directly under `/var/log`. Typical finds: nginx, fail2ban, ufw, Docker container logs and application logs.
 - Last resort: a file is only routed here after every dedicated parser (auth, syslog, audit, Apache, Exim, packages, ...) has declined it, so it never changes how a recognised artifact is parsed.
