@@ -3671,6 +3671,7 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["record_offset"] = row.get("record_offset", None)
     linux_data["record_size"] = row.get("record_size", None)
     linux_data["timestamp_status"] = row.get("timestamp_status", "")
+    linux_data["log_format"] = row.get("log_format", "")
     linux_data["lastlog_host"] = row.get("lastlog_host", "")
     linux_data["lastlog_tty"] = row.get("lastlog_tty", "")
     linux_data["remote_host"] = row.get("remote_host", "")
