@@ -74,6 +74,15 @@ Current Linux parsers cover 12 families. Coverage is calculated from detected ar
 - Events: SSH accepted/failed, sudo, su, PAM sessions, invalid users, authentication failures
 - Fields: `timestamp`, `username`, `process`, `pid`, `source_ip`, `auth_method`, `event_action`, `message`
 
+### Linux Journal (`linux_journal`)
+- Sources: binary systemd journals (`/var/log/journal/<machine-id>/system.journal`, `user-<uid>.journal`, rotated `system@<id>.journal`, the `.journal~` left by an unclean shutdown, and the volatile `/run/log/journal`), plus `journalctl -o export` and `-o json` text exports.
+- Why it matters: Debian 12+, Fedora, Arch and recent RHEL/SUSE can run on journald alone, with no `auth.log` or `syslog` at all. Without this parser those hosts produce almost no log evidence.
+- Format: both the regular and the compact object layouts (systemd 252+), with XZ, LZ4 and ZSTD compressed fields. Files are recognised by their magic bytes, so a renamed or extensionless copy still parses. A copy-off of a live journal that is shorter than its declared size is read normally.
+- Fields: `timestamp` (microsecond precision), `message`, `hostname`, `process` (`SYSLOG_IDENTIFIER`, else `_COMM`), `pid`, `username` (the numeric `_UID`, as in the text exports), `severity` (the syslog `PRIORITY` number), `event_action` (the systemd unit), plus `exe`, `unit`, `transport`, `boot_id`, `uid`, `gid` and the entry `seqnum`.
+- Method: a forensic scan of the file's objects from the header to the tail, not a walk of its hash tables, so entries the file's own index no longer links are still recovered.
+- Safety: journals are untrusted evidence. Every offset and size is bounds-checked, a single field is capped at 1 MiB decompressed, at most 1,000,000 entries are read per file, and a damaged file yields the entries read before the damage plus an explicit "incomplete" event instead of failing.
+- Not verified: checksums and Forward Secure Sealing are not checked.
+
 ### Linux Syslog (`linux_syslog`)
 - Sources: `/var/log/syslog`, `/var/log/messages`, `/var/log/kern.log`
 - Events: Generic syslog lines with timestamp, host, process, pid, severity
@@ -181,7 +190,7 @@ Linux artifacts appear in:
 - ext4 filesystem parsing is not implemented.
 - Full automatic filesystem mounting for every Linux disk-image layout is not implemented.
 - Write-capable disk-image mounting is not implemented.
-- Binary systemd journal parsing is not implemented.
+- Binary systemd journals are parsed (see below), but not verified: the journal's per-object checksums and sealing (FSS) are not checked, so a tampered journal is read as written.
 - SELinux policy database parsing is not implemented.
 - macOS collection parsing is not implemented.
 - Executing uploaded scripts or binaries is never done.

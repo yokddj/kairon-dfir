@@ -186,8 +186,8 @@ _REGISTRY: dict[str, dict[str, Any]] = {
     "linux_journal": {
         "artifact_type": "linux_journal",
         "parser_name": "linux_journal_raw",
-        "supported_extensions": [".export", ".json", ".ndjson"],
-        "source_patterns": ["*journal.export", "*journal.json", "*journal.ndjson", "*journalctl.json"],
+        "supported_extensions": [".export", ".json", ".ndjson", ".journal"],
+        "source_patterns": ["*journal.export", "*journal.json", "*journal.ndjson", "*journalctl.json", "*/var/log/journal/*/*.journal*", "*/run/log/journal/*/*.journal*"],
         "enabled_for_usable_search": True,
         "searchable": True,
         "maturity": "partial",
@@ -195,7 +195,7 @@ _REGISTRY: dict[str, dict[str, Any]] = {
         "primary_timestamp_field": "@timestamp",
         "searchable_fields": ["message", "linux.username", "linux.process", "linux.hostname", "event.action"],
         "filter_fields": COMMON_SEARCH_FILTER_FIELDS + ["linux.artifact_family", "linux.username", "linux.hostname", "event.action"],
-        "notes": ["systemd journal export and JSON lines parsing for Linux host activity and services."],
+        "notes": ["systemd journal parsing for Linux host activity and services: binary .journal files (regular and compact format; XZ, LZ4 and ZSTD compression), journalctl export and JSON lines."],
     },
     "linux_auth": {
         "artifact_type": "linux_auth",

@@ -81,6 +81,14 @@ def parse_linux_artifact_file(path: Path, *, parser: str | None, artifact_type: 
                 return parse_func(path.read_bytes(), source_path=source_path)
         if str(artifact_type or "").lower() in target.binary_artifact_types:
             return parse_func(path.read_bytes(), source_path=source_path)
+        if target.parser == "linux_journal_raw":
+            from app.ingest.linux.journal import parse_journal_binary_file
+            from app.ingest.linux.journal_binary import is_journal_file
+
+            # Binary journals are recognised by their magic bytes, so a renamed or
+            # extensionless copy still parses; text exports fall through unchanged.
+            if is_journal_file(path):
+                return parse_journal_binary_file(path, source_path=source_path)
         if target.parser == "linux_generic_raw":
             # Capped, magic-byte-sniffed read (gzip/bzip2/xz): an unrecognised log can be
             # arbitrarily large or a compression bomb, unlike the fixed-name artifacts.

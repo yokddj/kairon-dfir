@@ -34,13 +34,12 @@ SUPPORTED_ARTIFACTS: dict[str, dict[str, str]] = {
 
 OPTIONAL_NOT_FOUND = {
     "auditd": "auditd unavailable",
-    "journal_export": "journal export not found",
+    "journal_export": "systemd journal not found",
     "firewalld": "firewalld not found",
 }
 
 UNSUPPORTED_PATTERNS = (
     (re.compile(r"(^|/)etc/selinux/", re.I), "SELinux database", "SELinux policy databases are detected but not parsed."),
-    (re.compile(r"(^|/)var/log/journal/", re.I), "systemd journal binary", "Binary journal parsing is not supported yet; export text logs instead."),
     (re.compile(r"(^|/)boot/(vmlinuz|initrd|initramfs)", re.I), "boot image", "Kernel/initrd images are preserved but not parsed."),
 )
 
