@@ -117,6 +117,37 @@ _AUTH_PATTERNS = [
 ]
 
 
+# Generic text logs -- the last-resort tier, consulted only after every specific
+# detector above has declined the file. ``.log``/``.out``/``.err`` files (optionally
+# rotated: ``.1``, ``-20240101``, ``.2.gz``) qualify under the places Linux software
+# writes logs; ``.txt`` and a short list of well-known extensionless logs only qualify
+# under /var/log itself, where a plain-text file is overwhelmingly a log.
+_GENERIC_LOG_NAME_RE = re.compile(r"\.(?:log|out|err)(?:[.-][\w]+)*$", re.IGNORECASE)
+_GENERIC_TXT_NAME_RE = re.compile(r"\.txt(?:[.-][\w]+)*$", re.IGNORECASE)
+_VAR_LOG_RE = re.compile(r"(^|/)var/log/")
+_LOG_ROOTS_RE = re.compile(r"(^|/)(?:var/log|var/lib/docker/containers|var/www|var/tmp|var/lib|opt|srv|usr/local|home|root|tmp)/")
+_BINARY_OR_UNSUPPORTED_RE = re.compile(r"(^|/)var/log/journal/|\.(?:journal|db|sqlite3?|rrd|pcap|gz\.sig)(?:$|\.)", re.IGNORECASE)
+_ROTATION_TAIL_RE = re.compile(r"(?:[.-]\d+)*(?:\.(?:gz|bz2|xz))?$")
+_KNOWN_EXTENSIONLESS_LOGS = frozenset({
+    "dmesg", "debug", "daemon", "user", "mail", "mail.info", "mail.warn", "mail.err",
+    "boot", "ufw", "yum", "dnf", "pacman",
+})
+
+
+def _looks_like_generic_linux_log(path_str: str, name: str) -> bool:
+    if _BIN_OR_SHARE_DIR_RE.search(path_str) or _BINARY_OR_UNSUPPORTED_RE.search(path_str):
+        return False
+    if not _LOG_ROOTS_RE.search(path_str):
+        return False
+    if _GENERIC_LOG_NAME_RE.search(name):
+        return True
+    if not _VAR_LOG_RE.search(path_str):
+        return False
+    if _GENERIC_TXT_NAME_RE.search(name):
+        return True
+    return _ROTATION_TAIL_RE.sub("", name) in _KNOWN_EXTENSIONLESS_LOGS
+
+
 def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
     """Detect Linux artifact family, type, and parser from a path."""
     path_str = str(path).replace("\\", "/").lower()
@@ -200,6 +231,8 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
                 prefix = f"{marker}{separator}"
                 if name.startswith(prefix) and name[len(prefix):][:1].isdigit():
                     return (family, artifact_type, parser)
+    if _looks_like_generic_linux_log(path_str, name):
+        return ("linux_generic_log", "generic_log", "linux_generic_raw")
     return None
 
 

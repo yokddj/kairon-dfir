@@ -31,6 +31,7 @@ LINUX_PARSER_TARGETS: dict[str, LinuxParserTarget] = {
     "linux_lastlog_raw": LinuxParserTarget("linux_lastlog_raw", "lastlog", "parse_lastlog", frozenset({"lastlog"})),
     "linux_timezone_raw": LinuxParserTarget("linux_timezone_raw", "timezone", "parse_timezone", frozenset({"etc_localtime"})),
     "linux_syslog_raw": LinuxParserTarget("linux_syslog_raw", "syslog", "parse_syslog"),
+    "linux_generic_raw": LinuxParserTarget("linux_generic_raw", "generic_log", "parse_generic_log"),
     "linux_audit_raw": LinuxParserTarget("linux_audit_raw", "audit", "parse_audit"),
     "linux_apache_raw": LinuxParserTarget("linux_apache_raw", "apache", "parse_apache"),
     "linux_exim_raw": LinuxParserTarget("linux_exim_raw", "exim", "parse_exim"),
@@ -80,6 +81,13 @@ def parse_linux_artifact_file(path: Path, *, parser: str | None, artifact_type: 
                 return parse_func(path.read_bytes(), source_path=source_path)
         if str(artifact_type or "").lower() in target.binary_artifact_types:
             return parse_func(path.read_bytes(), source_path=source_path)
+        if target.parser == "linux_generic_raw":
+            # Capped, magic-byte-sniffed read (gzip/bzip2/xz): an unrecognised log can be
+            # arbitrarily large or a compression bomb, unlike the fixed-name artifacts.
+            from app.ingest.linux.generic_log import read_log_text
+
+            text, truncated = read_log_text(path)
+            return parse_func(text, source_path=source_path, truncated=truncated)
         if path.suffix.lower() == ".gz":
             with gzip.open(path, "rt", encoding="utf-8", errors="replace") as handle:
                 return parse_func(handle.read(), source_path=source_path)

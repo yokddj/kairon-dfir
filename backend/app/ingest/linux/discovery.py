@@ -16,6 +16,7 @@ SUPPORTED_ARTIFACTS: dict[str, dict[str, str]] = {
     "btmp": {"label": "btmp", "family": "linux_auth"},
     "lastlog": {"label": "lastlog", "family": "linux_lastlog"},
     "syslog": {"label": "syslog", "family": "linux_syslog"},
+    "generic_log": {"label": "other text logs", "family": "linux_generic_log"},
     "audit_log": {"label": "audit.log", "family": "linux_audit"},
     "apache": {"label": "Apache logs", "family": "linux_apache"},
     "exim": {"label": "Exim logs", "family": "linux_exim"},
