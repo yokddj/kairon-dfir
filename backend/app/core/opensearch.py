@@ -1561,6 +1561,9 @@ def ensure_case_index(case_id: str) -> str:
                                 "audit_a5": {"type": "keyword", "ignore_above": 1024},
                                 "audit_a6": {"type": "keyword", "ignore_above": 1024},
                                 "audit_a7": {"type": "keyword", "ignore_above": 1024},
+                                "web_server": {"type": "keyword"},
+                                "x_forwarded_for": {"type": "keyword"},
+                                "http_host": {"type": "keyword"},
                             }
                         },
                         "macos": {"type": "object", "enabled": True},
@@ -1807,6 +1810,9 @@ def ensure_case_index(case_id: str) -> str:
                                 "audit_a5": {"type": "keyword", "ignore_above": 1024},
                                 "audit_a6": {"type": "keyword", "ignore_above": 1024},
                                 "audit_a7": {"type": "keyword", "ignore_above": 1024},
+                                "web_server": {"type": "keyword"},
+                                "x_forwarded_for": {"type": "keyword"},
+                                "http_host": {"type": "keyword"},
                             }
                         },
                     }

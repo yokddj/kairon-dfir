@@ -3747,6 +3747,11 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["http_user_agent"] = row.get("http_user_agent", "")
     linux_data["http_severity"] = row.get("http_severity", "")
     linux_data["apache_module"] = row.get("apache_module", "")
+    linux_data["web_server"] = row.get("web_server", "")
+    linux_data["x_forwarded_for"] = row.get("x_forwarded_for", "")
+    linux_data["server_name"] = row.get("server_name", "")
+    linux_data["upstream"] = row.get("upstream", "")
+    linux_data["http_host"] = row.get("http_host", "")
     linux_data["thread_id"] = row.get("thread_id", None)
     linux_data["event_outcome"] = row.get("event_outcome", "")
     linux_data["event_severity"] = row.get("event_severity", "")
@@ -3810,7 +3815,7 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         doc["user_agent"]["original"] = linux_data.get("http_user_agent") or None
         if linux_data.get("http_status") is not None:
             doc["event"]["outcome"] = "failure" if int(linux_data["http_status"]) >= 400 else "success"
-        doc["title"] = linux_data.get("message") or "Apache log event"
+        doc["title"] = linux_data.get("message") or f"{(linux_data.get('web_server') or 'web server').capitalize()} log event"
     elif family == "linux_exim":
         doc["event"]["type"] = linux_data.get("artifact_type") or "exim_log"
         doc["event"]["action"] = linux_data.get("event_action") or linux_data.get("artifact_type") or "exim_log"

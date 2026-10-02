@@ -25,8 +25,8 @@ GENERIC = ("linux_generic_log", "generic_log", "linux_generic_raw")
 @pytest.mark.parametrize(
     "path",
     [
-        "var/log/nginx/error.log",
-        "var/log/nginx/access.log.3.gz",
+        "var/log/postgresql/postgresql-15-main.log",
+        "var/log/mysql/error.log.2.gz",
         "var/log/fail2ban.log.2.gz",
         "var/log/ufw.log",
         "var/log/dmesg.0",

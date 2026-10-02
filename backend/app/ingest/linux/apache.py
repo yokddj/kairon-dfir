@@ -1,8 +1,17 @@
-"""Apache HTTP Server access/error log parser."""
+"""Apache HTTP Server and nginx access/error log parser.
+
+The two servers share the NCSA ``combined`` access format, so one parser serves both; nginx
+adds its own error-log layout and is often configured to write JSON access lines, both
+handled here. ``web_server`` records which one the file came from (decided by its path),
+and ``x_forwarded_for`` keeps the real client address when a proxy or load balancer sits in
+front, since ``source_ip`` is then the proxy's.
+"""
 from __future__ import annotations
 
 import base64
 import binascii
+import ipaddress
+import json
 from datetime import datetime, timezone
 import re
 from urllib.parse import unquote
@@ -68,8 +77,15 @@ def _suspicious_indicators(decoded_url: str, base64_decoded: list[str]) -> list[
 _ACCESS_RE = re.compile(
     r'^(?P<remote_host>\S+)\s+(?P<remote_logname>\S+)\s+(?P<remote_user>\S+)\s+'
     r'\[(?P<timestamp>[^\]]+)\]\s+"(?P<request>[^"]*)"\s+(?P<status>\d{3}|-)\s+'
-    r'(?P<bytes>\d+|-)(?:\s+"(?P<referrer>[^"]*)"\s+"(?P<user_agent>[^"]*)")?.*$'
+    r'(?P<bytes>\d+|-)(?:\s+"(?P<referrer>[^"]*)"\s+"(?P<user_agent>[^"]*)")?'
+    r'(?:\s+"(?P<forwarded>[^"]*)")?.*$'
 )
+# nginx error log: "2024/03/01 10:20:30 [error] 7#7: *1 message, client: ..., server: ..."
+_NGINX_ERROR_RE = re.compile(
+    r"^(?P<timestamp>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}) \[(?P<severity>\w+)\] "
+    r"(?P<pid>\d+)#(?P<tid>\d+): (?:\*(?P<connection>\d+) )?(?P<message>.*)$"
+)
+_NGINX_CONTEXT_RE = re.compile(r'(?:^|, )(?P<key>client|server|request|upstream|host|referrer): (?P<value>"[^"]*"|[^,]*)')
 _REQUEST_RE = re.compile(r"^(?P<method>\S+)\s+(?P<path>\S+)(?:\s+(?P<protocol>HTTP/[^\s]+))?")
 _ERROR_RE = re.compile(
     r"^\[(?P<timestamp>[^\]]+)\]\s+\[(?P<module>[^:\]]+)(?::(?P<severity>[^\]]+))?\]"
@@ -117,6 +133,26 @@ def _split_client(value: str | None) -> tuple[str, int | None]:
     return text.strip("[]"), None
 
 
+def _web_server(source_path: str) -> str:
+    lowered = source_path.replace("\\", "/").lower()
+    if "/nginx/" in lowered or lowered.startswith("nginx/"):
+        return "nginx"
+    if any(token in lowered for token in ("/apache2/", "/httpd/", "apache2/", "httpd/")):
+        return "apache"
+    return ""
+
+
+def _real_client(forwarded: str | None) -> str:
+    """The first valid IP of an X-Forwarded-For style value (the original client)."""
+    for token in str(forwarded or "").split(","):
+        candidate = token.strip().strip("[]")
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            continue
+    return ""
+
+
 def _apache_type(source_path: str) -> str:
     name = source_path.replace("\\", "/").rsplit("/", 1)[-1].lower()
     return "apache_error" if "error" in name else "apache_access"
@@ -133,11 +169,81 @@ def parse_apache(content: str, *, source_path: str = "") -> list[dict]:
             parsed = _parse_error_line(stripped, source_path, line_number)
         else:
             parsed = _parse_access_line(stripped, source_path, line_number)
+        parsed["web_server"] = parsed.get("web_server") or _web_server(source_path)
         results.append(parsed)
     return results
 
 
+_JSON_TIME_KEYS = ("time_iso8601", "@timestamp", "timestamp", "time", "time_local")
+_JSON_IP_KEYS = ("remote_addr", "client_ip", "clientip", "client", "src_ip")
+
+
+def _json_first(record: dict, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = record.get(key)
+        if value not in (None, "", "-"):
+            return str(value)
+    return ""
+
+
+def _json_timestamp(value: str) -> str | None:
+    if not value:
+        return None
+    parsed = _parse_access_timestamp(value)
+    if parsed:
+        return parsed
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc).isoformat()
+    except ValueError:
+        return None
+
+
+def _parse_json_access_line(record: dict, line: str, source_path: str, line_number: int) -> dict:
+    request = _json_first(record, ("request",))
+    method = _json_first(record, ("request_method", "method"))
+    path = _json_first(record, ("request_uri", "uri", "url", "path"))
+    if request:
+        request_match = _REQUEST_RE.match(request)
+        if request_match:
+            method = method or (request_match.group("method") or "")
+            path = path or (request_match.group("path") or "")
+    status = _int_or_none(_json_first(record, ("status", "response_status", "http_status")))
+    decoded_path = _decode_url_safe(path)
+    base64_decoded = _decode_base64_segments(decoded_path)
+    forwarded = _real_client(_json_first(record, ("http_x_forwarded_for", "x_forwarded_for", "xff")))
+    return {
+        "artifact_family": "linux_apache",
+        "artifact_type": "apache_access",
+        "source_file": source_path,
+        "line_number": line_number,
+        "timestamp": _json_timestamp(_json_first(record, _JSON_TIME_KEYS)),
+        "message": f"{method} {path} {status or '-'}".strip(),
+        "raw_excerpt": line[:2000],
+        "source_ip": _json_first(record, _JSON_IP_KEYS),
+        "username": _json_first(record, ("remote_user", "user")),
+        "http_method": method,
+        "url_path": path,
+        "url_path_decoded": decoded_path,
+        "url_base64_decoded": base64_decoded,
+        "suspicious_url_indicators": _suspicious_indicators(decoded_path, base64_decoded),
+        "http_protocol": _json_first(record, ("server_protocol", "protocol")),
+        "http_status": status,
+        "bytes_sent": _int_or_none(_json_first(record, ("body_bytes_sent", "bytes_sent", "bytes"))),
+        "http_referrer": _json_first(record, ("http_referer", "http_referrer", "referer", "referrer")),
+        "http_user_agent": _json_first(record, ("http_user_agent", "user_agent", "agent")),
+        "x_forwarded_for": forwarded,
+        "log_format": "json",
+    }
+
+
 def _parse_access_line(line: str, source_path: str, line_number: int) -> dict:
+    if line.startswith("{"):
+        try:
+            record = json.loads(line)
+        except ValueError:
+            record = None
+        if isinstance(record, dict):
+            return _parse_json_access_line(record, line, source_path, line_number)
     match = _ACCESS_RE.match(line)
     if not match:
         return _fallback_row("apache_access", line, source_path, line_number)
@@ -178,10 +284,50 @@ def _parse_access_line(line: str, source_path: str, line_number: int) -> dict:
         "bytes_sent": _int_or_none(groups.get("bytes")),
         "http_referrer": referrer,
         "http_user_agent": "" if groups.get("user_agent") == "-" else groups.get("user_agent") or "",
+        "x_forwarded_for": _real_client(groups.get("forwarded")),
+    }
+
+
+def _parse_nginx_error_line(match: re.Match[str], line: str, source_path: str, line_number: int) -> dict:
+    groups = match.groupdict()
+    context = {m.group("key"): m.group("value").strip().strip('"') for m in _NGINX_CONTEXT_RE.finditer(groups["message"])}
+    client_ip, client_port = _split_client(context.get("client"))
+    try:
+        # nginx writes the server's local time with no zone: read as UTC and say so.
+        timestamp = datetime.strptime(groups["timestamp"], "%Y/%m/%d %H:%M:%S").replace(tzinfo=timezone.utc).isoformat()
+    except ValueError:
+        timestamp = None
+    request = context.get("request", "")
+    request_match = _REQUEST_RE.match(request) if request else None
+    return {
+        "artifact_family": "linux_apache",
+        "artifact_type": "apache_error",
+        "source_file": source_path,
+        "line_number": line_number,
+        "timestamp": timestamp,
+        "timestamp_status": "assumed_utc" if timestamp else "missing",
+        "message": groups["message"][:2000],
+        "raw_excerpt": line[:2000],
+        "process": "nginx",
+        "pid": _int_or_none(groups.get("pid")),
+        "source_ip": client_ip,
+        "source_port": client_port,
+        "http_severity": (groups.get("severity") or "error").lower(),
+        "thread_id": _int_or_none(groups.get("tid")),
+        "web_server": "nginx",
+        "http_method": request_match.group("method") if request_match else "",
+        "url_path": request_match.group("path") if request_match else "",
+        "server_name": context.get("server", ""),
+        "upstream": context.get("upstream", ""),
+        "http_host": context.get("host", ""),
+        "http_referrer": context.get("referrer", ""),
     }
 
 
 def _parse_error_line(line: str, source_path: str, line_number: int) -> dict:
+    nginx_match = _NGINX_ERROR_RE.match(line)
+    if nginx_match:
+        return _parse_nginx_error_line(nginx_match, line, source_path, line_number)
     match = _ERROR_RE.match(line)
     if not match:
         return _fallback_row("apache_error", line, source_path, line_number)

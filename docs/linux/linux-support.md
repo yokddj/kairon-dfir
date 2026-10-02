@@ -106,13 +106,23 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 - **Shell history is not proof of execution.** A history line shows a command was typed, not that it ran or succeeded; a Sigma hit on it is a lead to verify.
 
 ### Other Text Logs (`linux_generic_log`)
-- Sources: any `.log`, `.out` or `.err` file (plain, rotated such as `app.log.1` / `app.log-20240101`, or compressed with gzip, bzip2 or xz) under `/var/log`, `/var/lib/docker/containers`, `/var/www`, `/opt`, `/srv`, `/usr/local`, `/home`, `/root` or `/tmp`; plus `.txt` files and a short list of well-known extensionless logs (`dmesg`, `debug`, `daemon`, `mail`, `ufw`...) directly under `/var/log`. Typical finds: nginx, fail2ban, ufw, Docker container logs and application logs.
+- Sources: any `.log`, `.out` or `.err` file (plain, rotated such as `app.log.1` / `app.log-20240101`, or compressed with gzip, bzip2 or xz) under `/var/log`, `/var/lib/docker/containers`, `/var/www`, `/opt`, `/srv`, `/usr/local`, `/home`, `/root` or `/tmp`; plus `.txt` files and a short list of well-known extensionless logs (`dmesg`, `debug`, `daemon`, `mail`, `ufw`...) directly under `/var/log`. Typical finds: fail2ban, ufw, database, Docker container and application logs (Apache and nginx have their own parser, below).
 - Last resort: a file is only routed here after every dedicated parser (auth, syslog, audit, Apache, Exim, packages, ...) has declined it, so it never changes how a recognised artifact is parsed.
 - Format: sniffed once per file from a sample of lines. Supported: JSON lines, ISO 8601 / `YYYY-MM-DD HH:MM:SS` / `YYYY/MM/DD HH:MM:SS`, BSD syslog, and Common/Combined Log Format. Lines that do not start a new entry (stack traces, wrapped output) are folded into the entry before them.
 - Fields: `timestamp`, `message`, `process`, `pid`, `severity`, `username`, `source_ip`, `host` (syslog format), `log_format`, `timestamp_status`, `source_file`, `line_number`. User, IP, process and severity are extracted heuristically from the text; the original line is always kept.
 - Timestamps: `timestamp_status` says how far to trust the time: `ok` (explicit offset or epoch), `assumed_utc` (no timezone in the log, read as UTC), `assumed_year_utc` (syslog lines carry no year; the current year is assumed, rolling back a year if that would land in the future) or `missing` (undated; the line is still indexed and searchable). Dates before 1990 or more than a year ahead are rejected.
 - Limits: at most 256 MiB of text is read per file (the decompressed size for compressed logs); a truncated or damaged archive keeps what could be read and adds an explicit "log truncated" event. Binary files produce no events.
 - Limitations: heuristic extraction, not a schema-aware parser. A loose `.log` or `.txt` uploaded on its own, with no Linux path around it, is not routed here.
+
+### Web Server Logs: Apache and nginx (`linux_apache`)
+- Sources: `/var/log/apache2/`, `/var/log/httpd/` and `/var/log/nginx/` access and error logs, including per-site files (`shop.access.log`, `site-error.log`) and rotated or compressed copies.
+- Access formats: Common/Combined Log Format (the default for both servers) and JSON lines, as written by an nginx `log_format ... escape=json` (field names such as `remote_addr`, `request`, `status`, `http_user_agent`, `time_iso8601` are recognised).
+- Error formats: the Apache error log and the nginx error log, from which `client`, `server`, `request`, `upstream` and `host` are extracted.
+- Fields: `timestamp`, `source_ip`, `username`, `http_method`, `url_path` (query string included), `http_status`, `bytes_sent`, `http_referrer`, `http_user_agent`, `web_server` (`apache` or `nginx`, taken from the path and left blank when the path does not say), `x_forwarded_for`, and for nginx errors `server_name`, `upstream` and `http_host`.
+- Behind a proxy or load balancer, `source_ip` is the proxy that connected. When the access log carries an `X-Forwarded-For` value as a trailing quoted field, the first valid address in it is kept in `x_forwarded_for` as the original client; any other trailing quoted value (a request time, `-`, text) is ignored.
+- Request lines are decoded passively (percent-decoding and printable base64) to flag web-shell and reverse-shell indicators in `suspicious_url_indicators`. Nothing is executed or fetched.
+- Timestamps: access logs carry their own offset. The nginx error log carries none, so it is read as UTC and marked `timestamp_status: assumed_utc`.
+- Limitations: custom `log_format` layouts other than the ones above fall back to an undated line with the original text; Sigma `webserver` rules (W3C field names such as `cs-uri-query`) are not mapped yet.
 
 ### Linux Audit (`linux_audit`)
 - Sources: `/var/log/audit/audit.log`

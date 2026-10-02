@@ -58,7 +58,7 @@ _LINUX_ARTIFACT_MAP: dict[str, tuple[str, str, str]] = {
 }
 
 _APACHE_LOG_RE = re.compile(
-    r"(^|/)var/log/(apache2|httpd)/(?P<name>[^/]*(?:access|error)(?:[._-]log|\.log)[^/]*)$",
+    r"(^|/)var/log/(apache2|httpd|nginx)/(?P<name>[^/]*(?:access|error)(?:[._-]log|\.log)[^/]*)$",
     re.IGNORECASE,
 )
 _EXIM_LOG_RE = re.compile(
