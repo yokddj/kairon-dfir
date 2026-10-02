@@ -49,7 +49,7 @@ from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, close_all_sessions, sessionmaker
 
 from app.api.routes_memory_recovery import require_admin_recovery_enabled
 from app.cli import memory_symbols
@@ -109,7 +109,8 @@ def session_factory() -> Iterator[sessionmaker]:
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, future=True)
     yield factory
-    factory.close_all()
+    close_all_sessions()
+    engine.dispose()
 
 
 @pytest.fixture()
