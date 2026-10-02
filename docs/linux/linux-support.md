@@ -108,7 +108,7 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 - **Shell history is not proof of execution.** A history line shows a command was typed, not that it ran or succeeded; a Sigma hit on it is a lead to verify.
 
 ### Other Text Logs (`linux_generic_log`)
-- Sources: any `.log`, `.out` or `.err` file (plain, rotated such as `app.log.1` / `app.log-20240101`, or compressed with gzip, bzip2 or xz) under `/var/log`, `/var/lib/docker/containers`, `/var/www`, `/opt`, `/srv`, `/usr/local`, `/home`, `/root` or `/tmp`; plus `.txt` files and a short list of well-known extensionless logs (`dmesg`, `debug`, `daemon`, `mail`, `ufw`...) directly under `/var/log`. Typical finds: fail2ban, database, Docker container, cloud-init and application logs (Apache and nginx have their own parser, below).
+- Sources: any `.log`, `.out` or `.err` file (plain, rotated such as `app.log.1` / `app.log-20240101`, or compressed with gzip, bzip2 or xz) under `/var/log`, `/var/lib/docker/containers`, `/var/www`, `/opt`, `/srv`, `/usr/local`, `/home`, `/root` or `/tmp`; plus `.txt` files and a short list of well-known extensionless logs (`dmesg`, `debug`, `daemon`, `mail`, `ufw`...) directly under `/var/log`. Typical finds: database, Docker container, cloud-init and application logs (Apache and nginx have their own parser, below).
 - Last resort: a file is only routed here after every dedicated parser (auth, syslog, audit, Apache, Exim, packages, ...) has declined it, so it never changes how a recognised artifact is parsed.
 - Format: sniffed once per file from a sample of lines. Supported: JSON lines, ISO 8601 / `YYYY-MM-DD HH:MM:SS` / `YYYY/MM/DD HH:MM:SS`, BSD syslog, and Common/Combined Log Format. Lines that do not start a new entry (stack traces, wrapped output) are folded into the entry before them.
 - Fields: `timestamp`, `message`, `process`, `pid`, `severity`, `username`, `source_ip`, `host` (syslog format), `log_format`, `timestamp_status`, `source_file`, `line_number`. User, IP, process and severity are extracted heuristically from the text; the original line is always kept.
@@ -125,6 +125,14 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 - Request lines are decoded passively (percent-decoding and printable base64) to flag web-shell and reverse-shell indicators in `suspicious_url_indicators`. Nothing is executed or fetched.
 - Timestamps: access logs carry their own offset. The nginx error log carries none, so it is read as UTC and marked `timestamp_status: assumed_utc`.
 - Limitations: custom `log_format` layouts other than the ones above fall back to an undated line with the original text; Sigma `webserver` rules (W3C field names such as `cs-uri-query`) are not mapped yet.
+
+### fail2ban (`linux_fail2ban`)
+- Sources: `/var/log/fail2ban.log`, including rotated and compressed copies.
+- Why it matters: fail2ban bans an address after repeated failures against a service, so its log is a ready-made record of who attacked the host, which service (the *jail*, e.g. `sshd`) they hit, and when they were banned and released.
+- Events (`event_action`): `found` (a failed attempt was detected), `ban`, `unban`, `restore_ban` (a ban re-applied after a restart), `already_banned`, `ignore`, `jail_started`, `jail_stopped`, `jail_configured`, and `log` for anything else.
+- Fields: `timestamp`, `severity`, `jail`, `source_ip` (the address concerned; IPv4 and IPv6), `event_action`, `component`, `pid` (absent in older releases, which are still parsed), `message`. The address is also placed on `network.source_ip`.
+- Timestamps: fail2ban writes the server's local time with no zone, so it is read as UTC and marked `timestamp_status: assumed_utc`. On a `found` line the time of the failed attempt itself is only in the message; the row's time is when fail2ban logged it.
+- Limitations: lines that do not follow the fail2ban layout are kept undated rather than dropped. The jail and filter configuration (`/etc/fail2ban`) is not parsed.
 
 ### Linux Audit (`linux_audit`)
 - Sources: `/var/log/audit/audit.log`
