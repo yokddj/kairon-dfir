@@ -3749,6 +3749,12 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["apache_module"] = row.get("apache_module", "")
     linux_data["web_server"] = row.get("web_server", "")
     linux_data["jail"] = row.get("jail", "")
+    linux_data["library_path"] = row.get("library_path", "")
+    linux_data["pam_type"] = row.get("pam_type", "")
+    linux_data["pam_control"] = row.get("pam_control", "")
+    linux_data["pam_module"] = row.get("pam_module", "")
+    linux_data["pam_args"] = row.get("pam_args", "")
+    linux_data["suspicious_indicators"] = row.get("suspicious_indicators") or []
     linux_data["component"] = row.get("component", "")
     # Netfilter packet fields (see app.ingest.linux.netfilter).
     linux_data["firewall_action"] = row.get("firewall_action", "")
@@ -3827,6 +3833,12 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         if linux_data.get("http_status") is not None:
             doc["event"]["outcome"] = "failure" if int(linux_data["http_status"]) >= 400 else "success"
         doc["title"] = linux_data.get("message") or f"{(linux_data.get('web_server') or 'web server').capitalize()} log event"
+    elif family == "linux_persistence":
+        kind = linux_data.get("artifact_type") or "persistence"
+        doc["event"]["type"] = kind
+        doc["event"]["action"] = f"persistence_{kind}"
+        detail = linux_data.get("library_path") or linux_data.get("pam_module") or linux_data.get("message") or ""
+        doc["title"] = f"{kind.replace('_', ' ')}: {str(detail)[:120]}"
     elif family == "linux_fail2ban":
         action = linux_data.get("event_action") or "log"
         doc["event"]["type"] = "fail2ban"
@@ -3886,6 +3898,16 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
             event_severity = "medium"
         elif apache_severity in {"warn", "warning"}:
             event_severity = "low"
+        else:
+            event_severity = "info"
+    elif family == "linux_persistence":
+        # A flagged line is a lead for review, never a confirmed detection. Any entry in
+        # ld.so.preload is unusual in itself; an unusual path there is worse.
+        indicators = set(linux_data.get("suspicious_indicators") or [])
+        if "unusual_preload_path" in indicators:
+            event_severity = "high"
+        elif indicators:
+            event_severity = "medium"
         else:
             event_severity = "info"
     elif family == "linux_apache" and linux_data.get("suspicious_url_indicators"):
