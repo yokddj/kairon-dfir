@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+from functools import lru_cache
 from collections import Counter
 from collections.abc import Iterable
 
@@ -47,6 +48,9 @@ SIGMA_FIELD_MAP = {
     # product: each is mapped to the field the audit parser populates and the
     # index declares. Not mapped, because nothing here carries them: unit
     # (systemd), LogonId and Initiated (Windows).
+    # Pseudo-field for keyword-only selections (a bare list of strings, searched in the
+    # event text). The leading underscore keeps it from ever colliding with a real field.
+    "_keywords": ["message", "search_text"],
     "type": ["linux.audit_type"],
     "exe": ["process.executable", "linux.exe"],
     "key": ["linux.audit_key"],
@@ -118,6 +122,19 @@ SIGMA_CATEGORY_EVENT_TYPE_HINTS = {
     "image_load": ["image_load", "image_loaded", "sysmon_image_loaded"],
     "pipe_created": ["pipe_created", "named_pipe_created", "sysmon_pipe_created"],
     "powershell": ["powershell", "script_block", "powershell_script_block"],
+}
+# Linux logsource services -> the artifact types that can carry that service's records.
+# Keyword rules search free text, so without this a `service: sshd` rule would be tested
+# against every Linux event. Services not listed are left unrestricted. Generic text
+# logs are allowed wherever the service is a plain-text log, since a rotated or renamed
+# copy lands there.
+LINUX_SERVICE_ARTIFACT_TYPES = {
+    "auth": {"linux_auth", "linux_syslog", "linux_journal", "linux_generic_log"},
+    "sshd": {"linux_auth", "linux_syslog", "linux_journal", "linux_generic_log"},
+    "sudo": {"linux_auth", "linux_syslog", "linux_journal", "linux_generic_log"},
+    "syslog": {"linux_syslog", "linux_journal", "linux_generic_log"},
+    "cron": {"linux_cron", "linux_syslog", "linux_journal", "linux_generic_log"},
+    "auditd": {"linux_audit"},
 }
 SIGMA_FIELD_CATEGORY_HINTS = {
     "process.command_line": "process_creation",
@@ -260,11 +277,125 @@ def _iter_selection_blocks(selection: object) -> list[dict]:
     return []
 
 
+KEYWORD_PSEUDO_FIELD = "_keywords"
+MAX_KEYWORDS_PER_SELECTION = 200
+MIN_KEYWORD_LITERAL_CHARS = 3
+_MIN_KEYWORD_RUN_CHARS = 2
+_KEYWORD_CANDIDATE_RUNS = 3
+
+
+def _is_keyword_selection(selection: object) -> bool:
+    """A Sigma keyword selection: a non-empty list of bare strings/numbers (no field names)."""
+    return (
+        isinstance(selection, list)
+        and bool(selection)
+        and all(isinstance(item, (str, int, float)) and not isinstance(item, bool) for item in selection)
+    )
+
+
+def _keywords_supported(rule_data: dict) -> bool:
+    """Keyword selections run only for ``logsource: product: linux``.
+
+    A keyword rule searches free text, so it is only meaningful against the product it was
+    written for. Enabling it everywhere would arm rules for products Kairon has no
+    parser for (network devices, JVM logs) against every case. Other products keep the
+    earlier behaviour exactly.
+    """
+    return str((rule_data.get("logsource") or {}).get("product") or "").strip().lower() == "linux"
+
+
+def _keyword_values(selection: object) -> list[str]:
+    return [str(item) for item in selection] if _is_keyword_selection(selection) else []
+
+
+def _keyword_tokens(value: str) -> list[tuple[str, str]]:
+    """Split a keyword into ``("lit", char)`` / ``("*", "")`` / ``("?", "")`` tokens.
+
+    Sigma wildcards are ``*`` and ``?``; a backslash makes the next wildcard literal.
+    """
+    tokens: list[tuple[str, str]] = []
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char == "\\" and index + 1 < len(value) and value[index + 1] in "*?\\":
+            tokens.append(("lit", value[index + 1]))
+            index += 2
+            continue
+        tokens.append((char, "") if char in "*?" else ("lit", char))
+        index += 1
+    return tokens
+
+
+@lru_cache(maxsize=2048)
+def _keyword_regex(value: str) -> re.Pattern[str]:
+    """Case-insensitive substring match with Sigma ``*`` / ``?`` wildcards."""
+    parts = []
+    for kind, char in _keyword_tokens(value):
+        parts.append(".*" if kind == "*" else "." if kind == "?" else re.escape(char))
+    return re.compile("".join(parts), re.IGNORECASE | re.DOTALL)
+
+
+def _keyword_literal_segments(value: str) -> list[str]:
+    segments: list[str] = []
+    current: list[str] = []
+    for kind, char in _keyword_tokens(value):
+        if kind == "lit":
+            current.append(char)
+        else:
+            if current:
+                segments.append("".join(current))
+            current = []
+    if current:
+        segments.append("".join(current))
+    return segments
+
+
+def _keyword_alnum_runs(value: str) -> list[str]:
+    runs: list[str] = []
+    for segment in _keyword_literal_segments(value):
+        runs.extend(run for run in re.findall(r"[^\W_]+", segment) if len(run) >= _MIN_KEYWORD_RUN_CHARS)
+    return runs
+
+
+def keyword_selection_issue(values: list[str]) -> str | None:
+    """Why a keyword list cannot be run safely, or None.
+
+    A keyword with almost no literal text ("*", "a") matches nearly every event; a rule
+    made of those would appear to fire on everything, which is the failure keyword-only
+    detections were refused for in the first place.
+    """
+    if not values:
+        return "empty_keyword"
+    if len(values) > MAX_KEYWORDS_PER_SELECTION:
+        return "too_many_keywords"
+    for value in values:
+        literal = sum(len(segment) for segment in _keyword_literal_segments(value))
+        if literal < MIN_KEYWORD_LITERAL_CHARS or not _keyword_alnum_runs(value):
+            return "keyword_too_broad"
+    return None
+
+
+def _keyword_candidate_clause(value: str) -> dict:
+    """OpenSearch clause matching a superset of the events a keyword can match.
+
+    ``search_text`` is an analysed text field, so a substring test cannot be pushed down
+    directly. Every literal alphanumeric run of the keyword must appear inside some token
+    of any event that contains the keyword, so requiring a wildcard on each of the longest
+    runs never excludes a true match; the exact test happens afterwards, in memory.
+    """
+    runs = sorted(dict.fromkeys(run.lower() for run in _keyword_alnum_runs(value)), key=len, reverse=True)[:_KEYWORD_CANDIDATE_RUNS]
+    return {"bool": {"must": [{"wildcard": {"search_text": {"value": f"*{run}*", "case_insensitive": True}}} for run in runs]}}
+
+
 def extract_sigma_detection_fields(rule_data: dict) -> list[str]:
     detection = dict(rule_data.get("detection") or {})
+    keywords_enabled = _keywords_supported(rule_data)
     fields: list[str] = []
     for selection_name, selection in detection.items():
         if selection_name == "condition":
+            continue
+        if keywords_enabled and _is_keyword_selection(selection):
+            fields.append(KEYWORD_PSEUDO_FIELD)
             continue
         for block in _iter_selection_blocks(selection):
             for sigma_field in block.keys():
@@ -275,10 +406,11 @@ def extract_sigma_detection_fields(rule_data: dict) -> list[str]:
 
 def _sigma_detection_block_names(rule_data: dict) -> list[str]:
     detection = dict(rule_data.get("detection") or {})
+    keywords_enabled = _keywords_supported(rule_data)
     return [
         str(name)
         for name, selection in detection.items()
-        if name != "condition" and isinstance(selection, dict) and selection
+        if name != "condition" and ((isinstance(selection, dict) and selection) or (keywords_enabled and _is_keyword_selection(selection)))
     ]
 
 
@@ -471,6 +603,16 @@ def analyze_sigma_engine_compatibility(rule_data: dict) -> dict:
         primary_status = "unmapped_field"
         reason = ",".join(unmapped_fields)
 
+    for selection_name, selection in dict(rule_data.get("detection") or {}).items():
+        if selection_name == "condition" or not _keywords_supported(rule_data) or not _is_keyword_selection(selection):
+            continue
+        keyword_issue = keyword_selection_issue(_keyword_values(selection))
+        if keyword_issue:
+            unsupported_features.append(keyword_issue)
+            if primary_status == "executable_by_current_engine":
+                primary_status = keyword_issue
+                reason = keyword_issue
+
     unsupported_modifiers = _detect_unsupported_modifiers(rule_data)
     if unsupported_modifiers:
         unsupported_features.extend([f"unsupported_modifier:{modifier}" for modifier in unsupported_modifiers])
@@ -591,7 +733,22 @@ def compile_sigma_rule(rule_data: dict) -> dict:
     detection = dict(rule_data.get("detection") or {})
     selections: dict[str, list[dict[str, object]]] = {}
     for selection_name, selection in detection.items():
-        if selection_name == "condition" or not isinstance(selection, dict):
+        if selection_name == "condition":
+            continue
+        if _keywords_supported(rule_data) and _is_keyword_selection(selection):
+            mapped_fields, _ = _mapped_sigma_fields(KEYWORD_PSEUDO_FIELD)
+            selections[str(selection_name)] = [
+                {
+                    "sigma_field": KEYWORD_PSEUDO_FIELD,
+                    "base_field": KEYWORD_PSEUDO_FIELD,
+                    "mapped_fields": mapped_fields,
+                    "modifier": "keyword",
+                    "expected": _keyword_values(selection),
+                    "used_fallback": False,
+                }
+            ]
+            continue
+        if not isinstance(selection, dict):
             continue
         compiled_selection: list[dict[str, object]] = []
         for sigma_field, expected in selection.items():
@@ -1078,6 +1235,10 @@ def document_matches_sigma_logsource(logsource: dict, document: dict) -> tuple[b
         artifact_type = str(_get_nested_value(document, "artifact.type") or "").strip().lower()
         if artifact_type and artifact_type not in {"windows_event", "evtx_raw"}:
             return False, "logsource_mismatch"
+    if product == "linux" and service in LINUX_SERVICE_ARTIFACT_TYPES:
+        artifact_type = str(_get_nested_value(document, "artifact.type") or "").strip().lower()
+        if artifact_type.startswith("linux_") and artifact_type not in LINUX_SERVICE_ARTIFACT_TYPES[service]:
+            return False, "logsource_mismatch"
     if service:
         hints = SIGMA_SERVICE_CHANNEL_HINTS.get(service, [])
         channel = _document_channel(document)
@@ -1201,6 +1362,8 @@ def _match_scalar(actual_values: list[str], expected: object, modifier: str | No
     expected_values = [str(item) for item in _flatten_values(expected)]
     if modifier == "all":
         return all(_match_scalar(actual_values, item, None) for item in expected_values)
+    if modifier == "keyword":
+        return any(_keyword_regex(exp).search(actual) for exp in expected_values for actual in actual_values)
     if modifier == "contains":
         return any(exp.lower() in actual.lower() for exp in expected_values for actual in actual_values)
     if modifier == "startswith":
@@ -1212,7 +1375,14 @@ def _match_scalar(actual_values: list[str], expected: object, modifier: str | No
     return any(actual.lower() == exp.lower() for exp in expected_values for actual in actual_values)
 
 
-def _match_selection(selection_name: str, selection: object, document: dict) -> tuple[bool, dict[str, object], list[str]]:
+def _match_selection(selection_name: str, selection: object, document: dict, *, keywords_enabled: bool = False) -> tuple[bool, dict[str, object], list[str]]:
+    if keywords_enabled and _is_keyword_selection(selection):
+        keywords = _keyword_values(selection)
+        for mapped_field in _mapped_sigma_fields(KEYWORD_PSEUDO_FIELD)[0]:
+            actual_values = _stringify_values(_get_nested_value(document, mapped_field))
+            if _match_scalar(actual_values, keywords, "keyword"):
+                return True, {selection_name: {"mapped_field": mapped_field, "expected": keywords[:5], "actual": actual_values[:1]}}, []
+        return False, {}, []
     if not isinstance(selection, dict):
         return False, {}, [f"{selection_name} is not a valid mapping"]
     matched_fields: dict[str, object] = {}
@@ -1331,7 +1501,7 @@ def evaluate_sigma_rule(rule_data: dict, document: dict) -> dict:
         aggregate_quality: list[str] = []
         for selection_name in expanded:
             if selection_name not in selection_results:
-                selection_results[selection_name] = _match_selection(selection_name, detection.get(selection_name), document)
+                selection_results[selection_name] = _match_selection(selection_name, detection.get(selection_name), document, keywords_enabled=_keywords_supported(rule_data))
             matched, fields, quality = selection_results[selection_name]
             if matched:
                 aggregate_match = True
@@ -1490,11 +1660,17 @@ def build_sigma_query(rule_data: dict) -> dict:
 
 def build_sigma_query_from_compiled(compiled_rule: dict) -> dict:
     should: list[dict] = []
+    keyword_should: list[dict] = []
     for clauses in dict((compiled_rule.get("compiled_query") or {}).get("selections") or {}).values():
         for clause in clauses or []:
             mapped_fields = [str(item) for item in (clause.get("mapped_fields") or [])]
             modifier = str(clause.get("modifier") or "") or None
             values = [str(item) for item in _flatten_values(clause.get("expected"))]
+            if modifier == "keyword":
+                # One superset clause per keyword, kept out of the 50-clause cap below:
+                # truncating them would silently drop keywords and miss real matches.
+                keyword_should.extend(_keyword_candidate_clause(value) for value in values)
+                continue
             alt_field, alt_names = basename_alternates(str(clause.get("base_field") or ""), modifier, values)
             for alt_name in alt_names:
                 should.append({"term": {alt_field: {"value": alt_name, "case_insensitive": True}}})
@@ -1512,7 +1688,7 @@ def build_sigma_query_from_compiled(compiled_rule: dict) -> dict:
                 elif modifier == "re" and values:
                     should.append({"regexp": {mapped_field: values[0]}})
     bool_query: dict[str, object] = {"must": []}
-    if should:
-        bool_query["should"] = should[:50]
+    if should or keyword_should:
+        bool_query["should"] = should[:50] + keyword_should
         bool_query["minimum_should_match"] = 1
     return {"query": {"bool": bool_query}}
