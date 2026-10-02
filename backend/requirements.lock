@@ -21,6 +21,7 @@ hexdump==3.3
 httptools==0.8.0
 idna==3.18
 iniconfig==2.3.0
+lz4==4.4.5
 olefile==0.47
 opensearch-protobufs==1.2.0
 opensearch-py==3.2.0
@@ -60,5 +61,6 @@ watchfiles==1.2.0
 websockets==16.0
 xpress_lz77==1.0.1
 yara-python==4.5.4
+zstandard==0.25.0
 
 # dfir-platform-backend is installed from local source during build

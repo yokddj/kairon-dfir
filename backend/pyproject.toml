@@ -35,6 +35,8 @@ dependencies = [
   "pytsk3>=20260702",
   "libewf-python>=20240506",
   "dissect.esedb>=3.18",
+  "zstandard>=0.22",
+  "lz4>=4.3",
 ]
 
 [project.optional-dependencies]

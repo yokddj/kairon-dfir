@@ -148,10 +148,18 @@ def _looks_like_generic_linux_log(path_str: str, name: str) -> bool:
     return _ROTATION_TAIL_RE.sub("", name) in _KNOWN_EXTENSIONLESS_LOGS
 
 
+# Binary systemd journals: /var/log/journal/<machine-id>/system.journal, user-<uid>.journal,
+# rotated system@<id>.journal, and the .journal~ left by an unclean shutdown. /run/log/journal
+# is the volatile (non-persistent) copy.
+_JOURNAL_BINARY_RE = re.compile(r"(^|/)(?:var|run)/log/journal/(?:[^/]+/)?[^/]+\.journal~?$", re.IGNORECASE)
+
+
 def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
     """Detect Linux artifact family, type, and parser from a path."""
     path_str = str(path).replace("\\", "/").lower()
     name = path_str.rsplit("/", 1)[-1]
+    if _JOURNAL_BINARY_RE.search(path_str):
+        return ("linux_journal", "journal_binary", "linux_journal_raw")
     apache_match = _APACHE_LOG_RE.search(path_str)
     if apache_match:
         apache_name = apache_match.group("name")
