@@ -132,6 +132,14 @@ PERFORMANCE_PROFILES = {
 }
 
 SETTING_META: dict[str, dict[str, Any]] = {
+    "AI_ASSISTANT": {
+        "category": "ai",
+        "description": "AI assistant provider configuration. API keys inside it are encrypted at rest.",
+        "requires_restart": False,
+        "restart_scope": "none",
+        "applies_immediately": True,
+        "value_type": "json",
+    },
     PERFORMANCE_PROFILE_KEY: {
         "category": "runtime",
         "description": "Named performance profile applied from the UI.",

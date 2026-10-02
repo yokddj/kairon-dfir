@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     bootstrap_admin_email: str = os.getenv("KAIRON_BOOTSTRAP_ADMIN_EMAIL", "")
     allowed_origins_env: str = os.getenv("KAIRON_ALLOWED_ORIGINS", "http://localhost:5173")
     csrf_secret: str = os.getenv("KAIRON_CSRF_SECRET", "CHANGE_ME_CSRF_SECRET")
+    # Seals AI provider API keys at rest (app.services.ai.crypto). Falls back
+    # to session_secret_key when unset so a fresh deployment works out of the
+    # box; rotating either secret invalidates the stored provider keys.
+    ai_secret_key: str = os.getenv("KAIRON_AI_SECRET_KEY", "")
     backend_max_upload_size: int = Field(default=34359738368)
     backend_upload_idle_timeout_seconds: int = 60
     # Sole authority for activating the Memory capability at application-composition

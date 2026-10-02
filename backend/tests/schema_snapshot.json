@@ -1,4 +1,24 @@
 {
+  "ai_conversations": [
+    "case_id",
+    "created_at",
+    "id",
+    "model",
+    "provider",
+    "title",
+    "updated_at",
+    "user_id"
+  ],
+  "ai_messages": [
+    "content",
+    "conversation_id",
+    "created_at",
+    "id",
+    "lookups",
+    "position",
+    "role",
+    "updated_at"
+  ],
   "app_activity_events": [
     "activity_type",
     "actor",

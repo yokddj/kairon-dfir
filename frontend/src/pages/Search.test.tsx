@@ -14,6 +14,8 @@ const getEventContextMock = vi.fn();
 const markEventMock = vi.fn();
 const deleteEventMarkingMock = vi.fn();
 const getCaseCapabilitiesMock = vi.fn();
+const getAiStatusMock = vi.fn();
+const translateNaturalLanguageSearchMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -26,6 +28,8 @@ vi.mock("../api/client", () => ({
     markEvent: (...args: unknown[]) => markEventMock(...args),
     deleteEventMarking: (...args: unknown[]) => deleteEventMarkingMock(...args),
     getCaseCapabilities: (...args: unknown[]) => getCaseCapabilitiesMock(...args),
+    getAiStatus: (...args: unknown[]) => getAiStatusMock(...args),
+    translateNaturalLanguageSearch: (...args: unknown[]) => translateNaturalLanguageSearchMock(...args),
   },
 }));
 
@@ -190,6 +194,9 @@ describe("Search page", () => {
     markEventMock.mockReset();
     deleteEventMarkingMock.mockReset();
     getCaseCapabilitiesMock.mockReset();
+    getAiStatusMock.mockReset();
+    translateNaturalLanguageSearchMock.mockReset();
+    getAiStatusMock.mockResolvedValue({ enabled: false, provider: null, model: null, hosting: null });
 
     // Platform options in the Search UI are registry-driven (see
     // registryFacetData.platform in Search.tsx), not derived from
@@ -560,6 +567,27 @@ describe("Search page", () => {
     const help = await screen.findByTestId("search-syntax-help");
     expect(within(help).getByText(/artifact\.type:ntfs risk_score>=70/i)).toBeInTheDocument();
     expect(within(help).getByText(/process\.name:powershell\.exe EncodedCommand/i)).toBeInTheDocument();
+  });
+
+  it("applies a natural-language translation into the real search box, then runs an ordinary search", async () => {
+    getAiStatusMock.mockResolvedValue({ enabled: true, provider: "openai", model: "gpt-4", hosting: "cloud" });
+    translateNaturalLanguageSearchMock.mockResolvedValue({ query: "process.name:powershell.exe" });
+    renderPage();
+    await screen.findByTestId("results-table");
+
+    await userEvent.click(await screen.findByRole("button", { name: /Ask in plain language/i }));
+    await userEvent.type(screen.getByPlaceholderText(/powershell downloads/i), "what did powershell do");
+    await userEvent.click(screen.getByRole("button", { name: /^Translate$/i }));
+
+    await waitFor(() => expect(translateNaturalLanguageSearchMock).toHaveBeenCalledWith("case-1", "what did powershell do"));
+    await waitFor(() => expect(screen.getByLabelText(/Search query/i)).toHaveValue("process.name:powershell.exe"));
+    await waitFor(() => expect(searchCaseMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ q: "process.name:powershell.exe" })));
+  });
+
+  it("does not offer plain-language search when no AI provider is configured", async () => {
+    renderPage();
+    await screen.findByTestId("results-table");
+    expect(screen.queryByRole("button", { name: /Ask in plain language/i })).not.toBeInTheDocument();
   });
 
   it("supports unified investigation page sizes from URL", async () => {

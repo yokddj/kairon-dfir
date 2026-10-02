@@ -357,3 +357,83 @@ def test_matched_event_ids_do_not_keep_unrelated_nodes():
     filtered = _filter_process_graph(graph, process_name="nope", matched_event_ids={"evt-1"})
 
     assert filtered["nodes"] == []
+
+
+# --- scoping a graph to a host ---------------------------------------------
+#
+# normalize_host_alias() lowercases, but host.name is a keyword field and a
+# term query on it is exact. "ws01" therefore never matched the indexed
+# "WS01", so scoping a process graph to any Windows host returned nothing.
+
+
+def _host_clauses(host: str) -> list[dict]:
+    from app.services.process_tree import _host_focus_filter
+
+    built = _host_focus_filter(host)
+    return (built or {}).get("bool", {}).get("should", [])
+
+
+def test_a_host_filter_never_uses_a_case_sensitive_term():
+    """A term query on a keyword field cannot match differently-cased names."""
+    clauses = _host_clauses("WS01")
+
+    assert clauses, "a host filter must be produced"
+    assert not any("term" in clause for clause in clauses), (
+        "term is case-sensitive on keyword fields; every host clause must be case-insensitive"
+    )
+
+
+def test_every_host_clause_is_case_insensitive():
+    for clause in _host_clauses("WS01"):
+        field, spec = next(iter(clause["wildcard"].items()))
+        assert spec["case_insensitive"] is True, field
+
+
+def test_the_bare_host_name_is_matched_not_only_a_suffixed_one():
+    """Only the "ws01.*" forms existed, so a bare "WS01" matched nothing."""
+    values = {
+        spec["value"]
+        for clause in _host_clauses("WS01")
+        for spec in clause["wildcard"].values()
+    }
+
+    assert "ws01" in values
+    assert "ws01.*" in values
+
+
+def test_a_fully_qualified_name_also_matches_its_short_form():
+    values = {
+        spec["value"]
+        for clause in _host_clauses("WS01.corp.example")
+        for spec in clause["wildcard"].values()
+    }
+
+    assert "ws01" in values
+    assert "ws01.corp.example" in values
+
+
+def test_both_host_fields_are_covered():
+    fields = {
+        field
+        for clause in _host_clauses("WS01")
+        for field in clause["wildcard"]
+    }
+
+    assert fields == {"host.name", "host.canonical"}
+
+
+def test_no_host_means_no_filter():
+    from app.services.process_tree import _host_focus_filter
+
+    assert _host_focus_filter(None) is None
+    assert _host_focus_filter("   ") is None
+
+
+def test_wildcard_characters_in_a_host_name_cannot_widen_the_match():
+    values = {
+        spec["value"]
+        for clause in _host_clauses("WS*01?")
+        for spec in clause["wildcard"].values()
+    }
+
+    assert all("*" not in value.rstrip(".*") and "?" not in value for value in values)

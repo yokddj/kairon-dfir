@@ -1404,6 +1404,14 @@ def _dedupe_events(events: list[dict]) -> list[dict]:
 
 
 def _host_focus_filter(host: str | None) -> dict | None:
+    """Match one host by name, however that name happens to be cased.
+
+    normalize_host_alias() lowercases, but host.name is a keyword field and a
+    term query on it is exact and case-sensitive, so "ws01" never matched the
+    indexed "WS01". Every Windows hostname is affected: scoping a process graph
+    to a host silently returned nothing at all. Case-insensitive equality is
+    expressed as a wildcard with no wildcard characters in it.
+    """
     normalized = normalize_host_alias(host)
     if not normalized:
         return None
@@ -1412,14 +1420,20 @@ def _host_focus_filter(host: str | None) -> dict | None:
         aliases.add(normalized.split(".", 1)[0])
     should: list[dict] = []
     for alias in sorted(aliases):
-        should.extend(
-            [
-                {"term": {"host.name": alias}},
-                {"term": {"host.canonical": alias}},
-                {"wildcard": {"host.name": {"value": f"{alias}.*", "case_insensitive": True}}},
-                {"wildcard": {"host.canonical": {"value": f"{alias}.*", "case_insensitive": True}}},
-            ]
-        )
+        # A hostname should never contain these, but a stray one would silently
+        # widen the match rather than fail, so they are neutralised.
+        literal = alias.replace("*", "").replace("?", "")
+        if not literal:
+            continue
+        for field in ("host.name", "host.canonical"):
+            should.extend(
+                [
+                    {"wildcard": {field: {"value": literal, "case_insensitive": True}}},
+                    {"wildcard": {field: {"value": f"{literal}.*", "case_insensitive": True}}},
+                ]
+            )
+    if not should:
+        return None
     return {"bool": {"should": should, "minimum_should_match": 1}}
 
 
