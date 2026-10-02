@@ -1564,6 +1564,11 @@ def ensure_case_index(case_id: str) -> str:
                                 "web_server": {"type": "keyword"},
                                 "x_forwarded_for": {"type": "keyword"},
                                 "http_host": {"type": "keyword"},
+                                "firewall_action": {"type": "keyword"},
+                                "destination_ip": {"type": "keyword"},
+                                "network_protocol": {"type": "keyword"},
+                                "interface_in": {"type": "keyword"},
+                                "interface_out": {"type": "keyword"},
                             }
                         },
                         "macos": {"type": "object", "enabled": True},
@@ -1813,6 +1818,11 @@ def ensure_case_index(case_id: str) -> str:
                                 "web_server": {"type": "keyword"},
                                 "x_forwarded_for": {"type": "keyword"},
                                 "http_host": {"type": "keyword"},
+                                "firewall_action": {"type": "keyword"},
+                                "destination_ip": {"type": "keyword"},
+                                "network_protocol": {"type": "keyword"},
+                                "interface_in": {"type": "keyword"},
+                                "interface_out": {"type": "keyword"},
                             }
                         },
                     }

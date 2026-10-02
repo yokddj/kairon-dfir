@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+from app.ingest.linux.netfilter import enrich_with_netfilter
+
 _MONTH_MAP = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
     "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
@@ -139,4 +141,6 @@ def parse_syslog(
                 "message": stripped[:2000],
                 "raw_excerpt": raw_excerpt,
             })
+    for row in results:
+        enrich_with_netfilter(row, str(row.get("message") or ""))
     return results

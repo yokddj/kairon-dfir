@@ -16,6 +16,8 @@ _LINUX_ARTIFACT_MAP: dict[str, tuple[str, str, str]] = {
     "syslog": ("linux_syslog", "syslog", "linux_syslog_raw"),
     "messages": ("linux_syslog", "syslog", "linux_syslog_raw"),
     "kern.log": ("linux_syslog", "kern_log", "linux_syslog_raw"),
+    "ufw.log": ("linux_syslog", "ufw_log", "linux_syslog_raw"),
+    "iptables.log": ("linux_syslog", "iptables_log", "linux_syslog_raw"),
     "audit.log": ("linux_audit", "audit_log", "linux_audit_raw"),
     ".bash_history": ("linux_shell_history", "bash_history", "linux_shell_raw"),
     ".zsh_history": ("linux_shell_history", "zsh_history", "linux_shell_raw"),

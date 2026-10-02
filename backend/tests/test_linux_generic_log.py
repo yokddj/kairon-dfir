@@ -28,7 +28,7 @@ GENERIC = ("linux_generic_log", "generic_log", "linux_generic_raw")
         "var/log/postgresql/postgresql-15-main.log",
         "var/log/mysql/error.log.2.gz",
         "var/log/fail2ban.log.2.gz",
-        "var/log/ufw.log",
+        "var/log/cloud-init-output.log",
         "var/log/dmesg.0",
         "var/log/notes.txt",
         "var/log/app/run.log-20240101",
