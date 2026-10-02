@@ -43,6 +43,9 @@ export function reasonLabel(reason: string): string {
   if (reason === "unsupported_correlation") return "Correlation rule (near / within / by)";
   if (reason === "unsupported_condition") return "Condition too complex to compile";
   if (reason === "compile_error") return "Rule did not compile";
+  if (reason === "keyword_only_detection") return "Free-text keyword rule (no field to query)";
+  if (reason === "keyword_selection_unsupported") return "Free-text keywords, only evaluated for Linux rules";
+  if (reason === "keyword_too_broad") return "Keyword too short or generic to search safely";
   return reason.replace(/_/g, " ");
 }
 

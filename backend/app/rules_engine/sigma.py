@@ -613,6 +613,23 @@ def analyze_sigma_engine_compatibility(rule_data: dict) -> dict:
                 primary_status = keyword_issue
                 reason = keyword_issue
 
+    # Outside Linux a keyword selection is not evaluated. Compiling the rest of the rule
+    # anyway made the keyword part vanish -- the condition then read as if it were always
+    # true -- so "selection and keywords" ran as just "selection" and
+    # "keywords and not filter" as "not filter", firing far more broadly than the rule
+    # was written to. Refuse instead of running a weaker rule than the author wrote.
+    if not _keywords_supported(rule_data):
+        ignored_keyword_selections = sorted(
+            str(name)
+            for name, selection in dict(rule_data.get("detection") or {}).items()
+            if name != "condition" and _is_keyword_selection(selection)
+        )
+        if ignored_keyword_selections:
+            unsupported_features.append("keyword_selection_unsupported")
+            if primary_status == "executable_by_current_engine":
+                primary_status = "keyword_selection_unsupported"
+                reason = f"free-text keyword selection ({', '.join(ignored_keyword_selections)}) is only evaluated for logsource product linux"
+
     unsupported_modifiers = _detect_unsupported_modifiers(rule_data)
     if unsupported_modifiers:
         unsupported_features.extend([f"unsupported_modifier:{modifier}" for modifier in unsupported_modifiers])

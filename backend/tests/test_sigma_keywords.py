@@ -267,3 +267,61 @@ def test_keyword_rules_for_other_products_keep_their_earlier_behaviour():
         rule["logsource"] = logsource
         compiled = compile_sigma_rule(rule)
         assert compiled["compile_status"] == "skipped_keyword_only_detection", (logsource, compiled["compile_status"])
+
+
+def test_rule_mixing_fields_and_keywords_is_refused_outside_linux_not_run_weakened():
+    """"selection and keywords" must not silently run as just "selection"."""
+    windows_rule = """
+title: Mixed field and keyword selection
+logsource: {product: windows, service: system}
+detection:
+  selection:
+    EventID: 7045
+  keywords:
+    - 'zerologon exploit marker'
+  condition: selection and keywords
+"""
+    compiled = compile_sigma_rule(_rule(windows_rule))
+    assert compiled["compile_status"] == "skipped_keyword_selection_unsupported"
+    assert "linux" in compiled["engine_compatibility"]["engine_reason"]
+
+
+def test_negated_keyword_selection_is_also_refused_outside_linux():
+    rule = """
+title: Keywords and not a filter
+logsource: {product: windows}
+detection:
+  keywords:
+    - 'suspicious marker'
+  filter:
+    User: 'SYSTEM'
+  condition: keywords and not filter
+"""
+    assert compile_sigma_rule(_rule(rule))["compile_status"] == "skipped_keyword_selection_unsupported"
+
+
+def test_the_same_mixed_rule_is_supported_for_linux():
+    rule = """
+title: Mixed field and keyword selection
+logsource: {product: linux, service: auditd}
+detection:
+  selection:
+    type: 'EXECVE'
+  keywords:
+    - 'zerologon exploit marker'
+  condition: selection and keywords
+"""
+    assert compile_sigma_rule(_rule(rule))["compile_status"] == "compiled"
+
+
+def test_rules_without_a_keyword_selection_are_unaffected_outside_linux():
+    rule = """
+title: Plain field rule
+logsource: {product: windows, service: system}
+detection:
+  selection:
+    EventID: 7045
+    User: 'SYSTEM'
+  condition: selection
+"""
+    assert compile_sigma_rule(_rule(rule))["compile_status"] == "compiled"
