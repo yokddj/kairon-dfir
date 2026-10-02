@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from app.ingest.linux.persistence import persistence_kind
+
 _LINUX_ARTIFACT_MAP: dict[str, tuple[str, str, str]] = {
     "journal.export": ("linux_journal", "journal_export", "linux_journal_raw"),
     "journal.json": ("linux_journal", "journal_json", "linux_journal_raw"),
@@ -163,6 +165,11 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
     name = path_str.rsplit("/", 1)[-1]
     if _JOURNAL_BINARY_RE.search(path_str):
         return ("linux_journal", "journal_binary", "linux_journal_raw")
+    # Persistence/rootkit-hook config is claimed before the filename table below: files such as
+    # /etc/pam.d/passwd or /etc/pam.d/group must not be mistaken for /etc/passwd and /etc/group.
+    persistence_type = persistence_kind(path_str)
+    if persistence_type:
+        return ("linux_persistence", persistence_type, "linux_persistence_raw")
     apache_match = _APACHE_LOG_RE.search(path_str)
     if apache_match:
         apache_name = apache_match.group("name")
