@@ -18,7 +18,7 @@ SUPPORTED_ARTIFACTS: dict[str, dict[str, str]] = {
     "syslog": {"label": "syslog", "family": "linux_syslog"},
     "generic_log": {"label": "other text logs", "family": "linux_generic_log"},
     "audit_log": {"label": "audit.log", "family": "linux_audit"},
-    "apache": {"label": "Apache logs", "family": "linux_apache"},
+    "apache": {"label": "Web server logs (Apache, nginx)", "family": "linux_apache"},
     "exim": {"label": "Exim logs", "family": "linux_exim"},
     "shell_history": {"label": "shell history", "family": "linux_shell_history"},
     "cron": {"label": "cron", "family": "linux_cron"},

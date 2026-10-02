@@ -426,7 +426,7 @@ ARTIFACT_REGISTRY: dict[str, dict[str, Any]] = {
     },
     "linux_apache": {
         "id": "linux_apache",
-        "label": "Apache Logs",
+        "label": "Web Server Logs (Apache, nginx)",
         "platforms": ["linux"],
         "aliases": [],
         "category": "logs",
