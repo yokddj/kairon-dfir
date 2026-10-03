@@ -364,7 +364,7 @@ function MarkingBadge({ marking }: { marking: EventMarking | null }) {
   return <ResultBadge tone={markingTone(marking.status)}>{markingLabel(marking.status)}</ResultBadge>;
 }
 
-function summarizeResult(result: SearchV2Result): EntitySummary {
+export function summarizeResult(result: SearchV2Result): EntitySummary {
   const raw = asRecord(result.raw);
   const file = asRecord(raw.file);
   const process = asRecord(raw.process);
@@ -378,7 +378,12 @@ function summarizeResult(result: SearchV2Result): EntitySummary {
   const event = asRecord(raw.event);
   const filePath = asString(file.path || download.target_path || cloud.local_path || object.path || object.name);
   const domain = asString(dns.domain || dns.query || asRecord(dns.question).name || url.domain || url.full || download.url);
-  const ip = asString(dns.ip || asRecord(raw.network).destination_ip || asRecord(raw.network).source_ip);
+  // On Linux network events (web server, firewall, authentication, fail2ban) the address that
+  // matters is the remote one that connected or attacked, which the parsers put in source_ip;
+  // elsewhere the destination remains the more telling end.
+  const isLinuxEvent = asString(result.artifact_type).startsWith("linux_");
+  const networkRecord = asRecord(raw.network);
+  const ip = asString(dns.ip || (isLinuxEvent ? networkRecord.source_ip || networkRecord.destination_ip : networkRecord.destination_ip || networkRecord.source_ip));
   const processName = asString(process.name || process.path);
   const processCommandLine = asString(process.command_line);
   const registryPath = asString(asRecord(raw.registry).path);
@@ -387,7 +392,16 @@ function summarizeResult(result: SearchV2Result): EntitySummary {
   const keyEntity = fullEntity;
   const rawCompactMessage = asString(result.summary || event.message || result.title);
   const label = messageLabel(rawCompactMessage, humanizeToken(asString(result.event_type || asRecord(raw.event).action || asRecord(raw.event).type || result.title || "Event")));
-  const compactMessage = looksPreTruncated(rawCompactMessage) && fullEntity ? `${label}: ${fullEntity}` : rawCompactMessage;
+  const truncatedSafeMessage = looksPreTruncated(rawCompactMessage) && fullEntity ? `${label}: ${fullEntity}` : rawCompactMessage;
+  // A Linux parser can replace the event message with a short label ("SSH login failed") while the
+  // log line it came from carries the user, address and port. Keep the original text visible so the
+  // snippet never hides what the log actually said.
+  const originalLogLine = isLinuxEvent ? asString(raw.message) : "";
+  const compactMessage = !truncatedSafeMessage && originalLogLine
+    ? originalLogLine
+    : originalLogLine && !originalLogLine.includes(truncatedSafeMessage) && !truncatedSafeMessage.includes(originalLogLine)
+    ? `${truncatedSafeMessage} \u2014 ${originalLogLine}`
+    : truncatedSafeMessage;
   return {
     keyEntity,
     primaryPath: filePath,

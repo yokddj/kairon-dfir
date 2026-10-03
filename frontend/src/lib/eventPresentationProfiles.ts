@@ -3,6 +3,8 @@ export type PresentationColumn = {
   label: string;
   paths: string[];
   defaultVisible?: boolean;
+  /** When set, the column is shown by default only if this returns true for the rows on screen. */
+  visibleWhen?: (items: Record<string, unknown>[]) => boolean;
   format?: (value: unknown, item: Record<string, unknown>) => string;
 };
 
@@ -198,15 +200,452 @@ const eximProfile: PresentationProfile = {
   ],
 };
 
+
+// ---------------------------------------------------------------------------------------------
+// Linux log families
+//
+// Every profile below carries a Message column built from the log's own text, so the content
+// that matters is always on screen even when no parser extracted a dedicated field for it
+// (a generic text log is the extreme case: the message *is* the event).
+// ---------------------------------------------------------------------------------------------
+
+const MESSAGE_PATHS = ["message", "event.message", "raw_excerpt", "linux.message", "title"];
+
+const messageColumn: PresentationColumn = { key: "message", label: "Message", paths: MESSAGE_PATHS };
+
+const sourceFileColumns: PresentationColumn[] = [
+  { key: "source_file", label: "Source File", paths: ["source_file", "artifact.source_path", "linux.source_file"], defaultVisible: false },
+  { key: "line_number", label: "Line Number", paths: ["linux.line_number"], defaultVisible: false },
+];
+
+const TIME_QUALITY_LABELS: Record<string, string> = {
+  ok: "Exact",
+  assumed_utc: "Assumed UTC (log has no timezone)",
+  assumed_year_utc: "Assumed year and UTC (syslog has neither)",
+  missing: "No time in the log",
+};
+
+function timeQualityLabel(value: unknown): string {
+  const key = String(value);
+  return TIME_QUALITY_LABELS[key] ?? key;
+}
+
+/** Shown by default only when some row on screen has a time that is not exact. */
+const timeQualityColumn: PresentationColumn = {
+  key: "time_quality",
+  label: "Time Quality",
+  paths: ["linux.timestamp_status"],
+  format: (value) => timeQualityLabel(value),
+  visibleWhen: (items) => items.some((item) => {
+    const status = firstPresent(item, ["linux.timestamp_status"]);
+    return isPresent(status) && String(status) !== "ok";
+  }),
+};
+
+const hostColumn: PresentationColumn = { key: "host", label: "Host", paths: ["host.name", "host.hostname", "linux.hostname"] };
+const severityColumn: PresentationColumn = { key: "severity", label: "Severity", paths: ["event.severity"] };
+const timestampColumn: PresentationColumn = { key: "timestamp", label: "Timestamp", paths: ["@timestamp"] };
+
+const pidColumn: PresentationColumn = { key: "pid", label: "PID", paths: ["linux.pid", "process.pid"], defaultVisible: false };
+
+const timeDetail: DetailSection = {
+  title: "Time",
+  fields: [
+    { label: "Timestamp", paths: ["@timestamp"] },
+    { label: "Time quality", paths: ["linux.timestamp_status"], format: (value) => timeQualityLabel(value) },
+  ],
+};
+
+const FIREWALL_PROFILE_SHARE = 0.3;
+
+const linuxSyslogProfile: PresentationProfile = {
+  id: "linux_syslog",
+  label: "Syslog",
+  columns: [
+    timestampColumn,
+    hostColumn,
+    { key: "process", label: "Process", paths: ["linux.process", "process.name"] },
+    severityColumn,
+    messageColumn,
+    timeQualityColumn,
+    pidColumn,
+    { key: "user", label: "User", paths: ["user.name", "linux.username"], defaultVisible: false },
+    { key: "source_ip", label: "Source IP", paths: ["network.source_ip", "linux.source_ip"], defaultVisible: false },
+    { key: "destination_ip", label: "Destination IP", paths: ["network.destination_ip", "linux.destination_ip"], defaultVisible: false },
+    { key: "verdict", label: "Firewall Verdict", paths: ["linux.firewall_action"], defaultVisible: false },
+    { key: "type", label: "Event Type", paths: ["event.type"], defaultVisible: false },
+    ...sourceFileColumns,
+  ],
+  details: [eventSection, timeDetail, networkSection, provenanceSection, rawSection],
+};
+
+const firewallDetail: DetailSection = {
+  title: "Firewall packet",
+  fields: [
+    { label: "Verdict", paths: ["linux.firewall_action"] },
+    { label: "Log prefix", paths: ["linux.firewall_prefix"] },
+    { label: "Protocol", paths: ["linux.network_protocol", "network.protocol"] },
+    { label: "Interface in", paths: ["linux.interface_in"] },
+    { label: "Interface out", paths: ["linux.interface_out"] },
+    { label: "TCP flags", paths: ["linux.tcp_flags"] },
+  ],
+};
+
+const linuxFirewallProfile: PresentationProfile = {
+  id: "linux_syslog_firewall",
+  label: "Firewall (netfilter) log",
+  columns: [
+    timestampColumn,
+    { key: "verdict", label: "Verdict", paths: ["linux.firewall_action"] },
+    { key: "protocol", label: "Proto", paths: ["linux.network_protocol", "network.protocol"] },
+    { key: "source_ip", label: "Source IP", paths: ["network.source_ip", "linux.source_ip"] },
+    { key: "source_port", label: "Src Port", paths: ["network.source_port"], defaultVisible: false },
+    { key: "destination_ip", label: "Destination IP", paths: ["network.destination_ip", "linux.destination_ip"] },
+    { key: "destination_port", label: "Dst Port", paths: ["network.destination_port"] },
+    { key: "interface_in", label: "In", paths: ["linux.interface_in"] },
+    hostColumn,
+    severityColumn,
+    messageColumn,
+    timeQualityColumn,
+    { key: "interface_out", label: "Out", paths: ["linux.interface_out"], defaultVisible: false },
+    { key: "tcp_flags", label: "TCP Flags", paths: ["linux.tcp_flags"], defaultVisible: false },
+    { key: "prefix", label: "Log Prefix", paths: ["linux.firewall_prefix"], defaultVisible: false },
+    { key: "process", label: "Process", paths: ["linux.process", "process.name"], defaultVisible: false },
+    ...sourceFileColumns,
+  ],
+  details: [eventSection, firewallDetail, networkSection, timeDetail, provenanceSection, rawSection],
+};
+
+const linuxJournalProfile: PresentationProfile = {
+  id: "linux_journal",
+  label: "systemd journal",
+  columns: [
+    timestampColumn,
+    hostColumn,
+    { key: "unit", label: "Unit", paths: ["linux.unit", "event.action"] },
+    { key: "process", label: "Process", paths: ["linux.process", "process.name"] },
+    severityColumn,
+    { key: "user", label: "User", paths: ["user.name", "user.id"] },
+    messageColumn,
+    timeQualityColumn,
+    pidColumn,
+    { key: "exe", label: "Executable", paths: ["linux.exe"], defaultVisible: false },
+    { key: "transport", label: "Transport", paths: ["linux.transport"], defaultVisible: false },
+    { key: "source_ip", label: "Source IP", paths: ["network.source_ip", "linux.source_ip"], defaultVisible: false },
+    { key: "boot_id", label: "Boot ID", paths: ["linux.boot_id"], defaultVisible: false },
+    { key: "seqnum", label: "Sequence", paths: ["linux.seqnum"], defaultVisible: false },
+    ...sourceFileColumns,
+  ],
+  details: [
+    eventSection,
+    timeDetail,
+    {
+      title: "Journal",
+      fields: [
+        { label: "Unit", paths: ["linux.unit", "event.action"] },
+        { label: "Process", paths: ["linux.process"] },
+        { label: "PID", paths: ["linux.pid"] },
+        { label: "Executable", paths: ["linux.exe"] },
+        { label: "Transport", paths: ["linux.transport"] },
+        { label: "User ID", paths: ["user.id", "linux.uid"] },
+        { label: "Boot ID", paths: ["linux.boot_id"] },
+        { label: "Sequence number", paths: ["linux.seqnum"] },
+      ],
+    },
+    networkSection,
+    provenanceSection,
+    rawSection,
+  ],
+};
+
+const linuxAuthProfile: PresentationProfile = {
+  id: "linux_auth",
+  label: "Authentication log",
+  columns: [
+    timestampColumn,
+    hostColumn,
+    { key: "user", label: "User", paths: ["user.name", "linux.username", "linux.attempted_username"] },
+    { key: "event", label: "Event", paths: ["title", "event.type"] },
+    { key: "source_ip", label: "Source IP", paths: ["network.source_ip", "linux.source_ip"] },
+    { key: "method", label: "Method", paths: ["linux.auth_method"] },
+    { key: "outcome", label: "Result", paths: ["linux.authentication_result", "event.outcome"] },
+    { key: "process", label: "Process", paths: ["linux.process", "process.name"] },
+    severityColumn,
+    messageColumn,
+    timeQualityColumn,
+    pidColumn,
+    { key: "source_port", label: "Source Port", paths: ["network.source_port", "linux.source_port"], defaultVisible: false },
+    { key: "terminal", label: "Terminal", paths: ["linux.terminal"], defaultVisible: false },
+    { key: "service", label: "Service", paths: ["linux.service"], defaultVisible: false },
+    ...sourceFileColumns,
+  ],
+  details: [
+    eventSection,
+    timeDetail,
+    {
+      title: "Authentication",
+      fields: [
+        { label: "Event", paths: ["linux.auth_event_type", "event.type"] },
+        { label: "Method", paths: ["linux.auth_method"] },
+        { label: "Result", paths: ["linux.authentication_result", "event.outcome"] },
+        { label: "User", paths: ["user.name", "linux.username"] },
+        { label: "Attempted user", paths: ["linux.attempted_username"] },
+        { label: "Terminal", paths: ["linux.terminal"] },
+        { label: "Service", paths: ["linux.service"] },
+      ],
+    },
+    networkSection,
+    provenanceSection,
+    rawSection,
+  ],
+};
+
+const linuxAuditProfile: PresentationProfile = {
+  id: "linux_audit",
+  label: "auditd",
+  columns: [
+    timestampColumn,
+    hostColumn,
+    { key: "audit_type", label: "Record", paths: ["linux.audit_type"] },
+    { key: "exe", label: "Executable", paths: ["linux.exe", "process.path"] },
+    { key: "command", label: "Command", paths: ["process.command_line", "linux.command"] },
+    { key: "user", label: "User", paths: ["user.name", "linux.username", "linux.uid"] },
+    { key: "audit_key", label: "Key", paths: ["linux.audit_key"] },
+    severityColumn,
+    messageColumn,
+    { key: "cwd", label: "Working Dir", paths: ["linux.cwd", "process.working_directory"], defaultVisible: false },
+    { key: "syscall", label: "Syscall", paths: ["linux.syscall"], defaultVisible: false },
+    { key: "file", label: "Path", paths: ["linux.audit_name"], defaultVisible: false },
+    ...sourceFileColumns,
+  ],
+  details: [
+    eventSection,
+    {
+      title: "Audit record",
+      fields: [
+        { label: "Record type", paths: ["linux.audit_type"] },
+        { label: "Executable", paths: ["linux.exe", "process.path"] },
+        { label: "Command", paths: ["process.command_line", "linux.command"] },
+        { label: "Working directory", paths: ["linux.cwd", "process.working_directory"] },
+        { label: "Key", paths: ["linux.audit_key"] },
+        { label: "Syscall", paths: ["linux.syscall"] },
+        { label: "Path", paths: ["linux.audit_name"] },
+        { label: "UID / EUID", paths: ["linux.uid", "linux.euid"] },
+      ],
+    },
+    provenanceSection,
+    rawSection,
+  ],
+};
+
+const FAIL2BAN_ACTIONS: Record<string, string> = {
+  found: "Found (failed attempt)",
+  ban: "Ban",
+  unban: "Unban",
+  restore_ban: "Restore ban",
+  already_banned: "Already banned",
+  ignore: "Ignore",
+  jail_started: "Jail started",
+  jail_stopped: "Jail stopped",
+  jail_configured: "Jail configured",
+};
+
+const linuxFail2banProfile: PresentationProfile = {
+  id: "linux_fail2ban",
+  label: "fail2ban",
+  columns: [
+    timestampColumn,
+    { key: "jail", label: "Jail", paths: ["linux.jail"] },
+    { key: "fail2ban_action", label: "Action", paths: ["linux.event_action"], format: (value) => FAIL2BAN_ACTIONS[String(value)] ?? String(value) },
+    { key: "source_ip", label: "Address", paths: ["network.source_ip", "linux.source_ip"] },
+    severityColumn,
+    messageColumn,
+    timeQualityColumn,
+    hostColumn,
+    { key: "component", label: "Component", paths: ["linux.component"], defaultVisible: false },
+    ...sourceFileColumns,
+  ],
+  details: [
+    eventSection,
+    timeDetail,
+    { title: "fail2ban", fields: [{ label: "Jail", paths: ["linux.jail"] }, { label: "Action", paths: ["linux.event_action"], format: (value) => FAIL2BAN_ACTIONS[String(value)] ?? String(value) }, { label: "Address", paths: ["network.source_ip", "linux.source_ip"] }, { label: "Component", paths: ["linux.component"] }] },
+    provenanceSection,
+    rawSection,
+  ],
+};
+
+/** The generic text parser's output: the message is the event, so it leads. */
+const linuxGenericLogProfile: PresentationProfile = {
+  id: "linux_generic_log",
+  label: "Text log",
+  columns: [
+    timestampColumn,
+    timeQualityColumn,
+    hostColumn,
+    { key: "process", label: "Process", paths: ["linux.process", "process.name"] },
+    severityColumn,
+    { key: "user", label: "User", paths: ["user.name", "linux.username"] },
+    { key: "source_ip", label: "Source IP", paths: ["network.source_ip", "linux.source_ip"] },
+    messageColumn,
+    pidColumn,
+    { key: "log_format", label: "Format", paths: ["linux.log_format"], defaultVisible: false },
+    ...sourceFileColumns,
+  ],
+  details: [
+    eventSection,
+    timeDetail,
+    { title: "Parsed from text", fields: [{ label: "Detected format", paths: ["linux.log_format"] }, { label: "Process", paths: ["linux.process"] }, { label: "PID", paths: ["linux.pid"] }, { label: "User", paths: ["linux.username"] }, { label: "Address", paths: ["linux.source_ip"] }] },
+    provenanceSection,
+    rawSection,
+  ],
+};
+
+const PERSISTENCE_KINDS: Record<string, string> = {
+  ld_so_preload: "Preloaded library",
+  ld_so_conf: "Library search path",
+  rc_local: "rc.local (boot)",
+  pam_config: "PAM rule",
+  at_job: "at job",
+  shell_init: "Shell start-up",
+};
+
+const linuxPersistenceProfile: PresentationProfile = {
+  id: "linux_persistence",
+  label: "Persistence configuration",
+  columns: [
+    { key: "kind", label: "Kind", paths: ["event.type", "linux.artifact_type"], format: (value) => PERSISTENCE_KINDS[String(value)] ?? String(value) },
+    severityColumn,
+    { key: "user", label: "Owner", paths: ["user.name", "linux.username"] },
+    { key: "item", label: "Entry / Command", paths: ["linux.library_path", "message", "event.message", "linux.command"] },
+    { key: "pam", label: "PAM", paths: ["linux.pam_module"], format: (value, item) => [firstPresent(item, ["linux.pam_type"]), firstPresent(item, ["linux.pam_control"]), value].filter(isPresent).map(String).join(" ") },
+    { key: "indicators", label: "Flags", paths: ["linux.suspicious_indicators"] },
+    { key: "source_file", label: "Source File", paths: ["source_file", "artifact.source_path", "linux.source_file"] },
+    { key: "line_number", label: "Line", paths: ["linux.line_number"] },
+    hostColumn,
+    { key: "timestamp", label: "Timestamp", paths: ["@timestamp"], defaultVisible: false },
+  ],
+  details: [
+    eventSection,
+    {
+      title: "Persistence entry",
+      fields: [
+        { label: "Kind", paths: ["event.type", "linux.artifact_type"], format: (value) => PERSISTENCE_KINDS[String(value)] ?? String(value) },
+        { label: "Owner", paths: ["user.name", "linux.username"] },
+        { label: "Library", paths: ["linux.library_path"] },
+        { label: "Command / line", paths: ["linux.command", "message"] },
+        { label: "PAM type", paths: ["linux.pam_type"] },
+        { label: "PAM control", paths: ["linux.pam_control"] },
+        { label: "PAM module", paths: ["linux.pam_module"] },
+        { label: "PAM arguments", paths: ["linux.pam_args"] },
+        { label: "Flags for review", paths: ["linux.suspicious_indicators"] },
+      ],
+    },
+    provenanceSection,
+    rawSection,
+  ],
+};
+
+/** The Apache access profile extended in place for what nginx and proxies add. */
+const webAccessExtras: PresentationColumn[] = [
+  { key: "web_server", label: "Web Server", paths: ["linux.web_server"], visibleWhen: (items) => items.some((item) => isPresent(firstPresent(item, ["linux.web_server"]))) },
+  { key: "xff", label: "Real Client (X-Forwarded-For)", paths: ["linux.x_forwarded_for"], visibleWhen: (items) => items.some((item) => isPresent(firstPresent(item, ["linux.x_forwarded_for"]))) },
+  { key: "http_host", label: "Host Header", paths: ["linux.http_host"], defaultVisible: false },
+  { key: "referrer", label: "Referrer", paths: ["http.referrer", "linux.http_referrer"], defaultVisible: false },
+];
+
+const webErrorExtras: PresentationColumn[] = [
+  { key: "web_server", label: "Web Server", paths: ["linux.web_server"], visibleWhen: (items) => items.some((item) => isPresent(firstPresent(item, ["linux.web_server"]))) },
+  { key: "server_name", label: "Server", paths: ["linux.server_name"] },
+  { key: "request", label: "Request", paths: ["url.path", "linux.url_path"] },
+  { key: "upstream", label: "Upstream", paths: ["linux.upstream"], defaultVisible: false },
+  timeQualityColumn,
+];
+
+const webDetail: DetailSection = {
+  title: "Web server",
+  fields: [
+    { label: "Server", paths: ["linux.web_server"] },
+    { label: "Real client (X-Forwarded-For)", paths: ["linux.x_forwarded_for"] },
+    { label: "Host header", paths: ["linux.http_host"] },
+    { label: "Server name", paths: ["linux.server_name"] },
+    { label: "Upstream", paths: ["linux.upstream"] },
+    { label: "Suspicious request markers", paths: ["linux.suspicious_url_indicators"] },
+  ],
+};
+
+function extendProfile(base: PresentationProfile, extraColumns: PresentationColumn[], extraDetail: DetailSection[], id: string, label: string): PresentationProfile {
+  // Extra columns go before the "hidden by default" tail, after the primary ones.
+  const firstHidden = base.columns.findIndex((column) => column.defaultVisible === false);
+  const at = firstHidden === -1 ? base.columns.length : firstHidden;
+  const columns = [...base.columns.slice(0, at), ...extraColumns, ...base.columns.slice(at)];
+  const details = [...base.details.slice(0, base.details.length - 2), ...extraDetail, ...base.details.slice(base.details.length - 2)];
+  return { id, label, columns, details };
+}
+
+const webAccessProfile = extendProfile(apacheAccessProfile, webAccessExtras, [webDetail], "linux_web_access", "Web server access logs");
+const webErrorProfile = extendProfile(apacheErrorProfile, webErrorExtras, [webDetail], "linux_web_error", "Web server error logs");
+
+/** Applies each column's data-driven default visibility to the rows on screen. */
+function withVisibility(profile: PresentationProfile, items: Record<string, unknown>[]): PresentationProfile {
+  if (!profile.columns.some((column) => column.visibleWhen)) return profile;
+  return {
+    ...profile,
+    columns: profile.columns.map((column) => (column.visibleWhen ? { ...column, defaultVisible: column.visibleWhen(items) } : column)),
+  };
+}
+
+/** Guarantees a message column: whatever else a profile shows, the log's own text stays visible. */
+function withMessageColumn(profile: PresentationProfile, visibleByDefault = true): PresentationProfile {
+  const hasMessage = profile.columns.some((column) => column.key === "message" || column.key === "summary" || column.paths.some((path) => path === "message" || path === "event.message"));
+  if (hasMessage) return profile;
+  const firstHidden = profile.columns.findIndex((column) => column.defaultVisible === false);
+  const at = firstHidden === -1 ? profile.columns.length : firstHidden;
+  const column = visibleByDefault ? messageColumn : { ...messageColumn, defaultVisible: false };
+  return { ...profile, columns: [...profile.columns.slice(0, at), column, ...profile.columns.slice(at)] };
+}
+
+function isFirewallRow(item: Record<string, unknown>): boolean {
+  return isPresent(firstPresent(item, ["linux.firewall_action"]));
+}
+
 export function presentationProfileForItems(items: Record<string, unknown>[]): PresentationProfile | null {
   const artifactTypes = new Set(items.map((item) => String(((item.artifact as Record<string, unknown>) ?? {}).type ?? "")).filter(Boolean));
   if (artifactTypes.size !== 1) return null;
   const artifactType = [...artifactTypes][0];
-  if (artifactType === "linux_exim") return eximProfile;
-  if (artifactType === "linux_apache") {
-    const eventTypes = new Set(items.map((item) => String(((item.event as Record<string, unknown>) ?? {}).type ?? "")).filter(Boolean));
-    if (eventTypes.size === 1 && eventTypes.has("apache_error")) return apacheErrorProfile;
-    return apacheAccessProfile;
+  const eventTypes = new Set(items.map((item) => String(((item.event as Record<string, unknown>) ?? {}).type ?? "")).filter(Boolean));
+  let profile: PresentationProfile | null = null;
+  switch (artifactType) {
+    case "linux_exim":
+      profile = eximProfile;
+      break;
+    case "linux_apache":
+      profile = eventTypes.size === 1 && eventTypes.has("apache_error") ? webErrorProfile : webAccessProfile;
+      break;
+    case "linux_syslog":
+      profile = items.filter(isFirewallRow).length >= Math.max(1, items.length * FIREWALL_PROFILE_SHARE) ? linuxFirewallProfile : linuxSyslogProfile;
+      break;
+    case "linux_journal":
+      profile = linuxJournalProfile;
+      break;
+    case "linux_auth":
+      profile = linuxAuthProfile;
+      break;
+    case "linux_audit":
+      profile = linuxAuditProfile;
+      break;
+    case "linux_fail2ban":
+      profile = linuxFail2banProfile;
+      break;
+    case "linux_generic_log":
+      profile = linuxGenericLogProfile;
+      break;
+    case "linux_persistence":
+      profile = linuxPersistenceProfile;
+      break;
+    default:
+      return null;
   }
-  return null;
+  // A web access line's content already sits in the method, request and status columns, so the
+  // message is offered but not shown by default there.
+  return withVisibility(withMessageColumn(profile, profile.id !== "linux_web_access"), items);
 }

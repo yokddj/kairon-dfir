@@ -90,6 +90,28 @@ Current Linux parsers cover 12 families. Coverage is calculated from detected ar
 - Firewall packet logs: lines logged by netfilter (iptables, nftables, ufw, firewalld) are expanded in `kern.log`, `syslog`, `messages`, `ufw.log`, `iptables.log` and the systemd journal. Extracted: `source_ip`, `destination_ip`, source and destination port, `network_protocol`, `interface_in`, `interface_out`, TCP flags and `firewall_action`. The verdict is read from the rule's log prefix (`[UFW BLOCK]`, `FINAL_REJECT:`, ...) as `block`, `reject`, `drop`, `allow`, `audit` or `limit`, and a prefix this does not recognise is reported as plain `log`; the prefix text itself is kept in `firewall_prefix`. The addresses and ports are also placed on the standard network fields, so these events appear in network views and can be pivoted on.
 - Firewall limits: only packet lines are expanded, not the rule configuration; a custom prefix that names no verdict word reads as `log`. `firewalld`'s own daemon log (`/var/log/firewalld`) is not syslog-formatted and is read by the generic text parser.
 
+### Viewing Linux logs
+Each Linux log family has its own table layout in Artifact Explorer (open **Linux Artifacts** and pick a family). Every layout shows the log's own text in a **Message** column, so the content that matters is on screen even when no parser pulled it into a dedicated field; for the generic text parser the message is the event. Secondary fields are in the **Columns** chooser, not hidden away.
+
+| Family | Columns shown by default |
+| --- | --- |
+| Syslog | Timestamp, Host, Process, Severity, Message |
+| Syslog with firewall packets (30% or more of the rows) | Timestamp, Verdict, Proto, Source IP, Destination IP, Dst Port, In (interface), Host, Severity, Message |
+| systemd journal | Timestamp, Host, Unit, Process, Severity, User, Message |
+| Authentication | Timestamp, Host, User, Event, Source IP, Method, Result, Process, Severity, Message |
+| auditd | Timestamp, Host, Record, Executable, Command, User, Key, Severity, Message |
+| Web server (Apache, nginx) access | Timestamp, Source IP, Host, Method, Request, HTTP Status, User Agent, plus Web Server and Real Client (X-Forwarded-For) when present |
+| Web server error | Timestamp, Severity, Host, Source IP, Event Type, Server, Request, Message |
+| fail2ban | Timestamp, Jail, Action, Address, Severity, Message |
+| Text log (generic) | Timestamp, Host, Process, Severity, User, Source IP, Message |
+| Persistence configuration | Kind, Severity, Owner, Entry / Command, PAM, Flags, Source File, Line |
+
+- **Time Quality** appears automatically when any row on screen has a time that is not exact (`Assumed UTC`, `Assumed year and UTC`, `No time in the log`), so a time the parser had to assume is never mistaken for an exact one. It can also be switched on from the Columns chooser.
+- **Pivot**: click a source or destination address, process, verdict, jail, protocol, executable, auditd record type, web server or `X-Forwarded-For` value to filter on it or exclude it. Addresses use the standard address filter; the others add a term such as `verdict:"block"` to the search box, where it stays visible and editable (see *Searching Linux events*). Cells that combine several values are not pivotable: the process name and its PID are separate columns for that reason.
+- **Row details**: opening a row adds a section for what the family carries: *Firewall packet*, *Journal*, *Authentication*, *Audit record*, *fail2ban*, *Persistence entry*, *Web server*, *Time*.
+- **Search page**: for a Linux network event the key entity is the remote (source) address, and a label that replaced the log line (such as an authentication result) is shown next to the original text instead of hiding it.
+- Mixed results (several artifact types in one table) fall back to the general columns, which include a summary column.
+
 ### Searching Linux events
 Search accepts the Linux fields directly (`linux.jail:sshd`, `linux.firewall_action:block`, `network.source_ip:203.0.113.9`) and these shortcuts, which combine with `AND`, `OR`, `NOT` and parentheses like any other field:
 
