@@ -930,6 +930,11 @@ QUERY_HELP = (
     "url.full, url.domain, source.ip, destination.ip, artifact.type, "
     "artifact.parser, event.type, event.action, risk_score, severity, "
     "rule.name, detection.source. "
+    "Linux shortcuts: ip: (any source or destination address), process:, user:, host:, "
+    "port:, proto:, verdict: (firewall block/reject/drop/allow), jail: (fail2ban), "
+    "xff: (original client behind a proxy), webserver: (apache or nginx), indicator: "
+    "(a flagged persistence or web-request marker such as reverse_shell), library:, pam:, "
+    "exe:, audit: (auditd record type), action: (e.g. firewall_block, fail2ban_ban). "
     'Examples: \'process.name:powershell.exe EncodedCommand\', '
     "'artifact.type:ntfs risk_score>=70', 'url.domain:*.example.com'."
 )

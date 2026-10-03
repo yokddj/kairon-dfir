@@ -90,6 +90,29 @@ Current Linux parsers cover 12 families. Coverage is calculated from detected ar
 - Firewall packet logs: lines logged by netfilter (iptables, nftables, ufw, firewalld) are expanded in `kern.log`, `syslog`, `messages`, `ufw.log`, `iptables.log` and the systemd journal. Extracted: `source_ip`, `destination_ip`, source and destination port, `network_protocol`, `interface_in`, `interface_out`, TCP flags and `firewall_action`. The verdict is read from the rule's log prefix (`[UFW BLOCK]`, `FINAL_REJECT:`, ...) as `block`, `reject`, `drop`, `allow`, `audit` or `limit`, and a prefix this does not recognise is reported as plain `log`; the prefix text itself is kept in `firewall_prefix`. The addresses and ports are also placed on the standard network fields, so these events appear in network views and can be pivoted on.
 - Firewall limits: only packet lines are expanded, not the rule configuration; a custom prefix that names no verdict word reads as `log`. `firewalld`'s own daemon log (`/var/log/firewalld`) is not syslog-formatted and is read by the generic text parser.
 
+### Searching Linux events
+Search accepts the Linux fields directly (`linux.jail:sshd`, `linux.firewall_action:block`, `network.source_ip:203.0.113.9`) and these shortcuts, which combine with `AND`, `OR`, `NOT` and parentheses like any other field:
+
+| Shortcut | Searches | Example |
+| --- | --- | --- |
+| `ip:` | every place an address is stored: `source.ip`, `destination.ip`, `network.source_ip`, `network.destination_ip`, `linux.source_ip`, `linux.destination_ip` | `ip:203.0.113.9` |
+| `port:` | `network.source_port`, `network.destination_port` | `port:22` |
+| `proto:` | `network.protocol`, `linux.network_protocol` | `proto:udp` |
+| `process:` | `process.name`, `linux.process` | `process:sshd` |
+| `user:` / `host:` | the standard field and its `linux.*` counterpart | `user:alice` |
+| `verdict:` | firewall verdict (`block`, `reject`, `drop`, `allow`, `audit`, `limit`) | `verdict:block ip:203.0.113.9` |
+| `action:` | `event.action` | `action:fail2ban_ban` |
+| `jail:` | fail2ban jail | `jail:sshd` |
+| `xff:` | original client behind a proxy (`X-Forwarded-For`) | `xff:198.51.100.77` |
+| `webserver:` | `apache` or `nginx` | `webserver:nginx` |
+| `indicator:` | a flagged marker on a persistence line or web request | `indicator:reverse_shell` |
+| `library:` / `pam:` | `ld.so.preload` library path, PAM module | `library:*hook*` |
+| `exe:` | executable (auditd, journal) | `exe:*/curl` |
+| `audit:` / `auditkey:` | auditd record type / key | `audit:EXECVE` |
+| `timequality:` | how far the time can be trusted (`ok`, `assumed_utc`, `assumed_year_utc`, `missing`) | `NOT timequality:ok` |
+
+Plain text still searches every field, so `203.0.113.9` alone finds an address anywhere. The fields above are declared in the index mapping when an evidence item is ingested or reprocessed: events indexed before then still answer to plain text, but not to the newer field names, and authentication events indexed earlier lack `network.source_ip` until they are reprocessed.
+
 ### Sigma rules on Linux logs
 Sigma rules with `logsource: product: linux` run against Linux events. What each source contributes:
 
