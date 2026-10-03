@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timezone
 
 from app.ingest.linux.netfilter import enrich_with_netfilter
+from app.ingest.linux.sysmon_linux import enrich_with_sysmon
 
 _MONTH_MAP = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -127,6 +128,8 @@ def parse_syslog(
                 "message": message[:2000],
                 "raw_excerpt": raw_excerpt,
             })
+            # Before the 2000-character clip above: a Sysmon event line is routinely longer.
+            enrich_with_sysmon(results[-1], message)
         else:
             results.append({
                 "artifact_family": "linux_syslog",
@@ -141,6 +144,7 @@ def parse_syslog(
                 "message": stripped[:2000],
                 "raw_excerpt": raw_excerpt,
             })
+            enrich_with_sysmon(results[-1], stripped)
     for row in results:
         enrich_with_netfilter(row, str(row.get("message") or ""))
     return results

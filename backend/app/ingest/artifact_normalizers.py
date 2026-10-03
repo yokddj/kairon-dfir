@@ -11,7 +11,7 @@ from app.ingest.autoruns.discovery import looks_like_startup_folder_path
 from app.ingest.cloud_sync.helpers import detect_cloud_provider_from_path
 from app.ingest.identity_extraction import extract_host, extract_user, extract_user_from_path, is_valid_hostname, normalize_hostname
 from app.ingest.browser.normalizer import normalize_browser_event
-from app.ingest.linux.process_context import apply_process_context
+from app.ingest.linux.process_context import apply_process_context, apply_sysmon_context
 from app.ingest.eztools.lecmd import select_lnk_effective_target, _suffix as lecmd_suffix, _basename as lecmd_basename
 from app.ingest.velociraptor.path_utils import normalize_velociraptor_path
 from app.ingest.windows_event_mapping import classify_windows_event
@@ -3772,6 +3772,8 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["apache_module"] = row.get("apache_module", "")
     linux_data["web_server"] = row.get("web_server", "")
     linux_data["jail"] = row.get("jail", "")
+    linux_data["sysmon_event_id"] = row.get("sysmon_event_id", None)
+    linux_data["sysmon_event"] = row.get("sysmon_event", "")
     # systemd journal fields only the binary form carries (see app.ingest.linux.journal).
     linux_data["unit"] = row.get("unit", "")
     linux_data["transport"] = row.get("transport", "")
@@ -3988,6 +3990,7 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     doc["search_text"] = " ".join(str(v) for v in linux_data.values() if v)
     doc["linux"] = linux_data
     apply_process_context(doc, row, family)
+    apply_sysmon_context(doc, row)
 
     # Platform-agnostic Host Facts contract (see app.services.host_facts /
     # app.ingest.host_facts_extraction): any normalizer, on any platform,

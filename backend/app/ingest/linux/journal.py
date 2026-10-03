@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.ingest.linux.netfilter import enrich_with_netfilter
+from app.ingest.linux.sysmon_linux import enrich_with_sysmon
 
 
 def _normalize_timestamp(value: object) -> str | None:
@@ -45,7 +46,8 @@ def _row_from_fields(fields: dict[str, object], source_path: str) -> dict[str, o
         "artifact_type": "linux_journal",
         "source_path": source_path,
     }
-    return enrich_with_netfilter(row, message)
+    enrich_with_sysmon(row, message)
+    return enrich_with_netfilter(row, str(row.get("message") or message))
 
 
 def _parse_export_blocks(text: str, source_path: str) -> list[dict[str, object]]:

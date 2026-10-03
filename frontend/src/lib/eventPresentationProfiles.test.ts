@@ -38,6 +38,15 @@ describe("Linux presentation profiles: selection", () => {
     expect(presentationProfileForItems(rows(0, 10))?.id).toBe("linux_syslog");
   });
 
+  it("picks the Sysmon layout when Sysmon events dominate, and the larger group wins over firewall rows", () => {
+    const sysmon = base("linux_syslog", { linux: { sysmon_event_id: 1 } });
+    const packet = base("linux_syslog", { linux: { firewall_action: "block" } });
+    const plain = base("linux_syslog");
+    expect(presentationProfileForItems([sysmon, sysmon, plain, plain])?.id).toBe("linux_syslog_sysmon");
+    expect(presentationProfileForItems([sysmon, packet, packet, plain])?.id).toBe("linux_syslog_firewall");
+    expect(presentationProfileForItems([sysmon, packet, plain, plain, plain, plain, plain, plain, plain, plain])?.id).toBe("linux_syslog");
+  });
+
   it("distinguishes web error logs from access logs", () => {
     const error = base("linux_apache", { event: { type: "apache_error", message: "boom" } });
     expect(presentationProfileForItems([error])?.id).toBe("linux_web_error");
@@ -136,6 +145,18 @@ describe("Linux presentation profiles: values", () => {
     const item = base("linux_journal", { linux: { unit: "ssh.service", process: "sshd" }, user: { id: "1000" } });
     expect(column(item, "unit")).toBe("ssh.service");
     expect(column(item, "user")).toBe("1000");
+  });
+
+  it("Sysmon rows show the event, image, command line and parent", () => {
+    const item = base("linux_syslog", {
+      event: { type: "sysmon_process_created", code: "1", severity: "info", message: "Process created: curl http://203.0.113.9/x" },
+      user: { name: "root" },
+      process: { path: "/usr/bin/curl", command_line: "curl http://203.0.113.9/x", parent_path: "/bin/bash" },
+      linux: { sysmon_event_id: 1 },
+    });
+    expect(column(item, "sysmon_event")).toBe("Process created");
+    expect(["user", "exe", "command", "parent_image"].map((key) => column(item, key))).toEqual(["root", "/usr/bin/curl", "curl http://203.0.113.9/x", "/bin/bash"]);
+    expect(column(item, "message")).toBe("the log text");
   });
 
   it("process is the plain name, so a pivot filters on what the cell says", () => {

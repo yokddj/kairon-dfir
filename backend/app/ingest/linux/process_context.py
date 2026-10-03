@@ -95,3 +95,63 @@ def apply_process_context(doc: dict[str, Any], row: dict[str, Any], family: str)
         process["pid"] = row["pid"]
     if row.get("ppid") is not None:
         process["ppid"] = row["ppid"]
+
+
+def apply_sysmon_context(doc: dict[str, Any], row: dict[str, Any]) -> None:
+    """Fill the standard process / network / file fields from a Sysmon for Linux event (in place).
+
+    These are the fields Sigma's Image, CommandLine, ParentImage, User, DestinationIp and
+    TargetFilename map to, and ``event.code`` / ``event.type`` are what its process_creation,
+    network_connection and file_event categories look for.
+    """
+    code = row.get("sysmon_event_id")
+    if not code:
+        return
+    doc["event"]["code"] = str(code)
+    doc["event"]["type"] = row.get("event_label") or f"sysmon_event_{code}"
+    doc["event"]["action"] = f"sysmon_{row.get('sysmon_event') or code}"
+    doc["event"]["message"] = row.get("message") or doc["event"].get("message")
+    doc["title"] = row.get("message") or doc.get("title")
+    process = doc.setdefault("process", {})
+    image = row.get("image")
+    if image:
+        process["path"] = image
+        process["executable"] = image
+        process["name"] = row.get("process") or posixpath.basename(image)
+    if row.get("command_line"):
+        process["command_line"] = row["command_line"]
+    if row.get("current_directory"):
+        process["current_directory"] = row["current_directory"]
+        process["working_directory"] = row["current_directory"]
+    if row.get("pid") is not None:
+        process["pid"] = row["pid"]
+    if row.get("process_guid"):
+        process["entity_id"] = row["process_guid"]
+    if row.get("parent_image"):
+        process["parent_path"] = row["parent_image"]
+        process["parent_name"] = posixpath.basename(row["parent_image"])
+    if row.get("parent_command_line"):
+        process["parent_command_line"] = row["parent_command_line"]
+    if row.get("parent_pid") is not None:
+        process["ppid"] = row["parent_pid"]
+        process["parent_pid"] = row["parent_pid"]
+    if row.get("parent_guid"):
+        process["parent_entity_id"] = row["parent_guid"]
+    if row.get("sha256"):
+        process.setdefault("hashes", {})["sha256"] = row["sha256"]
+    if row.get("username"):
+        doc["user"]["name"] = row["username"]
+    if code == 3:
+        network = doc["network"]
+        network["source_ip"] = row.get("source_ip") or None
+        network["source_port"] = row.get("source_port")
+        network["destination_ip"] = row.get("destination_ip") or None
+        network["destination_port"] = row.get("destination_port")
+        network["protocol"] = row.get("network_protocol") or None
+        doc["destination"]["ip"] = row.get("destination_ip") or None
+        doc["destination"]["port"] = row.get("destination_port")
+        if row.get("destination_hostname"):
+            doc["destination"]["hostname"] = row["destination_hostname"]
+    elif code in {11, 23} and row.get("target_filename"):
+        doc["file"]["path"] = row["target_filename"]
+        doc["file"]["name"] = posixpath.basename(row["target_filename"])

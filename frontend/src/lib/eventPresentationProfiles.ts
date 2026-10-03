@@ -316,6 +316,62 @@ const linuxFirewallProfile: PresentationProfile = {
   details: [eventSection, firewallDetail, networkSection, timeDetail, provenanceSection, rawSection],
 };
 
+const SYSMON_EVENT_LABELS: Record<string, string> = {
+  sysmon_process_created: "Process created",
+  sysmon_network_connection: "Network connection",
+  sysmon_process_terminated: "Process terminated",
+  sysmon_file_created: "File created",
+  sysmon_file_deleted: "File deleted",
+  sysmon_raw_access_read: "Raw disk read",
+  sysmon_config_changed: "Sysmon config changed",
+  sysmon_state_changed: "Sysmon state changed",
+};
+
+const sysmonDetail: DetailSection = {
+  title: "Sysmon event",
+  fields: [
+    { label: "Event", paths: ["event.type"], format: (value) => SYSMON_EVENT_LABELS[String(value)] ?? String(value) },
+    { label: "Event ID", paths: ["event.code", "linux.sysmon_event_id"] },
+    { label: "Image", paths: ["process.path", "linux.exe"] },
+    { label: "Command line", paths: ["process.command_line"] },
+    { label: "Working directory", paths: ["process.current_directory"] },
+    { label: "User", paths: ["user.name"] },
+    { label: "PID", paths: ["process.pid"] },
+    { label: "SHA-256", paths: ["process.hashes.sha256"] },
+    { label: "Parent image", paths: ["process.parent_path"] },
+    { label: "Parent command line", paths: ["process.parent_command_line"] },
+    { label: "Parent PID", paths: ["process.ppid"] },
+    { label: "Target file", paths: ["file.path"] },
+  ],
+};
+
+/** Sysmon for Linux events found inside syslog: structured process / network / file activity. */
+const linuxSysmonProfile: PresentationProfile = {
+  id: "linux_syslog_sysmon",
+  label: "Sysmon for Linux",
+  columns: [
+    timestampColumn,
+    { key: "sysmon_event", label: "Event", paths: ["event.type"], format: (value) => SYSMON_EVENT_LABELS[String(value)] ?? String(value) },
+    { key: "user", label: "User", paths: ["user.name", "linux.username"] },
+    { key: "exe", label: "Image", paths: ["process.path", "linux.exe"] },
+    { key: "command", label: "Command Line", paths: ["process.command_line"] },
+    { key: "parent_image", label: "Parent Image", paths: ["process.parent_path"] },
+    { key: "destination_ip", label: "Destination IP", paths: ["network.destination_ip", "destination.ip"] },
+    { key: "destination_port", label: "Dst Port", paths: ["network.destination_port", "destination.port"] },
+    { key: "file", label: "Target File", paths: ["file.path"] },
+    hostColumn,
+    messageColumn,
+    { key: "process", label: "Process", paths: ["process.name", "linux.process"], defaultVisible: false },
+    pidColumn,
+    { key: "parent_command", label: "Parent Command Line", paths: ["process.parent_command_line"], defaultVisible: false },
+    { key: "sha256", label: "SHA-256", paths: ["process.hashes.sha256"], defaultVisible: false },
+    { key: "source_ip", label: "Source IP", paths: ["network.source_ip"], defaultVisible: false },
+    severityColumn,
+    ...sourceFileColumns,
+  ],
+  details: [eventSection, sysmonDetail, networkSection, timeDetail, provenanceSection, rawSection],
+};
+
 const linuxJournalProfile: PresentationProfile = {
   id: "linux_journal",
   label: "systemd journal",
@@ -604,6 +660,10 @@ function withMessageColumn(profile: PresentationProfile, visibleByDefault = true
   return { ...profile, columns: [...profile.columns.slice(0, at), column, ...profile.columns.slice(at)] };
 }
 
+function isSysmonRow(item: Record<string, unknown>): boolean {
+  return isPresent(firstPresent(item, ["linux.sysmon_event_id"]));
+}
+
 function isFirewallRow(item: Record<string, unknown>): boolean {
   return isPresent(firstPresent(item, ["linux.firewall_action"]));
 }
@@ -621,9 +681,16 @@ export function presentationProfileForItems(items: Record<string, unknown>[]): P
     case "linux_apache":
       profile = eventTypes.size === 1 && eventTypes.has("apache_error") ? webErrorProfile : webAccessProfile;
       break;
-    case "linux_syslog":
-      profile = items.filter(isFirewallRow).length >= Math.max(1, items.length * FIREWALL_PROFILE_SHARE) ? linuxFirewallProfile : linuxSyslogProfile;
+    case "linux_syslog": {
+      const threshold = Math.max(1, items.length * FIREWALL_PROFILE_SHARE);
+      const firewall = items.filter(isFirewallRow).length;
+      const sysmon = items.filter(isSysmonRow).length;
+      // Packet logs or Sysmon events, whichever dominates once it is a meaningful share of the rows.
+      if (sysmon >= threshold && sysmon >= firewall) profile = linuxSysmonProfile;
+      else if (firewall >= threshold) profile = linuxFirewallProfile;
+      else profile = linuxSyslogProfile;
       break;
+    }
     case "linux_journal":
       profile = linuxJournalProfile;
       break;
