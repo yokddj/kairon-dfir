@@ -3772,6 +3772,17 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["apache_module"] = row.get("apache_module", "")
     linux_data["web_server"] = row.get("web_server", "")
     linux_data["jail"] = row.get("jail", "")
+    linux_data["k8s_verb"] = row.get("k8s_verb", "")
+    linux_data["k8s_resource"] = row.get("k8s_resource", "")
+    linux_data["k8s_subresource"] = row.get("k8s_subresource", "")
+    linux_data["k8s_namespace"] = row.get("k8s_namespace", "")
+    linux_data["k8s_object"] = row.get("k8s_object", "")
+    linux_data["k8s_decision"] = row.get("k8s_decision", "")
+    linux_data["k8s_groups"] = row.get("k8s_groups") or []
+    linux_data["k8s_impersonated"] = row.get("k8s_impersonated", "")
+    linux_data["k8s_audit_id"] = row.get("k8s_audit_id", "")
+    linux_data["k8s_stage"] = row.get("k8s_stage", "")
+    linux_data["k8s_level"] = row.get("k8s_level", "")
     linux_data["sysmon_event_id"] = row.get("sysmon_event_id", None)
     linux_data["sysmon_event"] = row.get("sysmon_event", "")
     # systemd journal fields only the binary form carries (see app.ingest.linux.journal).
@@ -3882,6 +3893,17 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         doc["event"]["action"] = f"persistence_{kind}"
         detail = linux_data.get("library_path") or linux_data.get("pam_module") or linux_data.get("message") or ""
         doc["title"] = f"{kind.replace('_', ' ')}: {str(detail)[:120]}"
+    elif family == "linux_k8s_audit":
+        verb = linux_data.get("k8s_verb") or "request"
+        doc["event"]["type"] = "k8s_audit"
+        doc["event"]["action"] = f"k8s_{verb}"
+        doc["network"]["source_ip"] = linux_data.get("source_ip") or None
+        doc["url"]["path"] = linux_data.get("url_path") or None
+        doc["http"]["response"]["status_code"] = linux_data.get("http_status")
+        doc["user_agent"]["original"] = linux_data.get("http_user_agent") or None
+        if linux_data.get("http_status") is not None:
+            doc["event"]["outcome"] = "failure" if int(linux_data["http_status"]) >= 400 else "success"
+        doc["title"] = linux_data.get("message") or "Kubernetes audit event"
     elif family == "linux_fail2ban":
         action = linux_data.get("event_action") or "log"
         doc["event"]["type"] = "fail2ban"
@@ -3943,6 +3965,14 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
             event_severity = "low"
         else:
             event_severity = "info"
+    elif family == "linux_k8s_audit":
+        # Flags are leads for review, never confirmed detections: a few combinations (a privileged
+        # or Docker-socket-mounting workload, a cluster-admin binding, an anonymous request that
+        # succeeded) are high, any other flag medium.
+        from app.ingest.linux.k8s_audit import HIGH_SEVERITY_FLAGS
+
+        indicators = set(linux_data.get("suspicious_indicators") or [])
+        event_severity = "high" if indicators & HIGH_SEVERITY_FLAGS else "medium" if indicators else "info"
     elif family == "linux_persistence":
         # A flagged line is a lead for review, never a confirmed detection. Any entry in
         # ld.so.preload is unusual in itself; an unusual path there is worse.

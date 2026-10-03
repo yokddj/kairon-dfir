@@ -46,6 +46,10 @@ const PIVOT_FIELD_BY_COLUMN_KEY: Record<string, string> = {
   web_server: "webserver",
   exe: "exe",
   audit_type: "audit",
+  verb: "verb",
+  resource: "resource",
+  namespace: "namespace",
+  decision: "decision",
 };
 
 export type SortField =

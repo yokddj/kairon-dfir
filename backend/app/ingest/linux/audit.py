@@ -96,6 +96,12 @@ def parse_audit(
     source_path: str = "",
     username: str | None = None,
 ) -> list[dict]:
+    # A Kubernetes API-server audit log can be called plain "audit.log" too; its JSON lines are
+    # recognised by content so they are not silently dropped as non-auditd text.
+    from app.ingest.linux.k8s_audit import looks_like_k8s_audit, parse_k8s_audit
+
+    if looks_like_k8s_audit(content):
+        return parse_k8s_audit(content, source_path=source_path)
     results: list[dict] = []
     for line_number, line in enumerate(content.splitlines(), start=1):
         stripped = line.strip()

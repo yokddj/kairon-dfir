@@ -153,6 +153,15 @@ def _looks_like_generic_linux_log(path_str: str, name: str) -> bool:
     return _ROTATION_TAIL_RE.sub("", name) in _KNOWN_EXTENSIONLESS_LOGS
 
 
+# Kubernetes API-server audit logs: /var/log/kubernetes/audit.log, /var/log/kube-apiserver/audit-*.log,
+# or a file named like kube-apiserver-audit.log. Claimed before the filename table because the
+# plain "audit.log" there means auditd.
+_K8S_AUDIT_RE = re.compile(
+    r"(?:(^|/)(?:kubernetes|kube-apiserver|k8s)[^/]*/(?:[^/]+/)*[^/]*audit[^/]*\.log(?:[.-]\w+)*$)"
+    r"|(?:(^|/)[^/]*(?:kube|k8s)[^/]*audit[^/]*\.log(?:[.-]\w+)*$)",
+    re.IGNORECASE,
+)
+
 # Binary systemd journals: /var/log/journal/<machine-id>/system.journal, user-<uid>.journal,
 # rotated system@<id>.journal, and the .journal~ left by an unclean shutdown. /run/log/journal
 # is the volatile (non-persistent) copy.
@@ -165,6 +174,8 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
     name = path_str.rsplit("/", 1)[-1]
     if _JOURNAL_BINARY_RE.search(path_str):
         return ("linux_journal", "journal_binary", "linux_journal_raw")
+    if _K8S_AUDIT_RE.search(path_str):
+        return ("linux_k8s_audit", "k8s_audit", "linux_k8s_audit_raw")
     # Persistence/rootkit-hook config is claimed before the filename table below: files such as
     # /etc/pam.d/passwd or /etc/pam.d/group must not be mistaken for /etc/passwd and /etc/group.
     persistence_type = persistence_kind(path_str)

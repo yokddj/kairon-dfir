@@ -14,7 +14,7 @@ const base = (type: string, extra: Item = {}): Item => ({
   ...extra,
 });
 
-const LINUX_TYPES = ["linux_syslog", "linux_journal", "linux_auth", "linux_audit", "linux_fail2ban", "linux_generic_log", "linux_persistence", "linux_apache", "linux_exim"];
+const LINUX_TYPES = ["linux_syslog", "linux_journal", "linux_auth", "linux_audit", "linux_fail2ban", "linux_generic_log", "linux_persistence", "linux_k8s_audit", "linux_apache", "linux_exim"];
 
 describe("Linux presentation profiles: selection", () => {
   it.each(LINUX_TYPES)("has a profile for %s", (type) => {
@@ -166,6 +166,23 @@ describe("Linux presentation profiles: values", () => {
   it("fail2ban actions read as words", () => {
     expect(column(base("linux_fail2ban", { linux: { event_action: "restore_ban" } }), "fail2ban_action")).toBe("Restore ban");
     expect(column(base("linux_fail2ban", { linux: { event_action: "ban", jail: "sshd" } }), "jail")).toBe("sshd");
+  });
+
+  it("Kubernetes audit rows show who did what to which object, with raw values a pivot can use", () => {
+    const item = base("linux_k8s_audit", {
+      user: { name: "alice" },
+      network: { source_ip: "203.0.113.9" },
+      http: { response: { status_code: 101 } },
+      linux: { k8s_verb: "create", k8s_resource: "pods", k8s_subresource: "exec", k8s_namespace: "default", k8s_object: "web", k8s_decision: "allow", suspicious_indicators: ["pod_exec"] },
+    });
+    expect(["user", "verb", "resource", "subresource", "namespace", "object", "source_ip", "http_status", "decision", "indicators"].map((key) => column(item, key)))
+      .toEqual(["alice", "create", "pods", "exec", "default", "web", "203.0.113.9", "101", "allow", "pod_exec"]);
+  });
+
+  it("the subresource column appears only when some request has one", () => {
+    const col = (items: Item[]) => presentationProfileForItems(items)!.columns.find((c) => c.key === "subresource")!.defaultVisible;
+    expect(col([base("linux_k8s_audit", { linux: { k8s_verb: "get" } })])).toBe(false);
+    expect(col([base("linux_k8s_audit", { linux: { k8s_subresource: "exec" } })])).toBe(true);
   });
 
   it("persistence rows show the entry, kind, PAM rule and flags", () => {

@@ -111,6 +111,44 @@ describe("Linux log tables: Sysmon for Linux", () => {
   });
 });
 
+describe("Linux log tables: Kubernetes audit", () => {
+  const exec = row("linux_k8s_audit", {
+    event: { type: "k8s_audit", action: "k8s_create", outcome: "success", severity: "medium", message: "alice create pods/web/exec (namespace default) -> 101 [allow]" },
+    message: "alice create pods/web/exec (namespace default) -> 101 [allow]",
+    user: { name: "alice" },
+    network: { source_ip: "203.0.113.9" },
+    http: { response: { status_code: 101 } },
+    linux: { k8s_verb: "create", k8s_resource: "pods", k8s_subresource: "exec", k8s_namespace: "default", k8s_object: "web", k8s_decision: "allow", suspicious_indicators: ["pod_exec"] },
+  });
+
+  it("shows the caller, verb, object, source and decision, with the flags", () => {
+    render(<EventTable items={[exec]} view="network" />);
+    for (const name of [/^User/, /Verb/, /^Resource/, /Namespace/, /Source IP/, /Decision/, /Flags/, /Message/]) {
+      expect(screen.getByRole("columnheader", { name })).toBeInTheDocument();
+    }
+    expect(screen.getByText("pod_exec")).toBeInTheDocument();
+    expect(screen.getByText("web")).toBeInTheDocument();
+  });
+
+  it("pivots on the verb and the namespace by their exact values", () => {
+    const onFilterField = vi.fn();
+    render(<EventTable items={[exec]} view="network" onFilterField={onFilterField} />);
+    fireEvent.click(screen.getByRole("button", { name: "Pivot Verb" }));
+    fireEvent.click(screen.getByRole("button", { name: "Filter by Verb" }));
+    expect(onFilterField).toHaveBeenCalledWith("verb", "create");
+    fireEvent.click(screen.getByRole("button", { name: "Pivot Namespace" }));
+    fireEvent.click(screen.getByRole("button", { name: "Filter by Namespace" }));
+    expect(onFilterField).toHaveBeenCalledWith("namespace", "default");
+  });
+
+  it("opens a Kubernetes request detail section", () => {
+    render(<EventTable items={[exec]} view="network" />);
+    fireEvent.click(screen.getByText("web"));
+    expect(screen.getByText("Kubernetes request")).toBeInTheDocument();
+    expect(screen.getByText("Authorization decision")).toBeInTheDocument();
+  });
+});
+
 describe("Linux log tables: systemd journal", () => {
   const item = row("linux_journal", {
     event: { type: "linux_journal", action: "ssh.service", severity: "medium", message: "Failed password for invalid user mallory" },
