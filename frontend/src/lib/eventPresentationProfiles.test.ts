@@ -14,7 +14,7 @@ const base = (type: string, extra: Item = {}): Item => ({
   ...extra,
 });
 
-const LINUX_TYPES = ["linux_syslog", "linux_journal", "linux_auth", "linux_audit", "linux_fail2ban", "linux_generic_log", "linux_persistence", "linux_k8s_audit", "linux_container", "linux_apache", "linux_exim"];
+const LINUX_TYPES = ["linux_syslog", "linux_journal", "linux_auth", "linux_audit", "linux_fail2ban", "linux_generic_log", "linux_persistence", "linux_k8s_audit", "linux_container", "linux_apache", "linux_exim", "linux_database"];
 
 describe("Linux presentation profiles: selection", () => {
   it.each(LINUX_TYPES)("has a profile for %s", (type) => {
@@ -210,6 +210,18 @@ describe("Linux presentation profiles: values", () => {
     expect(presentationProfileForItems([log])?.id).toBe("linux_container_log");
     expect(presentationProfileForItems([config, host])?.id).toBe("linux_container_config");
     expect(presentationProfileForItems([config, log])?.id).toBe("linux_container_log");
+  });
+
+  it("database rows show engine, action, user, client, database, flags and the message", () => {
+    const item = base("linux_database", {
+      event: { type: "mysql_general", action: "db_query", severity: "medium", message: "DROP TABLE users;" },
+      user: { name: "root" },
+      network: { source_ip: "203.0.113.9" },
+      linux: { db_engine: "mysql", db_name: "shop", db_statement: "DROP TABLE users;", suspicious_indicators: ["destructive_statement"] },
+    });
+    expect(presentationProfileForItems([item])?.id).toBe("linux_database");
+    expect(["db_engine", "action", "user", "source_ip", "db_name", "indicators", "statement"].map((key) => column(item, key)))
+      .toEqual(["mysql", "db_query", "root", "203.0.113.9", "shop", "destructive_statement", "DROP TABLE users;"]);
   });
 
   it("container configuration shows image, state, flags and a privileged yes/no", () => {

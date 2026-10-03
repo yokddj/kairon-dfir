@@ -705,6 +705,58 @@ const linuxContainerLogProfile: PresentationProfile = {
   ],
 };
 
+/** MySQL / MariaDB and PostgreSQL logs: who connected, from where, and what was run. */
+const linuxDatabaseProfile: PresentationProfile = {
+  id: "linux_database",
+  label: "Database logs",
+  columns: [
+    timestampColumn,
+    { key: "db_engine", label: "Engine", paths: ["linux.db_engine"] },
+    { key: "action", label: "Action", paths: ["event.action"] },
+    { key: "user", label: "User", paths: ["user.name", "linux.username"] },
+    { key: "source_ip", label: "Client IP", paths: ["network.source_ip", "linux.source_ip"] },
+    { key: "db_name", label: "Database", paths: ["linux.db_name"] },
+    { key: "level", label: "Level", paths: ["linux.db_level"], defaultVisible: false },
+    { key: "indicators", label: "Flags", paths: ["linux.suspicious_indicators"] },
+    severityColumn,
+    messageColumn,
+    timeQualityColumn,
+    { key: "db_command", label: "Command", paths: ["linux.db_command"], defaultVisible: false },
+    { key: "thread", label: "Thread ID", paths: ["linux.db_thread_id"], defaultVisible: false },
+    { key: "error_code", label: "Error Code", paths: ["linux.db_error_code"], defaultVisible: false },
+    { key: "query_time", label: "Query Time (s)", paths: ["linux.db_query_time"], defaultVisible: false },
+    { key: "rows_examined", label: "Rows Examined", paths: ["linux.db_rows_examined"], defaultVisible: false },
+    { key: "statement", label: "Statement", paths: ["linux.db_statement"], defaultVisible: false },
+    ...sourceFileColumns,
+  ],
+  details: [
+    eventSection,
+    timeDetail,
+    {
+      title: "Database",
+      fields: [
+        { label: "Engine", paths: ["linux.db_engine"] },
+        { label: "Database", paths: ["linux.db_name"] },
+        { label: "User", paths: ["user.name", "linux.username"] },
+        { label: "Client IP", paths: ["network.source_ip", "linux.source_ip"] },
+        { label: "Client port", paths: ["linux.source_port"] },
+        { label: "Application", paths: ["linux.db_application"] },
+        { label: "Level", paths: ["linux.db_level"] },
+        { label: "Command", paths: ["linux.db_command"] },
+        { label: "Thread / process ID", paths: ["linux.db_thread_id"] },
+        { label: "Error code", paths: ["linux.db_error_code"] },
+        { label: "Return code", paths: ["linux.db_retcode"] },
+        { label: "Statement", paths: ["linux.db_statement"] },
+        { label: "Query time (s)", paths: ["linux.db_query_time"] },
+        { label: "Rows sent / examined", paths: ["linux.db_rows_sent", "linux.db_rows_examined"] },
+        { label: "Flags for review", paths: ["linux.suspicious_indicators"] },
+      ],
+    },
+    provenanceSection,
+    rawSection,
+  ],
+};
+
 const CONTAINER_KINDS: Record<string, string> = {
   container_config: "Container",
   container_hostconfig: "Host configuration",
@@ -925,6 +977,9 @@ export function presentationProfileForItems(items: Record<string, unknown>[]): P
     case "linux_container":
       // Configuration rows and log lines are different shapes; the logs take over once any are present.
       profile = [...eventTypes].length > 0 && [...eventTypes].every((type) => type in CONTAINER_KINDS) ? linuxContainerConfigProfile : linuxContainerLogProfile;
+      break;
+    case "linux_database":
+      profile = linuxDatabaseProfile;
       break;
     default:
       return null;

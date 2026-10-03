@@ -317,3 +317,32 @@ describe("Linux log tables: nothing else changed", () => {
     expect(headers().join("|")).not.toMatch(/Unit|Verdict|Message/);
   });
 });
+
+describe("Linux log tables: databases", () => {
+  const item = row("linux_database", {
+    event: { type: "postgres_log", action: "db_auth_failed", severity: "medium", message: "password authentication failed" },
+    message: "password authentication failed",
+    user: { name: "mallory" },
+    network: { source_ip: "203.0.113.9" },
+    linux: { db_engine: "postgresql", db_name: "app" },
+  });
+
+  it("shows who connected from where, to which database, with the message", () => {
+    render(<EventTable items={[item]} view="network" />);
+    for (const name of [/Engine/, /Action/, /Client IP/, /Database/, /Message/]) {
+      expect(screen.getAllByRole("columnheader", { name }).length).toBeGreaterThan(0);
+    }
+    expect(screen.getByText("password authentication failed")).toBeInTheDocument();
+    expect(screen.getByText("postgresql")).toBeInTheDocument();
+  });
+
+  it("pivots on the engine and database by their exact values", () => {
+    const onFilterField = vi.fn();
+    render(<EventTable items={[item]} view="network" onFilterField={onFilterField} />);
+    for (const [label, field, value] of [["Engine", "dbengine", "postgresql"], ["Database", "database", "app"]]) {
+      fireEvent.click(screen.getByRole("button", { name: `Pivot ${label}` }));
+      fireEvent.click(screen.getByRole("button", { name: `Filter by ${label}` }));
+      expect(onFilterField).toHaveBeenCalledWith(field, value);
+    }
+  });
+});

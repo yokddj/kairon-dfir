@@ -60,6 +60,9 @@ const PIVOT_FIELD_BY_COLUMN_KEY: Record<string, string> = {
   mail_status: "mailstatus",
   mail_service: "mailservice",
   relay: "relay",
+  db_engine: "dbengine",
+  db_name: "database",
+  db_command: "dbcommand",
 };
 
 export type SortField =
