@@ -63,6 +63,9 @@ const PIVOT_FIELD_BY_COLUMN_KEY: Record<string, string> = {
   db_engine: "dbengine",
   db_name: "database",
   db_command: "dbcommand",
+  vpn_software: "vpn",
+  vpn_ip: "vpnip",
+  vpn_connection: "vpnconn",
 };
 
 export type SortField =

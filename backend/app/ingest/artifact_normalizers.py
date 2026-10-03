@@ -3792,6 +3792,16 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["db_object"] = row.get("db_object", "")
     linux_data["db_reason"] = row.get("db_reason", "")
     linux_data["db_application"] = row.get("db_application", "")
+    linux_data["vpn_software"] = row.get("vpn_software", "")
+    linux_data["vpn_status"] = row.get("vpn_status", "")
+    linux_data["vpn_component"] = row.get("vpn_component", "")
+    linux_data["vpn_connection"] = row.get("vpn_connection", "")
+    linux_data["vpn_assigned_ip"] = row.get("vpn_assigned_ip", "")
+    linux_data["vpn_local_ip"] = row.get("vpn_local_ip", "")
+    linux_data["vpn_traffic_selectors"] = row.get("vpn_traffic_selectors", "")
+    linux_data["vpn_status_updated"] = row.get("vpn_status_updated", "")
+    linux_data["vpn_bytes_received"] = row.get("vpn_bytes_received", None)
+    linux_data["vpn_bytes_sent"] = row.get("vpn_bytes_sent", None)
     linux_data["mail_service"] = row.get("mail_service", "")
     linux_data["mail_component"] = row.get("mail_component", "")
     linux_data["mail_status"] = row.get("mail_status", "")
@@ -3955,6 +3965,28 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         doc["title"] = f"{engine} {action}".strip() + (f": {who}" if who else "") + (f" from {linux_data['source_ip']}" if linux_data.get("source_ip") else "")
         if linux_data.get("db_statement"):
             doc["title"] += f" - {str(linux_data['db_statement'])[:120]}"
+    elif family == "linux_vpn":
+        kind = linux_data.get("artifact_type") or "vpn_log"
+        software = str(linux_data.get("vpn_software") or "vpn")
+        doc["event"]["type"] = kind
+        doc["event"]["action"] = linux_data.get("event_action") or kind
+        doc["network"]["source_ip"] = linux_data.get("source_ip") or None
+        doc["network"]["source_port"] = linux_data.get("source_port")
+        if linux_data.get("username"):
+            doc["user"]["name"] = linux_data["username"]
+        status = str(linux_data.get("vpn_status") or "")
+        if status == "failed":
+            doc["event"]["outcome"] = "failure"
+        elif status == "success":
+            doc["event"]["outcome"] = "success"
+        if linux_data.get("event_action"):
+            action = str(linux_data["event_action"]).removeprefix("vpn_").replace("_", " ")
+            who = linux_data.get("username") or ""
+            doc["title"] = f"{software} {action}".strip() + (f": {who}" if who else "") + (f" from {linux_data['source_ip']}" if linux_data.get("source_ip") else "")
+            if linux_data.get("vpn_assigned_ip"):
+                doc["title"] += f" -> {linux_data['vpn_assigned_ip']}"
+        else:
+            doc["title"] = f"{software}: {str(linux_data.get('message') or '')[:140]}"
     elif family == "linux_container":
         kind = linux_data.get("artifact_type") or "container_log"
         doc["event"]["type"] = kind
@@ -4068,7 +4100,7 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         event_severity = "medium"
     elif family == "linux_exim" and linux_data.get("event_severity"):
         event_severity = linux_data.get("event_severity")
-    elif family in {"linux_syslog", "linux_journal", "linux_generic_log", "linux_fail2ban", "linux_database"} and _log_level_severity(row.get("severity")):
+    elif family in {"linux_syslog", "linux_journal", "linux_generic_log", "linux_fail2ban", "linux_database", "linux_vpn"} and _log_level_severity(row.get("severity")):
         # The log's own level (syslog priority, journal PRIORITY, "error", "WARNING"...), not a
         # blanket "info": an error logged by the system should not look routine in the table.
         event_severity = _log_level_severity(row.get("severity")) or event_severity
@@ -4078,6 +4110,11 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         event_severity = "info"
     elif family == "linux_os_info":
         event_severity = "info"
+    if family == "linux_vpn":
+        # A failed VPN login is medium, as is a source that failed repeatedly (a lead for review).
+        _order_vpn = {"info": 0, "low": 1, "medium": 2, "high": 3}
+        if (row.get("vpn_status") == "failed" or row.get("suspicious_indicators")) and _order_vpn.get(event_severity, 0) < 2:
+            event_severity = "medium"
     if family == "linux_database":
         # A failed database login is medium; a statement that raised a flag (an account change, a
         # destructive statement, file access, command execution, credential-table access or an
