@@ -3820,6 +3820,11 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
             doc["event"]["action"] = linux_data.get("auth_event_type")
             doc["event"]["message"] = auth_label
             doc["title"] = auth_label
+        # The remote address of a login attempt, on the standard network field so an
+        # address search finds it. Left unset when the line names none.
+        if linux_data.get("source_ip"):
+            doc["network"]["source_ip"] = linux_data.get("source_ip")
+            doc["network"]["source_port"] = linux_data.get("source_port")
     elif family == "linux_apache":
         doc["event"]["type"] = linux_data.get("artifact_type") or "apache_log"
         doc["event"]["action"] = linux_data.get("http_method") or linux_data.get("artifact_type") or "apache_log"
