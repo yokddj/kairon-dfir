@@ -757,6 +757,51 @@ const linuxDatabaseProfile: PresentationProfile = {
   ],
 };
 
+/** OpenVPN and strongSwan logs: who connected to the gateway, from where, and with which tunnel address. */
+const linuxVpnProfile: PresentationProfile = {
+  id: "linux_vpn",
+  label: "VPN logs",
+  columns: [
+    timestampColumn,
+    { key: "vpn_software", label: "VPN", paths: ["linux.vpn_software"] },
+    { key: "action", label: "Action", paths: ["event.action"] },
+    { key: "user", label: "User", paths: ["user.name", "linux.username"] },
+    { key: "source_ip", label: "Client IP", paths: ["network.source_ip", "linux.source_ip"] },
+    { key: "vpn_ip", label: "Tunnel IP", paths: ["linux.vpn_assigned_ip"] },
+    { key: "indicators", label: "Flags", paths: ["linux.suspicious_indicators"] },
+    severityColumn,
+    messageColumn,
+    timeQualityColumn,
+    { key: "vpn_connection", label: "Connection", paths: ["linux.vpn_connection"], defaultVisible: false },
+    { key: "vpn_component", label: "Component", paths: ["linux.vpn_component"], defaultVisible: false },
+    { key: "vpn_bytes_received", label: "Bytes Received", paths: ["linux.vpn_bytes_received"], defaultVisible: false },
+    { key: "vpn_bytes_sent", label: "Bytes Sent", paths: ["linux.vpn_bytes_sent"], defaultVisible: false },
+    ...sourceFileColumns,
+  ],
+  details: [
+    eventSection,
+    timeDetail,
+    {
+      title: "VPN",
+      fields: [
+        { label: "Software", paths: ["linux.vpn_software"] },
+        { label: "User", paths: ["user.name", "linux.username"] },
+        { label: "Client IP", paths: ["network.source_ip", "linux.source_ip"] },
+        { label: "Client port", paths: ["linux.source_port"] },
+        { label: "Tunnel IP assigned", paths: ["linux.vpn_assigned_ip"] },
+        { label: "Gateway address", paths: ["linux.vpn_local_ip"] },
+        { label: "Connection", paths: ["linux.vpn_connection"] },
+        { label: "Traffic selectors", paths: ["linux.vpn_traffic_selectors"] },
+        { label: "Bytes received / sent", paths: ["linux.vpn_bytes_received", "linux.vpn_bytes_sent"] },
+        { label: "Status file written", paths: ["linux.vpn_status_updated"] },
+        { label: "Flags for review", paths: ["linux.suspicious_indicators"] },
+      ],
+    },
+    provenanceSection,
+    rawSection,
+  ],
+};
+
 const CONTAINER_KINDS: Record<string, string> = {
   container_config: "Container",
   container_hostconfig: "Host configuration",
@@ -980,6 +1025,9 @@ export function presentationProfileForItems(items: Record<string, unknown>[]): P
       break;
     case "linux_database":
       profile = linuxDatabaseProfile;
+      break;
+    case "linux_vpn":
+      profile = linuxVpnProfile;
       break;
     default:
       return null;

@@ -937,7 +937,7 @@ QUERY_HELP = (
     "exe:, audit: (auditd record type), action: (e.g. firewall_block, fail2ban_ban), "
     "verb:, resource:, namespace:, decision: (Kubernetes audit), sysmon: (Sysmon for Linux event id), "
     "container:, image:, pod:, stream: (container logs and configuration), "
-    "dbengine: (mysql or postgresql), database:, dbcommand:, dbstatus: (failed or success), sql: (words in a logged SQL statement), "
+    "vpn: (openvpn or strongswan), vpnstatus: (failed or success), vpnip: (tunnel address given), vpnconn:, dbengine: (mysql or postgresql), database:, dbcommand:, dbstatus: (failed or success), sql: (words in a logged SQL statement), "
     "sender:, recipient:, queue:, mailstatus: (sent, bounced, deferred, reject, failed), mailservice: (postfix or dovecot), relay: (mail). "
     'Examples: \'process.name:powershell.exe EncodedCommand\', '
     "'artifact.type:ntfs risk_score>=70', 'url.domain:*.example.com'."

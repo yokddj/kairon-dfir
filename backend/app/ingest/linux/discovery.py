@@ -17,6 +17,7 @@ SUPPORTED_ARTIFACTS: dict[str, dict[str, str]] = {
     "lastlog": {"label": "lastlog", "family": "linux_lastlog"},
     "syslog": {"label": "syslog", "family": "linux_syslog"},
     "fail2ban": {"label": "fail2ban", "family": "linux_fail2ban"},
+    "vpn": {"label": "VPN logs (OpenVPN / strongSwan)", "family": "linux_vpn"},
     "database": {"label": "database logs (MySQL / MariaDB / PostgreSQL)", "family": "linux_database"},
     "container": {"label": "containers (Docker / Kubernetes logs and configuration)", "family": "linux_container"},
     "k8s_audit": {"label": "Kubernetes audit", "family": "linux_k8s_audit"},
@@ -91,6 +92,8 @@ def _artifact_key(family: str, artifact_type: str, path: str) -> str:
         return "fail2ban"
     if family == "linux_database":
         return "database"
+    if family == "linux_vpn":
+        return "vpn"
     if family == "linux_container":
         return "container"
     if family == "linux_k8s_audit":

@@ -37,6 +37,7 @@ LINUX_PARSER_TARGETS: dict[str, LinuxParserTarget] = {
     "linux_k8s_audit_raw": LinuxParserTarget("linux_k8s_audit_raw", "k8s_audit", "parse_k8s_audit"),
     "linux_container_raw": LinuxParserTarget("linux_container_raw", "container_logs", "parse_container_artifact"),
     "linux_database_raw": LinuxParserTarget("linux_database_raw", "database_logs", "parse_database_log"),
+    "linux_vpn_raw": LinuxParserTarget("linux_vpn_raw", "vpn_logs", "parse_vpn_log"),
     "linux_audit_raw": LinuxParserTarget("linux_audit_raw", "audit", "parse_audit"),
     "linux_apache_raw": LinuxParserTarget("linux_apache_raw", "apache", "parse_apache"),
     "linux_exim_raw": LinuxParserTarget("linux_exim_raw", "exim", "parse_exim"),
@@ -94,7 +95,7 @@ def parse_linux_artifact_file(path: Path, *, parser: str | None, artifact_type: 
             # extensionless copy still parses; text exports fall through unchanged.
             if is_journal_file(path):
                 return parse_journal_binary_file(path, source_path=source_path)
-        if target.parser in {"linux_generic_raw", "linux_container_raw", "linux_database_raw"}:
+        if target.parser in {"linux_generic_raw", "linux_container_raw", "linux_database_raw", "linux_vpn_raw"}:
             # Capped, magic-byte-sniffed read (gzip/bzip2/xz): an unrecognised log can be
             # arbitrarily large or a compression bomb, unlike the fixed-name artifacts.
             from app.ingest.linux.generic_log import read_log_text

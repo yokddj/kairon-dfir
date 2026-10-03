@@ -14,7 +14,7 @@ const base = (type: string, extra: Item = {}): Item => ({
   ...extra,
 });
 
-const LINUX_TYPES = ["linux_syslog", "linux_journal", "linux_auth", "linux_audit", "linux_fail2ban", "linux_generic_log", "linux_persistence", "linux_k8s_audit", "linux_container", "linux_apache", "linux_exim", "linux_database"];
+const LINUX_TYPES = ["linux_syslog", "linux_journal", "linux_auth", "linux_audit", "linux_fail2ban", "linux_generic_log", "linux_persistence", "linux_k8s_audit", "linux_container", "linux_apache", "linux_exim", "linux_database", "linux_vpn"];
 
 describe("Linux presentation profiles: selection", () => {
   it.each(LINUX_TYPES)("has a profile for %s", (type) => {
@@ -222,6 +222,17 @@ describe("Linux presentation profiles: values", () => {
     expect(presentationProfileForItems([item])?.id).toBe("linux_database");
     expect(["db_engine", "action", "user", "source_ip", "db_name", "indicators", "statement"].map((key) => column(item, key)))
       .toEqual(["mysql", "db_query", "root", "203.0.113.9", "shop", "destructive_statement", "DROP TABLE users;"]);
+  });
+
+  it("VPN rows show the client, the tunnel address and the action", () => {
+    const item = base("linux_vpn", {
+      event: { type: "openvpn_log", action: "vpn_connect", severity: "info", message: "m" },
+      user: { name: "alice" },
+      network: { source_ip: "203.0.113.9" },
+      linux: { vpn_software: "openvpn", vpn_assigned_ip: "10.8.0.6", suspicious_indicators: [] },
+    });
+    expect(presentationProfileForItems([item])?.id).toBe("linux_vpn");
+    expect(["vpn_software", "action", "user", "source_ip", "vpn_ip"].map((key) => column(item, key))).toEqual(["openvpn", "vpn_connect", "alice", "203.0.113.9", "10.8.0.6"]);
   });
 
   it("container configuration shows image, state, flags and a privileged yes/no", () => {

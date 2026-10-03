@@ -346,3 +346,30 @@ describe("Linux log tables: databases", () => {
     }
   });
 });
+
+describe("Linux log tables: VPN", () => {
+  const item = row("linux_vpn", {
+    event: { type: "openvpn_log", action: "vpn_auth_failed", severity: "medium", message: "TLS Auth Error" },
+    message: "TLS Auth Error",
+    network: { source_ip: "198.51.100.7" },
+    linux: { vpn_software: "openvpn", vpn_assigned_ip: "10.8.0.6" },
+  });
+
+  it("shows the client, tunnel address and message", () => {
+    render(<EventTable items={[item]} view="network" />);
+    for (const name of [/VPN/, /Action/, /Client IP/, /Tunnel IP/, /Message/]) {
+      expect(screen.getAllByRole("columnheader", { name }).length).toBeGreaterThan(0);
+    }
+    expect(screen.getByText("TLS Auth Error")).toBeInTheDocument();
+  });
+
+  it("pivots on the VPN software and the tunnel address by their exact values", () => {
+    const onFilterField = vi.fn();
+    render(<EventTable items={[item]} view="network" onFilterField={onFilterField} />);
+    for (const [label, field, value] of [["VPN", "vpn", "openvpn"], ["Tunnel IP", "vpnip", "10.8.0.6"]]) {
+      fireEvent.click(screen.getByRole("button", { name: `Pivot ${label}` }));
+      fireEvent.click(screen.getByRole("button", { name: `Filter by ${label}` }));
+      expect(onFilterField).toHaveBeenCalledWith(field, value);
+    }
+  });
+});
