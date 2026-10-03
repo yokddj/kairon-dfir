@@ -637,6 +637,17 @@ function EmailArtifactsView({
   );
 }
 
+// Pivot dimensions with no structured filter on the backend. Clicking one adds a search-syntax
+// term (verdict:"block", jail:"sshd") to the query box, where it stays visible and editable.
+const SYNTAX_PIVOT_FIELDS = new Set(["process", "xff", "verdict", "jail", "proto", "webserver", "exe", "audit"]);
+
+export function addSyntaxTerm(query: string, field: string, value: string, exclude: boolean): string {
+  const term = `${field}:"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  const clause = exclude ? `NOT ${term}` : term;
+  const current = query.trim();
+  return current && current !== "*" ? `${current} AND ${clause}` : clause;
+}
+
 export default function ArtifactExplorer() {
   const { caseId: routeCaseId } = useParams();
   const [searchParams] = useSearchParams();
@@ -786,6 +797,8 @@ export default function ArtifactExplorer() {
     if (field === "host") {
       const match = resolveHost(caseContext?.hosts ?? [], undefined, value);
       if (match) setHostFilter(match.id);
+    } else if (SYNTAX_PIVOT_FIELDS.has(field)) {
+      setQuery((current) => addSyntaxTerm(current, field, value, false));
     } else {
       setFieldFilters((current) => ({ ...current, [field]: { include: value } }));
     }
@@ -793,7 +806,11 @@ export default function ArtifactExplorer() {
   }
 
   function handleExcludeField(field: string, value: string) {
-    setFieldFilters((current) => ({ ...current, [field]: { exclude: value } }));
+    if (SYNTAX_PIVOT_FIELDS.has(field)) {
+      setQuery((current) => addSyntaxTerm(current, field, value, true));
+    } else {
+      setFieldFilters((current) => ({ ...current, [field]: { exclude: value } }));
+    }
     setPage(1);
   }
 

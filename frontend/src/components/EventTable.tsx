@@ -33,6 +33,19 @@ const PIVOT_FIELD_BY_COLUMN_KEY: Record<string, string> = {
   path: "file_path",
   domain: "domain",
   program: "process_name",
+  // Linux log profiles (see lib/eventPresentationProfiles.ts). Each of these columns renders the
+  // raw field value, so the cell text is exactly what the filter should match. "ip" is a
+  // structured filter; the rest are search-syntax shortcuts the parent turns into a query term.
+  source_ip: "ip",
+  destination_ip: "ip",
+  process: "process",
+  xff: "xff",
+  verdict: "verdict",
+  jail: "jail",
+  protocol: "proto",
+  web_server: "webserver",
+  exe: "exe",
+  audit_type: "audit",
 };
 
 export type SortField =
@@ -839,7 +852,9 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
   const [internalSortBy, setInternalSortBy] = useState<SortField | null>(sortBy ?? null);
   const [internalSortOrder, setInternalSortOrder] = useState<SortOrder>(sortOrder ?? "asc");
   const resolved = useMemo(() => resolveView(view, items), [items, view]);
-  const presentationProfile = useMemo(() => (resolved === "network" ? presentationProfileForItems(items) : null), [items, resolved]);
+  // Profiles are keyed by artifact type and null for any that has none, so they apply whatever
+  // table view the artifact is filed under (the systemd journal, for one, sits under "evtx").
+  const presentationProfile = useMemo(() => presentationProfileForItems(items), [items]);
   const allColumns = useMemo(() => presentationProfile ? columnsFromProfile(presentationProfile) : getColumns(resolved), [presentationProfile, resolved]);
   const profileKey = presentationProfile?.id ?? resolved;
   useEffect(() => {
