@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from app.ingest.linux.container_logs import container_kind
 from app.ingest.linux.persistence import persistence_kind
 
 _LINUX_ARTIFACT_MAP: dict[str, tuple[str, str, str]] = {
@@ -176,6 +177,9 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
         return ("linux_journal", "journal_binary", "linux_journal_raw")
     if _K8S_AUDIT_RE.search(path_str):
         return ("linux_k8s_audit", "k8s_audit", "linux_k8s_audit_raw")
+    container_type = container_kind(path_str)
+    if container_type:
+        return ("linux_container", container_type, "linux_container_raw")
     # Persistence/rootkit-hook config is claimed before the filename table below: files such as
     # /etc/pam.d/passwd or /etc/pam.d/group must not be mistaken for /etc/passwd and /etc/group.
     persistence_type = persistence_kind(path_str)

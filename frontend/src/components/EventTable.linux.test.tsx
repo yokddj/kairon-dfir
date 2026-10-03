@@ -149,6 +149,56 @@ describe("Linux log tables: Kubernetes audit", () => {
   });
 });
 
+describe("Linux log tables: containers", () => {
+  const log = row("linux_container", {
+    event: { type: "container_log", action: "container_stderr", severity: "medium", message: "db connection refused" },
+    message: "db connection refused",
+    linux: { container_name: "api", container_id: "a1b2c3d4", k8s_pod: "api-7d9", k8s_namespace: "shop", container_stream: "stderr" },
+  });
+  const config = row("linux_container", {
+    event: { type: "container_hostconfig", severity: "high", message: "Container host configuration a1b2c3d4: NetworkMode=host [privileged_container]" },
+    message: "Container host configuration a1b2c3d4: NetworkMode=host [privileged_container]",
+    linux: { container_id: "a1b2c3d4", container_privileged: true, network_mode: "host", suspicious_indicators: ["privileged_container", "host_network"] },
+  });
+
+  it("shows a container's output with its pod, namespace and stream, and the message", () => {
+    render(<EventTable items={[log]} view="network" />);
+    for (const name of [/Container/, /Pod/, /Namespace/, /Stream/, /Message/]) {
+      expect(screen.getAllByRole("columnheader", { name }).length).toBeGreaterThan(0);
+    }
+    expect(screen.getByText("db connection refused")).toBeInTheDocument();
+    expect(screen.getByText("api-7d9")).toBeInTheDocument();
+    expect(screen.getByText("stderr")).toBeInTheDocument();
+  });
+
+  it("pivots on the pod, namespace and stream by their exact values", () => {
+    const onFilterField = vi.fn();
+    render(<EventTable items={[log]} view="network" onFilterField={onFilterField} />);
+    for (const [label, field, value] of [["Pod", "pod", "api-7d9"], ["Namespace", "namespace", "shop"], ["Stream", "stream", "stderr"]]) {
+      fireEvent.click(screen.getByRole("button", { name: `Pivot ${label}` }));
+      fireEvent.click(screen.getByRole("button", { name: `Filter by ${label}` }));
+      expect(onFilterField).toHaveBeenCalledWith(field, value);
+    }
+  });
+
+  it("shows container configuration with its flags and a privileged answer, not log columns", () => {
+    render(<EventTable items={[config]} view="network" />);
+    expect(screen.getByRole("columnheader", { name: /Privileged/i })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /Flags/i })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: /Stream/i })).not.toBeInTheDocument();
+    expect(screen.getByText("privileged_container, host_network")).toBeInTheDocument();
+    expect(screen.getByText("yes")).toBeInTheDocument();
+    expect(screen.getByText("Host configuration")).toBeInTheDocument();
+  });
+
+  it("states in the detail that environment values are never stored", () => {
+    render(<EventTable items={[row("linux_container", { ...config, id: "cfg-2", linux: { ...(config.linux as object), container_env_names: ["PATH", "DB_PASSWORD"] } })]} view="network" />);
+    fireEvent.click(screen.getByText("yes"));
+    expect(screen.getByText("Environment variable names (values are never stored)")).toBeInTheDocument();
+    expect(screen.getByText("PATH, DB_PASSWORD")).toBeInTheDocument();
+  });
+});
+
 describe("Linux log tables: systemd journal", () => {
   const item = row("linux_journal", {
     event: { type: "linux_journal", action: "ssh.service", severity: "medium", message: "Failed password for invalid user mallory" },

@@ -14,7 +14,7 @@ const base = (type: string, extra: Item = {}): Item => ({
   ...extra,
 });
 
-const LINUX_TYPES = ["linux_syslog", "linux_journal", "linux_auth", "linux_audit", "linux_fail2ban", "linux_generic_log", "linux_persistence", "linux_k8s_audit", "linux_apache", "linux_exim"];
+const LINUX_TYPES = ["linux_syslog", "linux_journal", "linux_auth", "linux_audit", "linux_fail2ban", "linux_generic_log", "linux_persistence", "linux_k8s_audit", "linux_container", "linux_apache", "linux_exim"];
 
 describe("Linux presentation profiles: selection", () => {
   it.each(LINUX_TYPES)("has a profile for %s", (type) => {
@@ -177,6 +177,32 @@ describe("Linux presentation profiles: values", () => {
     });
     expect(["user", "verb", "resource", "subresource", "namespace", "object", "source_ip", "http_status", "decision", "indicators"].map((key) => column(item, key)))
       .toEqual(["alice", "create", "pods", "exec", "default", "web", "203.0.113.9", "101", "allow", "pod_exec"]);
+  });
+
+  it("container rows use the log layout, or the configuration layout when every row is configuration", () => {
+    const log = base("linux_container", { event: { type: "container_log", message: "m" } });
+    const config = base("linux_container", { event: { type: "container_config", message: "m" } });
+    const host = base("linux_container", { event: { type: "container_hostconfig", message: "m" } });
+    expect(presentationProfileForItems([log])?.id).toBe("linux_container_log");
+    expect(presentationProfileForItems([config, host])?.id).toBe("linux_container_config");
+    expect(presentationProfileForItems([config, log])?.id).toBe("linux_container_log");
+  });
+
+  it("container configuration shows image, state, flags and a privileged yes/no", () => {
+    const item = base("linux_container", {
+      event: { type: "container_config", message: "Container web" },
+      linux: { container_name: "web", container_image: "nginx:1.25", container_state: "running", container_privileged: true, network_mode: "host", suspicious_indicators: ["privileged_container", "host_network"] },
+    });
+    expect(["container", "image", "state", "indicators", "privileged", "network_mode", "kind"].map((key) => column(item, key)))
+      .toEqual(["web", "nginx:1.25", "running", "privileged_container, host_network", "yes", "host", "Container"]);
+    expect(column(base("linux_container", { event: { type: "container_config", message: "m" }, linux: { container_privileged: false } }), "privileged")).toBe("no");
+  });
+
+  it("pod and namespace columns appear only for Kubernetes logs", () => {
+    const vis = (items: Item[], key: string) => presentationProfileForItems(items)!.columns.find((c) => c.key === key)!.defaultVisible;
+    const docker = base("linux_container", { event: { type: "container_log", message: "m" }, linux: { container_id: "abc" } });
+    const cri = base("linux_container", { event: { type: "container_log", message: "m" }, linux: { k8s_pod: "web-1", k8s_namespace: "shop", container_name: "nginx" } });
+    expect([vis([docker], "pod"), vis([docker], "namespace"), vis([cri], "pod"), vis([cri], "namespace")]).toEqual([false, false, true, true]);
   });
 
   it("the subresource column appears only when some request has one", () => {

@@ -3772,6 +3772,20 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["apache_module"] = row.get("apache_module", "")
     linux_data["web_server"] = row.get("web_server", "")
     linux_data["jail"] = row.get("jail", "")
+    linux_data["container_id"] = row.get("container_id", "")
+    linux_data["container_name"] = row.get("container_name") or ""
+    linux_data["container_image"] = row.get("container_image", "")
+    linux_data["container_state"] = row.get("container_state", "")
+    linux_data["container_exit_code"] = row.get("container_exit_code", None)
+    linux_data["container_command"] = row.get("container_command", "")
+    linux_data["container_privileged"] = bool(row.get("container_privileged"))
+    linux_data["container_stream"] = row.get("container_stream", "")
+    linux_data["container_cap_add"] = row.get("container_cap_add") or []
+    linux_data["container_env_names"] = row.get("container_env_names") or []
+    linux_data["container_mounts"] = row.get("container_mounts") or []
+    linux_data["network_mode"] = row.get("network_mode", "")
+    linux_data["pid_mode"] = row.get("pid_mode", "")
+    linux_data["k8s_pod"] = row.get("k8s_pod", "")
     linux_data["k8s_verb"] = row.get("k8s_verb", "")
     linux_data["k8s_resource"] = row.get("k8s_resource", "")
     linux_data["k8s_subresource"] = row.get("k8s_subresource", "")
@@ -3893,6 +3907,11 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         doc["event"]["action"] = f"persistence_{kind}"
         detail = linux_data.get("library_path") or linux_data.get("pam_module") or linux_data.get("message") or ""
         doc["title"] = f"{kind.replace('_', ' ')}: {str(detail)[:120]}"
+    elif family == "linux_container":
+        kind = linux_data.get("artifact_type") or "container_log"
+        doc["event"]["type"] = kind
+        doc["event"]["action"] = f"container_{linux_data.get('container_stream')}" if kind == "container_log" and linux_data.get("container_stream") else kind
+        doc["title"] = linux_data.get("message") or "Container event"
     elif family == "linux_k8s_audit":
         verb = linux_data.get("k8s_verb") or "request"
         doc["event"]["type"] = "k8s_audit"
@@ -3965,6 +3984,17 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
             event_severity = "low"
         else:
             event_severity = "info"
+    elif family == "linux_container":
+        # Configuration flags are leads for review, never confirmed detections. Privileged mode, the
+        # Docker socket and the host root mounted in are high; any other flag medium. Log lines take
+        # the severity of their own level.
+        from app.ingest.linux.container_logs import HIGH_SEVERITY_FLAGS as CONTAINER_HIGH_FLAGS
+
+        indicators = set(linux_data.get("suspicious_indicators") or [])
+        if indicators:
+            event_severity = "high" if indicators & CONTAINER_HIGH_FLAGS else "medium"
+        else:
+            event_severity = _log_level_severity(row.get("severity")) or event_severity
     elif family == "linux_k8s_audit":
         # Flags are leads for review, never confirmed detections: a few combinations (a privileged
         # or Docker-socket-mounting workload, a cluster-admin binding, an anonymous request that

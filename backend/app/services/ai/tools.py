@@ -935,7 +935,8 @@ QUERY_HELP = (
     "xff: (original client behind a proxy), webserver: (apache or nginx), indicator: "
     "(a flagged persistence or web-request marker such as reverse_shell), library:, pam:, "
     "exe:, audit: (auditd record type), action: (e.g. firewall_block, fail2ban_ban), "
-    "verb:, resource:, namespace:, decision: (Kubernetes audit), sysmon: (Sysmon for Linux event id). "
+    "verb:, resource:, namespace:, decision: (Kubernetes audit), sysmon: (Sysmon for Linux event id), "
+    "container:, image:, pod:, stream: (container logs and configuration). "
     'Examples: \'process.name:powershell.exe EncodedCommand\', '
     "'artifact.type:ntfs risk_score>=70', 'url.domain:*.example.com'."
 )
