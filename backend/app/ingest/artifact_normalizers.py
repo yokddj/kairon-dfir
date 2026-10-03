@@ -3644,6 +3644,29 @@ def normalize_network_row(document: dict, row: dict, artifact_meta: dict) -> dic
     return document
 
 
+_SYSLOG_PRIORITY_SEVERITY = {0: "high", 1: "high", 2: "high", 3: "medium", 4: "low", 5: "info", 6: "info", 7: "info"}
+_LOG_LEVEL_SEVERITY = {
+    "emerg": "high", "emergency": "high", "alert": "high", "crit": "high", "critical": "high", "fatal": "high",
+    "err": "medium", "error": "medium",
+    "warn": "low", "warning": "low",
+    "notice": "info", "info": "info", "debug": "info",
+}
+
+
+def _log_level_severity(value: object) -> str | None:
+    """Kairon severity for a syslog priority number (0-7) or level word, or None if unknown.
+
+    Accepts "3", 3, "err", "error", and the "facility.level" form some syslogs write
+    ("auth.err"). Levels 0-2 are high, 3 medium, 4 low, the rest informational.
+    """
+    text = str(value if value is not None else "").strip().lower()
+    if not text:
+        return None
+    if text.isdigit():
+        return _SYSLOG_PRIORITY_SEVERITY.get(int(text))
+    return _LOG_LEVEL_SEVERITY.get(text.rsplit(".", 1)[-1])
+
+
 def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact_type: str = "", detected_host: str | None = None) -> dict:
     """Normalize a Linux artifact row into the base document."""
     doc = dict(doc or {})
@@ -3749,6 +3772,11 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["apache_module"] = row.get("apache_module", "")
     linux_data["web_server"] = row.get("web_server", "")
     linux_data["jail"] = row.get("jail", "")
+    # systemd journal fields only the binary form carries (see app.ingest.linux.journal).
+    linux_data["unit"] = row.get("unit", "")
+    linux_data["transport"] = row.get("transport", "")
+    linux_data["boot_id"] = row.get("boot_id", "")
+    linux_data["seqnum"] = row.get("seqnum", None)
     linux_data["library_path"] = row.get("library_path", "")
     linux_data["pam_type"] = row.get("pam_type", "")
     linux_data["pam_control"] = row.get("pam_control", "")
@@ -3790,7 +3818,15 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         linux_data["detected_host"] = detected_host
 
     if row.get("username"):
-        doc["user"]["name"] = row["username"]
+        username = str(row["username"])
+        if row.get("artifact_family") == "linux_journal" and username.isdigit():
+            # The journal records the numeric uid. UID 0 is root by definition; any other uid is
+            # kept as an id rather than shown as if it were a name.
+            doc["user"]["id"] = username
+            if username == "0":
+                doc["user"]["name"] = "root"
+        else:
+            doc["user"]["name"] = row["username"]
 
     doc["host"]["os"] = "Linux"
 
@@ -3917,6 +3953,10 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         event_severity = "medium"
     elif family == "linux_exim" and linux_data.get("event_severity"):
         event_severity = linux_data.get("event_severity")
+    elif family in {"linux_syslog", "linux_journal", "linux_generic_log", "linux_fail2ban"} and _log_level_severity(row.get("severity")):
+        # The log's own level (syslog priority, journal PRIORITY, "error", "WARNING"...), not a
+        # blanket "info": an error logged by the system should not look routine in the table.
+        event_severity = _log_level_severity(row.get("severity")) or event_severity
     elif family == "linux_lastlog":
         event_severity = "info"
     elif family == "linux_timezone":
