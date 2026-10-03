@@ -372,6 +372,74 @@ const linuxSysmonProfile: PresentationProfile = {
   details: [eventSection, sysmonDetail, networkSection, timeDetail, provenanceSection, rawSection],
 };
 
+const MAIL_ACTIONS: Record<string, string> = {
+  mail_reject: "Rejected",
+  mail_auth_failed: "Login failed",
+  mail_login: "Login",
+  mail_logout: "Logout",
+  mail_received: "Received",
+  mail_received_authenticated: "Received (authenticated)",
+  mail_queued: "Queued",
+  mail_cleanup: "Message accepted",
+  mail_delivery: "Delivery",
+  mail_removed: "Removed from queue",
+  mail_connect: "Connect",
+  mail_disconnect: "Disconnect",
+  mail_connection_problem: "Connection problem",
+  mail_auth_info: "Authentication info",
+};
+
+const mailDetail: DetailSection = {
+  title: "Mail",
+  fields: [
+    { label: "Service", paths: ["linux.mail_service"] },
+    { label: "Component", paths: ["linux.mail_component"] },
+    { label: "Action", paths: ["event.action"], format: (value) => MAIL_ACTIONS[String(value)] ?? String(value) },
+    { label: "Status", paths: ["linux.mail_status"] },
+    { label: "SMTP code", paths: ["linux.smtp_status"] },
+    { label: "Reason", paths: ["linux.mail_reason"] },
+    { label: "Queue ID", paths: ["linux.queue_id"] },
+    { label: "Sender", paths: ["email.from.address", "linux.sender"] },
+    { label: "Recipient", paths: ["email.to", "linux.recipient"] },
+    { label: "Original recipient", paths: ["linux.mail_original_recipient"] },
+    { label: "Message ID", paths: ["email.message_id", "linux.message_id"] },
+    { label: "Authenticated user", paths: ["user.name", "linux.username"] },
+    { label: "Authentication method", paths: ["linux.authentication"] },
+    { label: "HELO / EHLO", paths: ["linux.helo"] },
+    { label: "Client host", paths: ["linux.mail_client_host"] },
+    { label: "Relay", paths: ["linux.mail_relay"] },
+  ],
+};
+
+/** Postfix and Dovecot lines found inside syslog (mail.log, maillog). */
+const linuxMailProfile: PresentationProfile = {
+  id: "linux_syslog_mail",
+  label: "Mail server log",
+  columns: [
+    timestampColumn,
+    { key: "mail_service", label: "Service", paths: ["linux.mail_service"] },
+    { key: "mail_action", label: "Action", paths: ["event.action"], format: (value) => MAIL_ACTIONS[String(value)] ?? String(value) },
+    { key: "source_ip", label: "Client IP", paths: ["network.source_ip", "linux.source_ip"] },
+    { key: "user", label: "User", paths: ["user.name", "linux.username"] },
+    { key: "sender", label: "Sender", paths: ["email.from.address", "linux.sender"] },
+    { key: "recipient", label: "Recipient", paths: ["email.to", "linux.recipient"] },
+    { key: "mail_status", label: "Status", paths: ["linux.mail_status"] },
+    { key: "queue_id", label: "Queue ID", paths: ["linux.queue_id"] },
+    severityColumn,
+    messageColumn,
+    hostColumn,
+    { key: "relay", label: "Relay", paths: ["linux.mail_relay"], defaultVisible: false },
+    { key: "smtp_code", label: "SMTP Code", paths: ["linux.smtp_status"], defaultVisible: false },
+    { key: "helo", label: "HELO", paths: ["linux.helo"], defaultVisible: false },
+    { key: "reason", label: "Reason", paths: ["linux.mail_reason"], defaultVisible: false },
+    { key: "destination_ip", label: "Server IP", paths: ["network.destination_ip", "destination.ip"], defaultVisible: false },
+    timeQualityColumn,
+    pidColumn,
+    ...sourceFileColumns,
+  ],
+  details: [eventSection, mailDetail, networkSection, timeDetail, provenanceSection, rawSection],
+};
+
 const linuxJournalProfile: PresentationProfile = {
   id: "linux_journal",
   label: "systemd journal",
@@ -796,6 +864,10 @@ function withMessageColumn(profile: PresentationProfile, visibleByDefault = true
   return { ...profile, columns: [...profile.columns.slice(0, at), column, ...profile.columns.slice(at)] };
 }
 
+function isMailRow(item: Record<string, unknown>): boolean {
+  return isPresent(firstPresent(item, ["linux.mail_service"]));
+}
+
 function isSysmonRow(item: Record<string, unknown>): boolean {
   return isPresent(firstPresent(item, ["linux.sysmon_event_id"]));
 }
@@ -819,12 +891,14 @@ export function presentationProfileForItems(items: Record<string, unknown>[]): P
       break;
     case "linux_syslog": {
       const threshold = Math.max(1, items.length * FIREWALL_PROFILE_SHARE);
-      const firewall = items.filter(isFirewallRow).length;
-      const sysmon = items.filter(isSysmonRow).length;
-      // Packet logs or Sysmon events, whichever dominates once it is a meaningful share of the rows.
-      if (sysmon >= threshold && sysmon >= firewall) profile = linuxSysmonProfile;
-      else if (firewall >= threshold) profile = linuxFirewallProfile;
-      else profile = linuxSyslogProfile;
+      const counts = [
+        { profile: linuxSysmonProfile, count: items.filter(isSysmonRow).length },
+        { profile: linuxFirewallProfile, count: items.filter(isFirewallRow).length },
+        { profile: linuxMailProfile, count: items.filter(isMailRow).length },
+      ];
+      // Whichever kind of event dominates, once it is a meaningful share of the rows.
+      const dominant = counts.filter((entry) => entry.count >= threshold).sort((a, b) => b.count - a.count)[0];
+      profile = dominant ? dominant.profile : linuxSyslogProfile;
       break;
     }
     case "linux_journal":

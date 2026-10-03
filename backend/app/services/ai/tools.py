@@ -936,7 +936,8 @@ QUERY_HELP = (
     "(a flagged persistence or web-request marker such as reverse_shell), library:, pam:, "
     "exe:, audit: (auditd record type), action: (e.g. firewall_block, fail2ban_ban), "
     "verb:, resource:, namespace:, decision: (Kubernetes audit), sysmon: (Sysmon for Linux event id), "
-    "container:, image:, pod:, stream: (container logs and configuration). "
+    "container:, image:, pod:, stream: (container logs and configuration), "
+    "sender:, recipient:, queue:, mailstatus: (sent, bounced, deferred, reject, failed), mailservice: (postfix or dovecot), relay: (mail). "
     'Examples: \'process.name:powershell.exe EncodedCommand\', '
     "'artifact.type:ntfs risk_score>=70', 'url.domain:*.example.com'."
 )

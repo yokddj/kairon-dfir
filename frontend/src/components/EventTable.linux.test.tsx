@@ -111,6 +111,45 @@ describe("Linux log tables: Sysmon for Linux", () => {
   });
 });
 
+describe("Linux log tables: mail server", () => {
+  const failed = row("linux_syslog", {
+    event: { type: "syslog", action: "mail_auth_failed", outcome: "failure", severity: "medium", message: "imap-login: Disconnected (auth failed, 3 attempts in 4 secs): user=<bob>" },
+    message: "imap-login: Disconnected (auth failed, 3 attempts in 4 secs): user=<bob>",
+    user: { name: "bob" },
+    network: { source_ip: "203.0.113.9" },
+    linux: { mail_service: "dovecot", mail_status: "failed", process: "dovecot" },
+  });
+
+  it("shows who tried which account from where, with the original line", () => {
+    render(<EventTable items={[failed]} view="network" />);
+    for (const name of [/Service/, /^Action/, /Client IP/, /^User/, /Sender/, /Recipient/, /Status/, /Queue ID/, /Message/]) {
+      expect(screen.getAllByRole("columnheader", { name }).length).toBeGreaterThan(0);
+    }
+    expect(screen.getByText("Login failed")).toBeInTheDocument();
+    expect(screen.getByText("203.0.113.9")).toBeInTheDocument();
+    expect(screen.getByText("dovecot")).toBeInTheDocument();
+    expect(screen.getByText(/auth failed, 3 attempts/)).toBeInTheDocument();
+  });
+
+  it("pivots on the service and the status by their raw values", () => {
+    const onFilterField = vi.fn();
+    render(<EventTable items={[failed]} view="network" onFilterField={onFilterField} />);
+    fireEvent.click(screen.getByRole("button", { name: "Pivot Service" }));
+    fireEvent.click(screen.getByRole("button", { name: "Filter by Service" }));
+    expect(onFilterField).toHaveBeenCalledWith("mailservice", "dovecot");
+    fireEvent.click(screen.getByRole("button", { name: "Pivot Status" }));
+    fireEvent.click(screen.getByRole("button", { name: "Filter by Status" }));
+    expect(onFilterField).toHaveBeenCalledWith("mailstatus", "failed");
+  });
+
+  it("opens a Mail detail section", () => {
+    render(<EventTable items={[failed]} view="network" />);
+    fireEvent.click(screen.getByText("203.0.113.9"));
+    expect(screen.getByText("Mail")).toBeInTheDocument();
+    expect(screen.getByText("Authenticated user")).toBeInTheDocument();
+  });
+});
+
 describe("Linux log tables: Kubernetes audit", () => {
   const exec = row("linux_k8s_audit", {
     event: { type: "k8s_audit", action: "k8s_create", outcome: "success", severity: "medium", message: "alice create pods/web/exec (namespace default) -> 101 [allow]" },

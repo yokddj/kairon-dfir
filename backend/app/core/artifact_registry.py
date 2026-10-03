@@ -380,7 +380,7 @@ ARTIFACT_REGISTRY: dict[str, dict[str, Any]] = {
         "timeline_capable": True,
         "severity_support": True,
         "usable_tier": "tier1",
-        "filter_fields": ["linux.username", "linux.process", "linux.hostname", "linux.firewall_action", "linux.network_protocol"],
+        "filter_fields": ["linux.username", "linux.process", "linux.hostname", "linux.firewall_action", "linux.network_protocol", "linux.mail_service", "linux.mail_status", "linux.sender", "linux.recipient"],
         "quick_selects": ["core_logs", "execution"],
         "capabilities": ["supportsTimeline", "supportsSearch", "supportsJournal", "supportsNetwork"],
     },

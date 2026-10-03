@@ -3776,6 +3776,14 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["apache_module"] = row.get("apache_module", "")
     linux_data["web_server"] = row.get("web_server", "")
     linux_data["jail"] = row.get("jail", "")
+    linux_data["mail_service"] = row.get("mail_service", "")
+    linux_data["mail_component"] = row.get("mail_component", "")
+    linux_data["mail_status"] = row.get("mail_status", "")
+    linux_data["mail_client_host"] = row.get("mail_client_host", "")
+    linux_data["mail_relay"] = row.get("mail_relay", "")
+    linux_data["mail_reason"] = row.get("mail_reason", "")
+    linux_data["mail_command"] = row.get("mail_command", "")
+    linux_data["mail_original_recipient"] = row.get("mail_original_recipient", "")
     linux_data["container_id"] = row.get("container_id", "")
     linux_data["container_name"] = row.get("container_name") or ""
     linux_data["container_image"] = row.get("container_image", "")
@@ -4035,8 +4043,35 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         event_severity = "info"
     elif family == "linux_os_info":
         event_severity = "info"
+    if row.get("mail_service"):
+        # A mail server's own failures stand out even when its log line carries no level: a failed
+        # login is medium, a refused relay, a bounce or a deferral low. A higher level the line
+        # itself carried is kept.
+        _mail_floor = "medium" if row.get("event_action") == "mail_auth_failed" else "low" if row.get("mail_status") in {"reject", "bounced", "deferred"} else None
+        _order = {"info": 0, "low": 1, "medium": 2, "high": 3}
+        if _mail_floor and _order.get(_mail_floor, 0) > _order.get(event_severity, 0):
+            event_severity = _mail_floor
     doc["event"]["severity"] = event_severity
 
+    if row.get("mail_service"):
+        service = str(row["mail_service"]).capitalize()
+        mail_action = str(row.get("event_action") or "").removeprefix("mail_").replace("_", " ") or "event"
+        doc["network"]["source_ip"] = row.get("source_ip") or None
+        doc["destination"]["ip"] = row.get("destination_ip") or row.get("local_ip") or None
+        doc["network"]["destination_ip"] = row.get("destination_ip") or row.get("local_ip") or None
+        doc["email"]["from"]["address"] = row.get("sender") or None
+        doc["email"]["to"] = [row["recipient"]] if row.get("recipient") else []
+        doc["email"]["message_id"] = row.get("message_id") or None
+        if row.get("username"):
+            doc["user"]["name"] = row["username"]
+        doc["event"]["action"] = row.get("event_action") or doc["event"].get("action")
+        status = str(row.get("mail_status") or "")
+        if status in {"failed", "reject", "bounced"}:
+            doc["event"]["outcome"] = "failure"
+        elif status in {"sent", "success"}:
+            doc["event"]["outcome"] = "success"
+        who = row.get("username") or row.get("sender") or row.get("source_ip") or ""
+        doc["title"] = f"{service} {mail_action}" + (f": {who}" if who else "") + (f" ({status})" if status and status != "success" and status not in mail_action else "")
     if row.get("firewall_action"):
         action = row["firewall_action"]
         source = f"{row.get('source_ip')}:{row.get('source_port')}" if row.get("source_port") is not None else str(row.get("source_ip"))
