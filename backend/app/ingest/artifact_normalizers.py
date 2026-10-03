@@ -3757,6 +3757,10 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["hostname"] = row.get("hostname") or linux_data.get("hostname") or detected_host or ""
     linux_data["http_method"] = row.get("http_method", "")
     linux_data["url_path"] = row.get("url_path", "")
+    # The request target split the way web-server rules (Sigma cs-uri-stem / cs-uri-query) see it:
+    # the path before the first "?" and the raw query string after it.
+    _target = str(row.get("url_path") or "")
+    linux_data["url_stem"], _separator, linux_data["url_query"] = _target.partition("?")
     # Passive, never-executed decoding of the request path -- see
     # app.ingest.linux.apache. Both the original and decoded forms stay
     # searchable so an analyst can pivot on either.
@@ -3895,6 +3899,7 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         doc["network"]["source_port"] = linux_data.get("source_port")
         doc["url"]["path"] = linux_data.get("url_path") or None
         doc["url"]["full"] = linux_data.get("url_path") or None
+        doc["url"]["query"] = linux_data.get("url_query") or None
         doc["http"]["request"]["method"] = linux_data.get("http_method") or None
         doc["http"]["response"]["status_code"] = linux_data.get("http_status")
         doc["user_agent"]["original"] = linux_data.get("http_user_agent") or None
