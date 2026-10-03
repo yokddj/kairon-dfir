@@ -3646,7 +3646,7 @@ def normalize_network_row(document: dict, row: dict, artifact_meta: dict) -> dic
 
 _SYSLOG_PRIORITY_SEVERITY = {0: "high", 1: "high", 2: "high", 3: "medium", 4: "low", 5: "info", 6: "info", 7: "info"}
 _LOG_LEVEL_SEVERITY = {
-    "emerg": "high", "emergency": "high", "alert": "high", "crit": "high", "critical": "high", "fatal": "high",
+    "emerg": "high", "emergency": "high", "alert": "high", "crit": "high", "critical": "high", "fatal": "high", "panic": "high",
     "err": "medium", "error": "medium",
     "warn": "low", "warning": "low",
     "notice": "info", "info": "info", "debug": "info",
@@ -3776,6 +3776,22 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["apache_module"] = row.get("apache_module", "")
     linux_data["web_server"] = row.get("web_server", "")
     linux_data["jail"] = row.get("jail", "")
+    linux_data["db_engine"] = row.get("db_engine", "")
+    linux_data["db_name"] = row.get("db_name", "")
+    linux_data["db_command"] = row.get("db_command", "")
+    linux_data["db_statement"] = row.get("db_statement", "")
+    linux_data["db_thread_id"] = row.get("db_thread_id", "")
+    linux_data["db_status"] = row.get("db_status", "")
+    linux_data["db_level"] = row.get("db_level", "")
+    linux_data["db_error_code"] = row.get("db_error_code", "")
+    linux_data["db_client_host"] = row.get("db_client_host", "")
+    linux_data["db_query_time"] = row.get("db_query_time", None)
+    linux_data["db_rows_sent"] = row.get("db_rows_sent", None)
+    linux_data["db_rows_examined"] = row.get("db_rows_examined", None)
+    linux_data["db_retcode"] = row.get("db_retcode", "")
+    linux_data["db_object"] = row.get("db_object", "")
+    linux_data["db_reason"] = row.get("db_reason", "")
+    linux_data["db_application"] = row.get("db_application", "")
     linux_data["mail_service"] = row.get("mail_service", "")
     linux_data["mail_component"] = row.get("mail_component", "")
     linux_data["mail_status"] = row.get("mail_status", "")
@@ -3920,6 +3936,25 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         doc["event"]["action"] = f"persistence_{kind}"
         detail = linux_data.get("library_path") or linux_data.get("pam_module") or linux_data.get("message") or ""
         doc["title"] = f"{kind.replace('_', ' ')}: {str(detail)[:120]}"
+    elif family == "linux_database":
+        kind = linux_data.get("artifact_type") or "database_log"
+        engine = str(linux_data.get("db_engine") or "database")
+        doc["event"]["type"] = kind
+        doc["event"]["action"] = linux_data.get("event_action") or kind
+        doc["network"]["source_ip"] = linux_data.get("source_ip") or None
+        doc["network"]["source_port"] = linux_data.get("source_port")
+        if linux_data.get("username"):
+            doc["user"]["name"] = linux_data["username"]
+        status = str(linux_data.get("db_status") or "")
+        if status == "failed":
+            doc["event"]["outcome"] = "failure"
+        elif status == "success":
+            doc["event"]["outcome"] = "success"
+        action = str(linux_data.get("event_action") or "").removeprefix("db_").replace("_", " ")
+        who = linux_data.get("username") or ""
+        doc["title"] = f"{engine} {action}".strip() + (f": {who}" if who else "") + (f" from {linux_data['source_ip']}" if linux_data.get("source_ip") else "")
+        if linux_data.get("db_statement"):
+            doc["title"] += f" - {str(linux_data['db_statement'])[:120]}"
     elif family == "linux_container":
         kind = linux_data.get("artifact_type") or "container_log"
         doc["event"]["type"] = kind
@@ -4033,7 +4068,7 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         event_severity = "medium"
     elif family == "linux_exim" and linux_data.get("event_severity"):
         event_severity = linux_data.get("event_severity")
-    elif family in {"linux_syslog", "linux_journal", "linux_generic_log", "linux_fail2ban"} and _log_level_severity(row.get("severity")):
+    elif family in {"linux_syslog", "linux_journal", "linux_generic_log", "linux_fail2ban", "linux_database"} and _log_level_severity(row.get("severity")):
         # The log's own level (syslog priority, journal PRIORITY, "error", "WARNING"...), not a
         # blanket "info": an error logged by the system should not look routine in the table.
         event_severity = _log_level_severity(row.get("severity")) or event_severity
@@ -4043,6 +4078,14 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         event_severity = "info"
     elif family == "linux_os_info":
         event_severity = "info"
+    if family == "linux_database":
+        # A failed database login is medium; a statement that raised a flag (an account change, a
+        # destructive statement, file access, command execution, credential-table access or an
+        # injection pattern) is medium too. Flags are leads for review, never confirmed detections.
+        _order_db = {"info": 0, "low": 1, "medium": 2, "high": 3}
+        _db_floor = "medium" if row.get("db_status") == "failed" or row.get("suspicious_indicators") else None
+        if _db_floor and _order_db.get(_db_floor, 0) > _order_db.get(event_severity, 0):
+            event_severity = _db_floor
     if row.get("mail_service"):
         # A mail server's own failures stand out even when its log line carries no level: a failed
         # login is medium, a refused relay, a bounce or a deferral low. A higher level the line

@@ -25,8 +25,8 @@ GENERIC = ("linux_generic_log", "generic_log", "linux_generic_raw")
 @pytest.mark.parametrize(
     "path",
     [
-        "var/log/postgresql/postgresql-15-main.log",
-        "var/log/mysql/error.log.2.gz",
+        "var/log/mongodb/mongod.log",
+        "var/log/redis/redis-server.log.2.gz",
         "var/log/glusterfs/glusterd.log.2.gz",
         "var/log/cloud-init-output.log",
         "var/log/dmesg.0",

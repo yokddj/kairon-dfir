@@ -56,6 +56,7 @@ const ARTIFACT_REGISTRY: UiArtifactDefinition[] = [
   { id: "linux_lastlog", label: "Lastlog", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_syslog", label: "Linux Syslog", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_container", label: "Containers", platforms: ["linux"], view: "network", platformShortcut: true },
+  { id: "linux_database", label: "Databases", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_k8s_audit", label: "Kubernetes Audit", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_persistence", label: "Persistence Config", platforms: ["linux"], view: "persistence", platformShortcut: true },
   { id: "linux_fail2ban", label: "fail2ban", platforms: ["linux"], view: "network", platformShortcut: true },
