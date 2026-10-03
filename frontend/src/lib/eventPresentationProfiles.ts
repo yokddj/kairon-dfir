@@ -610,6 +610,88 @@ const linuxK8sAuditProfile: PresentationProfile = {
   ],
 };
 
+/** Container output (Docker and CRI logs). */
+const linuxContainerLogProfile: PresentationProfile = {
+  id: "linux_container_log",
+  label: "Container logs",
+  columns: [
+    timestampColumn,
+    { key: "container", label: "Container", paths: ["linux.container_name", "linux.container_id"] },
+    { key: "pod", label: "Pod", paths: ["linux.k8s_pod"], visibleWhen: (items) => items.some((item) => isPresent(firstPresent(item, ["linux.k8s_pod"]))) },
+    { key: "namespace", label: "Namespace", paths: ["linux.k8s_namespace"], visibleWhen: (items) => items.some((item) => isPresent(firstPresent(item, ["linux.k8s_namespace"]))) },
+    { key: "stream", label: "Stream", paths: ["linux.container_stream"] },
+    severityColumn,
+    messageColumn,
+    timeQualityColumn,
+    { key: "source_ip", label: "Source IP", paths: ["network.source_ip", "linux.source_ip"], defaultVisible: false },
+    { key: "user", label: "User", paths: ["user.name", "linux.username"], defaultVisible: false },
+    { key: "container_id", label: "Container ID", paths: ["linux.container_id"], defaultVisible: false },
+    ...sourceFileColumns,
+  ],
+  details: [
+    eventSection,
+    timeDetail,
+    { title: "Container", fields: [{ label: "Container", paths: ["linux.container_name"] }, { label: "Container ID", paths: ["linux.container_id"] }, { label: "Pod", paths: ["linux.k8s_pod"] }, { label: "Namespace", paths: ["linux.k8s_namespace"] }, { label: "Stream", paths: ["linux.container_stream"] }] },
+    provenanceSection,
+    rawSection,
+  ],
+};
+
+const CONTAINER_KINDS: Record<string, string> = {
+  container_config: "Container",
+  container_hostconfig: "Host configuration",
+};
+
+/** Container configuration (config.v2.json, hostconfig.json): what a container is and may do. */
+const linuxContainerConfigProfile: PresentationProfile = {
+  id: "linux_container_config",
+  label: "Container configuration",
+  columns: [
+    { key: "timestamp", label: "Created", paths: ["@timestamp"] },
+    { key: "kind", label: "Kind", paths: ["event.type"], format: (value) => CONTAINER_KINDS[String(value)] ?? String(value) },
+    { key: "container", label: "Name", paths: ["linux.container_name", "linux.container_id"] },
+    { key: "image", label: "Image", paths: ["linux.container_image"] },
+    { key: "state", label: "State", paths: ["linux.container_state"] },
+    { key: "command", label: "Command", paths: ["linux.container_command"] },
+    { key: "indicators", label: "Flags", paths: ["linux.suspicious_indicators"] },
+    { key: "privileged", label: "Privileged", paths: ["linux.container_privileged"], format: (value) => (value === true || value === "true" ? "yes" : "no") },
+    { key: "network_mode", label: "Network", paths: ["linux.network_mode"] },
+    severityColumn,
+    messageColumn,
+    { key: "mounts", label: "Mounts", paths: ["linux.container_mounts"], defaultVisible: false },
+    { key: "env", label: "Environment (names only)", paths: ["linux.container_env_names"], defaultVisible: false },
+    { key: "exit_code", label: "Exit Code", paths: ["linux.container_exit_code"], defaultVisible: false },
+    { key: "pid_mode", label: "PID Mode", paths: ["linux.pid_mode"], defaultVisible: false },
+    { key: "caps", label: "Added Capabilities", paths: ["linux.container_cap_add"], defaultVisible: false },
+    { key: "user", label: "Runs As", paths: ["user.name", "linux.username"], defaultVisible: false },
+    ...sourceFileColumns,
+  ],
+  details: [
+    eventSection,
+    {
+      title: "Container configuration",
+      fields: [
+        { label: "Name", paths: ["linux.container_name"] },
+        { label: "Container ID", paths: ["linux.container_id"] },
+        { label: "Image", paths: ["linux.container_image"] },
+        { label: "State", paths: ["linux.container_state"] },
+        { label: "Exit code", paths: ["linux.container_exit_code"] },
+        { label: "Command", paths: ["linux.container_command"] },
+        { label: "Runs as", paths: ["linux.username", "user.name"] },
+        { label: "Privileged", paths: ["linux.container_privileged"], format: (value) => (value === true || value === "true" ? "yes" : "no") },
+        { label: "Network mode", paths: ["linux.network_mode"] },
+        { label: "PID mode", paths: ["linux.pid_mode"] },
+        { label: "Added capabilities", paths: ["linux.container_cap_add"] },
+        { label: "Mounts", paths: ["linux.container_mounts"] },
+        { label: "Environment variable names (values are never stored)", paths: ["linux.container_env_names"] },
+        { label: "Flags for review", paths: ["linux.suspicious_indicators"] },
+      ],
+    },
+    provenanceSection,
+    rawSection,
+  ],
+};
+
 const PERSISTENCE_KINDS: Record<string, string> = {
   ld_so_preload: "Preloaded library",
   ld_so_conf: "Library search path",
@@ -765,6 +847,10 @@ export function presentationProfileForItems(items: Record<string, unknown>[]): P
       break;
     case "linux_k8s_audit":
       profile = linuxK8sAuditProfile;
+      break;
+    case "linux_container":
+      // Configuration rows and log lines are different shapes; the logs take over once any are present.
+      profile = [...eventTypes].length > 0 && [...eventTypes].every((type) => type in CONTAINER_KINDS) ? linuxContainerConfigProfile : linuxContainerLogProfile;
       break;
     default:
       return null;

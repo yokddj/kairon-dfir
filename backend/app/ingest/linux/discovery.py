@@ -17,6 +17,7 @@ SUPPORTED_ARTIFACTS: dict[str, dict[str, str]] = {
     "lastlog": {"label": "lastlog", "family": "linux_lastlog"},
     "syslog": {"label": "syslog", "family": "linux_syslog"},
     "fail2ban": {"label": "fail2ban", "family": "linux_fail2ban"},
+    "container": {"label": "containers (Docker / Kubernetes logs and configuration)", "family": "linux_container"},
     "k8s_audit": {"label": "Kubernetes audit", "family": "linux_k8s_audit"},
     "persistence": {"label": "persistence config (ld.so.preload, rc.local, shell init, PAM, at)", "family": "linux_persistence"},
     "generic_log": {"label": "other text logs", "family": "linux_generic_log"},
@@ -87,6 +88,8 @@ def _artifact_key(family: str, artifact_type: str, path: str) -> str:
         return "syslog"
     if family == "linux_fail2ban":
         return "fail2ban"
+    if family == "linux_container":
+        return "container"
     if family == "linux_k8s_audit":
         return "k8s_audit"
     if family == "linux_persistence":

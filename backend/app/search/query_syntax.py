@@ -192,6 +192,17 @@ FIELD_SPECS: dict[str, FieldSpec] = {
     "linux.k8s_impersonated": FieldSpec("linux.k8s_impersonated"),
     "linux.sysmon_event_id": FieldSpec("linux.sysmon_event_id", kind="numeric", wildcard=False),
     "linux.sysmon_event": FieldSpec("linux.sysmon_event"),
+    "linux.container_id": FieldSpec("linux.container_id", leading_wildcard=True),
+    "linux.container_name": FieldSpec("linux.container_name", leading_wildcard=True),
+    "linux.container_image": FieldSpec("linux.container_image", leading_wildcard=True),
+    "linux.container_state": FieldSpec("linux.container_state"),
+    "linux.container_stream": FieldSpec("linux.container_stream"),
+    "linux.container_privileged": FieldSpec("linux.container_privileged"),
+    "linux.container_env_names": FieldSpec("linux.container_env_names"),
+    "linux.container_mounts": FieldSpec("linux.container_mounts", leading_wildcard=True),
+    "linux.network_mode": FieldSpec("linux.network_mode"),
+    "linux.pid_mode": FieldSpec("linux.pid_mode"),
+    "linux.k8s_pod": FieldSpec("linux.k8s_pod", leading_wildcard=True),
 }
 
 FIELD_ALIASES: dict[str, list[str]] = {
@@ -229,6 +240,10 @@ FIELD_ALIASES: dict[str, list[str]] = {
     "k8sobject": ["linux.k8s_object"],
     "decision": ["linux.k8s_decision"],
     "sysmon": ["linux.sysmon_event_id"],
+    "container": ["linux.container_name", "linux.container_id"],
+    "image": ["linux.container_image"],
+    "pod": ["linux.k8s_pod"],
+    "stream": ["linux.container_stream"],
     "url": ["url.full"],
     "hash": ["file.sha256", "file.sha1", "file.md5"],
     "rule": ["rule.name", "rule.title", "rule.id"],

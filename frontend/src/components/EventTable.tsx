@@ -50,6 +50,10 @@ const PIVOT_FIELD_BY_COLUMN_KEY: Record<string, string> = {
   resource: "resource",
   namespace: "namespace",
   decision: "decision",
+  container: "container",
+  image: "image",
+  pod: "pod",
+  stream: "stream",
 };
 
 export type SortField =
