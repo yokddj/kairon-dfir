@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.ingest.linux.mail_logs import enrich_with_mail
 from app.ingest.linux.netfilter import enrich_with_netfilter
 from app.ingest.linux.sysmon_linux import enrich_with_sysmon
 
@@ -47,6 +48,7 @@ def _row_from_fields(fields: dict[str, object], source_path: str) -> dict[str, o
         "source_path": source_path,
     }
     enrich_with_sysmon(row, message)
+    enrich_with_mail(row, process, message)
     return enrich_with_netfilter(row, str(row.get("message") or message))
 
 

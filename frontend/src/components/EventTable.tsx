@@ -54,6 +54,12 @@ const PIVOT_FIELD_BY_COLUMN_KEY: Record<string, string> = {
   image: "image",
   pod: "pod",
   stream: "stream",
+  sender: "sender",
+  recipient: "recipient",
+  queue_id: "queue",
+  mail_status: "mailstatus",
+  mail_service: "mailservice",
+  relay: "relay",
 };
 
 export type SortField =

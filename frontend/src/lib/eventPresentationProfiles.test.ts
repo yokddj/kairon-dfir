@@ -47,6 +47,16 @@ describe("Linux presentation profiles: selection", () => {
     expect(presentationProfileForItems([sysmon, packet, plain, plain, plain, plain, plain, plain, plain, plain])?.id).toBe("linux_syslog");
   });
 
+  it("picks the mail layout when mail lines dominate, and the largest group wins", () => {
+    const mail = base("linux_syslog", { linux: { mail_service: "postfix" } });
+    const packet = base("linux_syslog", { linux: { firewall_action: "block" } });
+    const plain = base("linux_syslog");
+    expect(presentationProfileForItems([mail, mail, plain, plain])?.id).toBe("linux_syslog_mail");
+    expect(presentationProfileForItems([mail, packet, packet, plain])?.id).toBe("linux_syslog_firewall");
+    expect(presentationProfileForItems([mail, mail, mail, packet, plain])?.id).toBe("linux_syslog_mail");
+    expect(presentationProfileForItems([mail, plain, plain, plain, plain, plain, plain, plain, plain, plain])?.id).toBe("linux_syslog");
+  });
+
   it("distinguishes web error logs from access logs", () => {
     const error = base("linux_apache", { event: { type: "apache_error", message: "boom" } });
     expect(presentationProfileForItems([error])?.id).toBe("linux_web_error");
@@ -157,6 +167,20 @@ describe("Linux presentation profiles: values", () => {
     expect(column(item, "sysmon_event")).toBe("Process created");
     expect(["user", "exe", "command", "parent_image"].map((key) => column(item, key))).toEqual(["root", "/usr/bin/curl", "curl http://203.0.113.9/x", "/bin/bash"]);
     expect(column(item, "message")).toBe("the log text");
+  });
+
+  it("mail rows show the service, action, client, sender, recipient and status", () => {
+    const item = base("linux_syslog", {
+      event: { type: "syslog", action: "mail_delivery", severity: "info", message: "9F2B: to=<bob@remote.test>, status=sent" },
+      message: "9F2B: to=<bob@remote.test>, status=sent",
+      user: { name: "alice@example.test" },
+      email: { from: { address: "alice@example.test" }, to: ["bob@remote.test"] },
+      network: { source_ip: "198.51.100.7" },
+      linux: { mail_service: "postfix", mail_status: "sent", queue_id: "9F2B3C4D5E" },
+    });
+    expect(["mail_service", "mail_action", "source_ip", "user", "sender", "recipient", "mail_status", "queue_id"].map((key) => column(item, key)))
+      .toEqual(["postfix", "Delivery", "198.51.100.7", "alice@example.test", "alice@example.test", "bob@remote.test", "sent", "9F2B3C4D5E"]);
+    expect(column(item, "message")).toBe("9F2B: to=<bob@remote.test>, status=sent");
   });
 
   it("process is the plain name, so a pivot filters on what the cell says", () => {

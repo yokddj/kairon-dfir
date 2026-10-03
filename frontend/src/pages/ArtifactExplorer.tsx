@@ -639,7 +639,7 @@ function EmailArtifactsView({
 
 // Pivot dimensions with no structured filter on the backend. Clicking one adds a search-syntax
 // term (verdict:"block", jail:"sshd") to the query box, where it stays visible and editable.
-const SYNTAX_PIVOT_FIELDS = new Set(["process", "xff", "verdict", "jail", "proto", "webserver", "exe", "audit", "verb", "resource", "namespace", "decision", "container", "image", "pod", "stream"]);
+const SYNTAX_PIVOT_FIELDS = new Set(["process", "xff", "verdict", "jail", "proto", "webserver", "exe", "audit", "verb", "resource", "namespace", "decision", "container", "image", "pod", "stream", "sender", "recipient", "queue", "mailstatus", "mailservice", "relay"]);
 
 export function addSyntaxTerm(query: string, field: string, value: string, exclude: boolean): string {
   const term = `${field}:"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
