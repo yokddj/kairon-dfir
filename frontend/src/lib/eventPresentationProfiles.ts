@@ -556,6 +556,60 @@ const linuxGenericLogProfile: PresentationProfile = {
   ],
 };
 
+/** Kubernetes API-server audit events: who did what to which object, from where, and whether it was allowed. */
+const linuxK8sAuditProfile: PresentationProfile = {
+  id: "linux_k8s_audit",
+  label: "Kubernetes audit",
+  columns: [
+    timestampColumn,
+    { key: "user", label: "User", paths: ["user.name", "linux.username"] },
+    { key: "verb", label: "Verb", paths: ["linux.k8s_verb"] },
+    { key: "resource", label: "Resource", paths: ["linux.k8s_resource"] },
+    { key: "subresource", label: "Subresource", paths: ["linux.k8s_subresource"], visibleWhen: (items) => items.some((item) => isPresent(firstPresent(item, ["linux.k8s_subresource"]))) },
+    { key: "namespace", label: "Namespace", paths: ["linux.k8s_namespace"] },
+    { key: "object", label: "Name", paths: ["linux.k8s_object"] },
+    { key: "source_ip", label: "Source IP", paths: ["network.source_ip", "linux.source_ip"] },
+    { key: "http_status", label: "Status", paths: ["http.response.status_code", "linux.http_status"] },
+    { key: "decision", label: "Decision", paths: ["linux.k8s_decision"] },
+    { key: "indicators", label: "Flags", paths: ["linux.suspicious_indicators"] },
+    severityColumn,
+    messageColumn,
+    { key: "groups", label: "Groups", paths: ["linux.k8s_groups"], defaultVisible: false },
+    { key: "user_agent", label: "User Agent", paths: ["user_agent.original", "linux.http_user_agent"], defaultVisible: false },
+    { key: "impersonated", label: "Impersonated User", paths: ["linux.k8s_impersonated"], defaultVisible: false },
+    { key: "request_uri", label: "Request URI", paths: ["url.path", "linux.url_path"], defaultVisible: false },
+    { key: "stage", label: "Stage", paths: ["linux.k8s_stage"], defaultVisible: false },
+    { key: "audit_id", label: "Audit ID", paths: ["linux.k8s_audit_id"], defaultVisible: false },
+    ...sourceFileColumns,
+  ],
+  details: [
+    eventSection,
+    {
+      title: "Kubernetes request",
+      fields: [
+        { label: "User", paths: ["user.name", "linux.username"] },
+        { label: "Groups", paths: ["linux.k8s_groups"] },
+        { label: "Impersonated user", paths: ["linux.k8s_impersonated"] },
+        { label: "Verb", paths: ["linux.k8s_verb"] },
+        { label: "Resource", paths: ["linux.k8s_resource"] },
+        { label: "Subresource", paths: ["linux.k8s_subresource"] },
+        { label: "Namespace", paths: ["linux.k8s_namespace"] },
+        { label: "Object name", paths: ["linux.k8s_object"] },
+        { label: "Request URI", paths: ["url.path", "linux.url_path"] },
+        { label: "Status", paths: ["http.response.status_code", "linux.http_status"] },
+        { label: "Authorization decision", paths: ["linux.k8s_decision"] },
+        { label: "User agent", paths: ["user_agent.original", "linux.http_user_agent"] },
+        { label: "Audit ID", paths: ["linux.k8s_audit_id"] },
+        { label: "Stage / level", paths: ["linux.k8s_stage", "linux.k8s_level"] },
+        { label: "Flags for review", paths: ["linux.suspicious_indicators"] },
+      ],
+    },
+    networkSection,
+    provenanceSection,
+    rawSection,
+  ],
+};
+
 const PERSISTENCE_KINDS: Record<string, string> = {
   ld_so_preload: "Preloaded library",
   ld_so_conf: "Library search path",
@@ -708,6 +762,9 @@ export function presentationProfileForItems(items: Record<string, unknown>[]): P
       break;
     case "linux_persistence":
       profile = linuxPersistenceProfile;
+      break;
+    case "linux_k8s_audit":
+      profile = linuxK8sAuditProfile;
       break;
     default:
       return null;

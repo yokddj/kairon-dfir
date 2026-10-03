@@ -119,6 +119,7 @@ Each Linux log family has its own table layout in Artifact Explorer (open **Linu
 | Web server error | Timestamp, Severity, Host, Source IP, Event Type, Server, Request, Message |
 | fail2ban | Timestamp, Jail, Action, Address, Severity, Message |
 | Text log (generic) | Timestamp, Host, Process, Severity, User, Source IP, Message |
+| Kubernetes audit | Timestamp, User, Verb, Resource, Namespace, Name, Source IP, Status, Decision, Flags, Severity, Message (Subresource appears when a request has one) |
 | Persistence configuration | Kind, Severity, Owner, Entry / Command, PAM, Flags, Source File, Line |
 
 - **Time Quality** appears automatically when any row on screen has a time that is not exact (`Assumed UTC`, `Assumed year and UTC`, `No time in the log`), so a time the parser had to assume is never mistaken for an exact one. It can also be switched on from the Columns chooser.
@@ -186,6 +187,14 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 - Request lines are decoded passively (percent-decoding and printable base64) to flag web-shell and reverse-shell indicators in `suspicious_url_indicators`. Nothing is executed or fetched.
 - Timestamps: access logs carry their own offset. The nginx error log carries none, so it is read as UTC and marked `timestamp_status: assumed_utc`.
 - Limitations: custom `log_format` layouts other than the ones above fall back to an undated line with the original text; Sigma `webserver` rules (W3C field names such as `cs-uri-query`) are not mapped yet.
+
+### Kubernetes audit (`linux_k8s_audit`)
+- Sources: the API-server audit log (`audit.k8s.io` JSON lines): `/var/log/kubernetes/audit.log` (and files in a `kubernetes`, `kube-apiserver` or `k8s` directory with `audit` in the name), `/var/log/kube-apiserver/audit-*.log`, any file named like `kube-apiserver-audit.log`, rotated or compressed copies. A file called plain `audit.log` whose first line is an `audit.k8s.io` event is also read as Kubernetes rather than as auditd.
+- Why it matters: it is the record of who did what in a cluster: the caller, the verb, the object, where the request came from and whether it was allowed.
+- Fields: `timestamp` (the request time, exact), `username`, `source_ip` (the first valid address of `sourceIPs`), `k8s_verb`, `k8s_resource`, `k8s_subresource`, `k8s_namespace`, `k8s_object`, `k8s_decision` (the authorization annotation), the caller's groups and any impersonated user, the HTTP status, user agent, request URI, audit ID, stage and level. Searchable as `linux.k8s_*`, with the shortcuts `verb:`, `resource:`, `namespace:`, `decision:`.
+- Flags for review, never verdicts: `pod_exec`, `pod_attach`, `pod_portforward`, `secret_access` (get/list/watch), `secret_change`, `rbac_change`, `cluster_admin_binding`, `token_request`, `impersonation`, `anonymous_request`, and `anonymous_success` when such a request returned a success status. For requests that create or change a pod, deployment, daemonset, statefulset, replicaset, job or cronjob and whose request body was logged (audit level `Request` or `RequestResponse`): `privileged_container`, `privilege_escalation_allowed`, `dangerous_capability`, `host_network`, `host_pid`, `host_ipc`, `host_path_mount`, `host_root_mount`, `docker_socket_mount`.
+- Severity: a privileged or Docker-socket-mounting workload, a `cluster-admin` binding, or an anonymous request that succeeded is `high`; any other flag is `medium`; the rest `info`. A denied request (status 400 or above) is an outcome of `failure`.
+- Limits: the workload flags need the audit policy to log request bodies; at the `Metadata` level only the verb, object and caller are available. An event over 2 MiB is not parsed and is reported as such, because request and response bodies can be very large.
 
 ### Persistence configuration (`linux_persistence`)
 - Sources: `/etc/ld.so.preload`, `/etc/ld.so.conf` and `ld.so.conf.d/*`, `/etc/rc.local`, PAM rules (`/etc/pam.d/*`), shell start-up files (`/etc/profile`, `/etc/profile.d/*`, `/etc/bash.bashrc`, `/etc/update-motd.d/*`, and each user's `~/.bashrc`, `.bash_profile`, `.bash_login`, `.bash_logout`, `.profile`, `.zshrc`, `.zprofile`, `.zshenv`), and queued `at` jobs (`/var/spool/cron/atjobs/*`, `/var/spool/at/*`).

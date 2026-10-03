@@ -34,6 +34,7 @@ LINUX_PARSER_TARGETS: dict[str, LinuxParserTarget] = {
     "linux_generic_raw": LinuxParserTarget("linux_generic_raw", "generic_log", "parse_generic_log"),
     "linux_fail2ban_raw": LinuxParserTarget("linux_fail2ban_raw", "fail2ban", "parse_fail2ban"),
     "linux_persistence_raw": LinuxParserTarget("linux_persistence_raw", "persistence", "parse_persistence"),
+    "linux_k8s_audit_raw": LinuxParserTarget("linux_k8s_audit_raw", "k8s_audit", "parse_k8s_audit"),
     "linux_audit_raw": LinuxParserTarget("linux_audit_raw", "audit", "parse_audit"),
     "linux_apache_raw": LinuxParserTarget("linux_apache_raw", "apache", "parse_apache"),
     "linux_exim_raw": LinuxParserTarget("linux_exim_raw", "exim", "parse_exim"),
