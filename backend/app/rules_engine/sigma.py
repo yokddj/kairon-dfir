@@ -51,6 +51,24 @@ SIGMA_FIELD_MAP = {
     # Pseudo-field for keyword-only selections (a bare list of strings, searched in the
     # event text). The leading underscore keeps it from ever colliding with a real field.
     "_keywords": ["message", "search_text"],
+    # Web servers (Apache, nginx): Sigma's `webserver` rules use W3C field names. cs-uri-stem and
+    # cs-uri-query are the request target split at the first "?", as the Linux normalizer stores it;
+    # the linux.* fields are declared in the index mapping, so they can be searched as well as read.
+    "cs-method": ["http.request.method", "linux.http_method"],
+    "sc-status": ["http.response.status_code", "linux.http_status"],
+    "cs-uri-stem": ["linux.url_stem"],
+    "cs-uri-query": ["linux.url_query"],
+    "cs-uri": ["linux.url_path", "url.path"],
+    "c-uri": ["linux.url_path", "url.path"],
+    "cs-user-agent": ["user_agent.original", "linux.http_user_agent"],
+    "c-useragent": ["user_agent.original", "linux.http_user_agent"],
+    "cs-referer": ["linux.http_referrer"],
+    "cs-referrer": ["linux.http_referrer"],
+    "cs-host": ["linux.http_host"],
+    "cs-username": ["user.name", "linux.username"],
+    "c-ip": ["network.source_ip", "source.ip", "linux.source_ip"],
+    "cs-version": ["linux.http_protocol"],
+    "sc-bytes": ["linux.bytes_sent"],
     "type": ["linux.audit_type"],
     "exe": ["process.executable", "linux.exe"],
     "key": ["linux.audit_key"],
@@ -116,6 +134,8 @@ SIGMA_CATEGORY_EVENT_TYPE_HINTS = {
     # Linux process_creation rule failed the logsource gate on every Linux document
     # and could never fire, whatever its fields said.
     "process_creation": ["process_creation", "process_created", "sysmon_process_created", "security_process_created", "linux_shell_history", "execve", "user_cmd"],
+    # A web-server access log line (Apache and nginx). Error log lines are not requests.
+    "webserver": ["apache_access", "web_access"],
     "registry_set": ["registry_set", "registry_value_set", "sysmon_registry_set"],
     "file_event": ["file_event", "file_create", "file_created", "sysmon_file_created"],
     "network_connection": ["network_connection", "network_connected", "sysmon_network_connection"],
@@ -813,6 +833,8 @@ _ARTIFACT_PRODUCT_MARKERS = {
 
 _LINUX_PROFILE_FIELDS = (
     "command", "process", "username", "exe", "cwd", "euid", "syscall",
+    "url_stem", "url_query", "url_path", "http_method", "http_status", "http_user_agent", "http_referrer",
+    "http_host", "http_protocol", "bytes_sent", "source_ip",
     "audit_type", "audit_key", "audit_name",
     *(f"audit_a{index}" for index in range(8)),
 )
@@ -940,6 +962,12 @@ def build_sigma_case_profile(events: list[dict], *, total_events: int | None = N
         _mark_field("powershell.script_block_text", bool(powershell.get("script_block_text")))
         _mark_field("search_text", bool(event.get("search_text")))
         _mark_field("process.working_directory", bool(process.get("working_directory") or process.get("current_directory")))
+        _http = dict(event.get("http") or {})
+        _mark_field("http.request.method", bool((_http.get("request") or {}).get("method")))
+        _mark_field("http.response.status_code", (_http.get("response") or {}).get("status_code") is not None)
+        _mark_field("user_agent.original", bool((event.get("user_agent") or {}).get("original")))
+        _mark_field("url.path", bool((event.get("url") or {}).get("path")))
+        _mark_field("source.ip", bool(network.get("source_ip") or source.get("ip")))
         # Without these a Linux-only case never reported linux.command / linux.username
         # as available, so the preflight skipped even a plain CommandLine rule as
         # "missing fields" before it was ever evaluated.
@@ -1675,9 +1703,30 @@ def build_sigma_query(rule_data: dict) -> dict:
     return {"query": {"bool": bool_query}}
 
 
+MAX_LINUX_CANDIDATE_CLAUSES = 400
+
+
+def _escape_wildcard_backslash(value: str) -> str:
+    return value.replace("\\", "\\\\")
+
+
+def _linux_clause(kind: str, field: str, value: object) -> dict:
+    """A candidate clause on a linux.* keyword field, case-insensitive.
+
+    The in-memory test compares case-insensitively, but a plain term / wildcard on an exact-case
+    keyword field is case-sensitive, so a candidate query built without this would drop an event
+    the rule does match (`UNION SELECT` in a rule, `union select` in the log).
+    """
+    if kind == "wildcard":
+        value = _escape_wildcard_backslash(str(value))
+    return {kind: {field: {"value": value, "case_insensitive": True}}}
+
+
 def build_sigma_query_from_compiled(compiled_rule: dict) -> dict:
     should: list[dict] = []
     keyword_should: list[dict] = []
+    linux_should: list[dict] = []
+    linux_fields: set[str] = set()
     for clauses in dict((compiled_rule.get("compiled_query") or {}).get("selections") or {}).values():
         for clause in clauses or []:
             mapped_fields = [str(item) for item in (clause.get("mapped_fields") or [])]
@@ -1692,6 +1741,22 @@ def build_sigma_query_from_compiled(compiled_rule: dict) -> dict:
             for alt_name in alt_names:
                 should.append({"term": {alt_field: {"value": alt_name, "case_insensitive": True}}})
             for mapped_field in mapped_fields:
+                if mapped_field.startswith("linux."):
+                    # Every value of the rule, not just the first: a list is an OR, and dropping
+                    # values would silently miss events that match only a later one.
+                    linux_fields.add(mapped_field)
+                    for value in values:
+                        if modifier is None:
+                            linux_should.append(_linux_clause("term", mapped_field, value))
+                        elif modifier == "startswith":
+                            linux_should.append(_linux_clause("prefix", mapped_field, value))
+                        elif modifier == "endswith":
+                            linux_should.append(_linux_clause("wildcard", mapped_field, f"*{value}"))
+                        elif modifier == "contains":
+                            linux_should.append(_linux_clause("wildcard", mapped_field, f"*{value}*"))
+                        elif modifier == "re":
+                            linux_should.append(_linux_clause("regexp", mapped_field, value))
+                    continue
                 if modifier is None and len(values) == 1:
                     should.append({"term": {mapped_field: values[0]}})
                 elif modifier is None and len(values) > 1:
@@ -1705,7 +1770,11 @@ def build_sigma_query_from_compiled(compiled_rule: dict) -> dict:
                 elif modifier == "re" and values:
                     should.append({"regexp": {mapped_field: values[0]}})
     bool_query: dict[str, object] = {"must": []}
-    if should or keyword_should:
-        bool_query["should"] = should[:50] + keyword_should
+    if len(linux_should) > MAX_LINUX_CANDIDATE_CLAUSES:
+        # Too many values to list. Dropping some would miss events; asking only for the field to be
+        # present is a safe, broader superset, and the exact test still runs in memory.
+        linux_should = [{"exists": {"field": field}} for field in sorted(linux_fields)]
+    if should or keyword_should or linux_should:
+        bool_query["should"] = should[:50] + keyword_should + linux_should
         bool_query["minimum_should_match"] = 1
     return {"query": {"bool": bool_query}}

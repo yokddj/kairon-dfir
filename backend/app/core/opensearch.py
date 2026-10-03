@@ -1528,6 +1528,13 @@ def ensure_case_index(case_id: str) -> str:
                         # and unqueryable. A Linux case had 89788 events whose
                         # command, process and username could not be searched,
                         # filtered or matched by a detection rule at all.
+                        "http": {
+                            "properties": {
+                                "request": {"properties": {"method": {"type": "keyword"}}},
+                                "response": {"properties": {"status_code": {"type": "integer", "ignore_malformed": True}}},
+                            }
+                        },
+                        "user_agent": {"properties": {"original": {"type": "keyword", "ignore_above": 2048}}},
                         "linux": {
                             "properties": {
                                 "artifact_family": {"type": "keyword"},
@@ -1565,6 +1572,15 @@ def ensure_case_index(case_id: str) -> str:
                                 "x_forwarded_for": {"type": "keyword"},
                                 "http_host": {"type": "keyword"},
                                 "jail": {"type": "keyword"},
+                                "http_method": {"type": "keyword"},
+                                "http_status": {"type": "integer", "ignore_malformed": True},
+                                "http_user_agent": {"type": "keyword", "ignore_above": 2048},
+                                "http_referrer": {"type": "keyword", "ignore_above": 2048},
+                                "http_protocol": {"type": "keyword"},
+                                "url_path": {"type": "keyword", "ignore_above": 4096},
+                                "url_stem": {"type": "keyword", "ignore_above": 4096},
+                                "url_query": {"type": "keyword", "ignore_above": 4096},
+                                "bytes_sent": {"type": "long", "ignore_malformed": True},
                                 "container_id": {"type": "keyword"},
                                 "container_name": {"type": "keyword"},
                                 "container_image": {"type": "keyword"},
@@ -1817,6 +1833,13 @@ def ensure_case_index(case_id: str) -> str:
                         # version it was installed at rather than the one it is
                         # running. Existing documents still need a reindex to
                         # populate the new fields; new events get them at once.
+                        "http": {
+                            "properties": {
+                                "request": {"properties": {"method": {"type": "keyword"}}},
+                                "response": {"properties": {"status_code": {"type": "integer", "ignore_malformed": True}}},
+                            }
+                        },
+                        "user_agent": {"properties": {"original": {"type": "keyword", "ignore_above": 2048}}},
                         "linux": {
                             "properties": {
                                 "artifact_family": {"type": "keyword"},
@@ -1854,6 +1877,15 @@ def ensure_case_index(case_id: str) -> str:
                                 "x_forwarded_for": {"type": "keyword"},
                                 "http_host": {"type": "keyword"},
                                 "jail": {"type": "keyword"},
+                                "http_method": {"type": "keyword"},
+                                "http_status": {"type": "integer", "ignore_malformed": True},
+                                "http_user_agent": {"type": "keyword", "ignore_above": 2048},
+                                "http_referrer": {"type": "keyword", "ignore_above": 2048},
+                                "http_protocol": {"type": "keyword"},
+                                "url_path": {"type": "keyword", "ignore_above": 4096},
+                                "url_stem": {"type": "keyword", "ignore_above": 4096},
+                                "url_query": {"type": "keyword", "ignore_above": 4096},
+                                "bytes_sent": {"type": "long", "ignore_malformed": True},
                                 "container_id": {"type": "keyword"},
                                 "container_name": {"type": "keyword"},
                                 "container_image": {"type": "keyword"},
