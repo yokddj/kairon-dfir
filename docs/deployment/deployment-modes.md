@@ -23,7 +23,7 @@ The setup wizard generates:
 - `KAIRON_ALLOWED_ORIGINS=http://localhost:5173`
 - Secure cookies: disabled (HTTP only)
 
-No other machines on the network can reach the UI. Backend is accessed via the Nginx `/api` proxy, not directly.
+The UI port (5173) is published on all interfaces, so other machines on the network can open it at `http://<this-machine's-address>:5173`. The API port (8000) is published on this machine only (`127.0.0.1`); browsers reach the API through the Nginx `/api` proxy. Set `KAIRON_API_BIND=0.0.0.0` only if something on another machine must call the API directly.
 
 ## LAN
 

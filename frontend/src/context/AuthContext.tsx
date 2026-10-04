@@ -57,6 +57,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ username, password }),
       });
       if (!resp.ok) {
+        // A refusal other than wrong credentials (too many failed attempts, a refused request)
+        // carries its own explanation; showing "Invalid credentials" would mislead the user.
+        if (resp.status !== 401) {
+          const body = await resp.json().catch(() => null);
+          if (body && typeof body.detail === "string") return { ok: false, error: body.detail };
+        }
         return { ok: false, error: "Invalid credentials" };
       }
       await fetchMe();

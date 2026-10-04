@@ -11,6 +11,7 @@ from app.models.session import Session as UserSession
 from app.services.auth_utils import hash_password
 from app.services.auth_dependencies import get_current_user, require_admin
 from app.services.audit import log_audit
+from app.core.client_ip import client_ip
 
 router = APIRouter(tags=["admin"], prefix="/api/admin")
 
@@ -67,7 +68,7 @@ def create_user(payload: CreateUserRequest, request: Request, db: Session = Depe
     db.commit()
     db.refresh(user)
     log_audit("user_create", actor_user_id=admin_user.id, result="success", resource_type="user", resource_id=user.id,
-              ip_address=request.client.host if request.client else None,
+              ip_address=client_ip(request),
               user_agent=request.headers.get("user-agent"))
     return {"id": user.id, "username": user.username, "is_admin": user.is_admin}
 
@@ -116,7 +117,7 @@ def disable_user(user_id: str, payload: DisableUserRequest | None = None, reques
         )
     db.commit()
     log_audit("user_disable", actor_user_id=admin_user.id, result="success", resource_type="user", resource_id=user.id,
-              ip_address=request.client.host if request and request.client else None,
+              ip_address=client_ip(request) if request else None,
               user_agent=request.headers.get("user-agent") if request else None)
     return {"id": user.id, "is_active": user.is_active}
 
@@ -147,7 +148,7 @@ def reset_password(user_id: str, payload: ResetPasswordRequest, request: Request
     )
     db.commit()
     log_audit("admin_password_reset", actor_user_id=admin_user.id, result="success", resource_type="user", resource_id=user.id,
-              ip_address=request.client.host if request.client else None,
+              ip_address=client_ip(request),
               user_agent=request.headers.get("user-agent"))
     return {"id": user.id, "status": "password_reset"}
 
