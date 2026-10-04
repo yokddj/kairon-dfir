@@ -99,21 +99,35 @@ def _extract_username(log_message: str, fallback: str | None = None) -> str | No
     return None
 
 
-def _extract_event_action(log_message: str) -> str:
+_SUDO_LINE_RE = re.compile(
+    r"^\s*(?P<user>[^\s:]+)\s*:\s*(?:(?P<problem>[^;]*?)\s*;\s*)?TTY=(?P<tty>[^;]*?)\s*;\s*PWD=(?P<pwd>[^;]*?)\s*;\s*USER=(?P<runas>[^;]*?)\s*;(?:[^;]*;)*?\s*COMMAND=(?P<cmd>.*)$"
+)
+_MAX_ATTEMPTS_RE = re.compile(r"maximum authentication attempts exceeded for (?:invalid user )?(?P<user>\S+) from (?P<ip>[0-9a-fA-F:.]+) port (?P<port>\d+)", re.IGNORECASE)
+_CONSOLE_LOGIN_RE = re.compile(r"(?:ROOT LOGIN\s+on '?(?P<tty1>[^'\s]+)'?|LOGIN ON (?P<tty2>\S+) BY (?P<user>\S+))")
+
+
+def _extract_event_action(log_message: str, process: str | None = None) -> str:
     lower = log_message.lower()
+    program = (process or "").lower()
     if "accepted" in lower and "password" in lower:
         return "password_accepted"
     if "accepted" in lower and "publickey" in lower:
         return "publickey_accepted"
     if "failed password" in lower:
         return "password_failed"
+    # Before "invalid user": the line may name one ("... for invalid user x from ...").
+    if "maximum authentication attempts exceeded" in lower:
+        return "max_auth_attempts"
     if "invalid user" in lower:
         return "invalid_user"
-    if lower.startswith("sudo") or "sudo:" in lower:
-        if "command" in lower:
+    # The program name is split off the message, so "sudo:" is usually not in the text itself.
+    if program == "sudo" or lower.startswith("sudo") or "sudo:" in lower:
+        if "incorrect password" in lower or "not in the sudoers" in lower or "authentication failure" in lower:
+            return "sudo_failed"
+        if "command=" in lower:
             return "sudo_command"
         return "sudo_auth"
-    if "su:" in lower:
+    if program == "su" or "su:" in lower:
         return "su_auth"
     if "pam_unix" in lower and "session opened" in lower:
         return "session_opened"
@@ -121,7 +135,34 @@ def _extract_event_action(log_message: str) -> str:
         return "session_closed"
     if "authentication failure" in lower:
         return "auth_failure"
+    if _CONSOLE_LOGIN_RE.search(log_message):
+        return "console_login"
+    if "connection closed by" in lower and "[preauth]" in lower:
+        return "preauth_disconnect"
+    if lower.startswith(("received disconnect", "disconnected from")):
+        return "ssh_disconnect"
+    if lower.startswith("server listening on"):
+        return "sshd_listening"
     return "unknown"
+
+
+def _extract_privilege_and_console(message: str, action: str) -> dict:
+    """sudo's user, target account, directory, terminal and command; console and brute-force details."""
+    data: dict = {}
+    if action in {"sudo_command", "sudo_failed"}:
+        match = _SUDO_LINE_RE.match(message)
+        if match:
+            data.update(username=match.group("user"), run_as=match.group("runas").strip(), cwd=match.group("pwd").strip(),
+                        terminal=match.group("tty").strip(), command=match.group("cmd").strip()[:4000])
+    elif action == "max_auth_attempts":
+        match = _MAX_ATTEMPTS_RE.search(message)
+        if match:
+            data.update(username=match.group("user"), attempted_username=match.group("user"), source_ip=match.group("ip"), source_port=int(match.group("port")))
+    elif action == "console_login":
+        match = _CONSOLE_LOGIN_RE.search(message)
+        if match:
+            data.update(username=match.group("user") or "root", terminal=(match.group("tty1") or match.group("tty2") or "").replace("/dev/", ""))
+    return data
 
 
 def _extract_auth_method(log_message: str) -> str | None:
@@ -140,13 +181,21 @@ def _clean_bytes(value: bytes) -> str:
 
 
 def _source_host_from_addr(addr_words: tuple[int, int, int, int], host: str) -> str:
-    first = addr_words[0] if addr_words else 0
-    if first:
-        try:
-            return socket.inet_ntoa(struct.pack("=I", first))
-        except OSError:
-            pass
-    return host
+    """ut_addr_v6: four 32-bit words in network byte order. IPv4 uses only the first word.
+
+    The words are unpacked as signed ints, so they are packed back the same way to recover the
+    raw bytes: an address such as 192.168.x.x has the high bit set and is negative as a signed int.
+    """
+    words = tuple(addr_words or ())
+    if len(words) != 4 or not any(words):
+        return host
+    try:
+        raw = struct.pack("=4i", *words)
+        if any(words[1:]):
+            return socket.inet_ntop(socket.AF_INET6, raw)
+        return socket.inet_ntoa(raw[:4])
+    except (OSError, struct.error, ValueError):
+        return host
 
 
 def _auth_type_from_action(action: str) -> tuple[str, str]:
@@ -164,6 +213,12 @@ def _auth_type_from_action(action: str) -> tuple[str, str]:
         return "authentication_failure", "failure"
     if action in {"sudo_auth", "su_auth", "sudo_command"}:
         return "privilege_authentication", "success" if action == "sudo_command" else "unknown"
+    if action == "sudo_failed":
+        return "privilege_authentication", "failure"
+    if action == "max_auth_attempts":
+        return "login_failure", "failure"
+    if action == "console_login":
+        return "login_success", "success"
     return "other", "unknown"
 
 
@@ -237,7 +292,21 @@ def parse_wtmp_btmp(content: bytes, *, source_path: str = "") -> list[dict]:
         event_type = "login_success" if record_type == 7 else "logout" if record_type == 8 else "other"
         if artifact_type == "btmp" and record_type in {6, 7}:
             event_type = "login_failure"
-        message = f"{artifact_type} {event_type} user={username or '-'} terminal={terminal or '-'} source={host or '-'}"
+        elif record_type == 2:
+            event_type = "system_boot"
+        elif record_type == 1:
+            # RUN_LVL records carry "shutdown" or "runlevel" as the user and the new level in the pid.
+            event_type = "system_shutdown" if username == "shutdown" else "runlevel_change"
+        elif record_type == 6:
+            event_type = "login_prompt"
+        elif record_type == 5:
+            event_type = "init_process"
+        elif record_type in {3, 4}:
+            event_type = "clock_change"
+        if record_type in {1, 2}:
+            message = f"{artifact_type} {event_type.replace('_', ' ')}" + (f" (kernel {host})" if host and record_type == 2 else "")
+        else:
+            message = f"{artifact_type} {event_type.replace('_', ' ')} user={username or '-'} terminal={terminal or '-'} source={host or '-'}"
         rows.append({
             "artifact_family": "linux_auth",
             "artifact_type": artifact_type,
@@ -315,9 +384,10 @@ def parse_auth(
         if ip_matches:
             source_ip = ip_matches[0]
 
-        event_action = _extract_event_action(message)
+        event_action = _extract_event_action(message, process)
         auth_method = _extract_auth_method(message)
         structured = _extract_structured_auth(message, process)
+        structured.update({key: value for key, value in _extract_privilege_and_console(message, event_action).items() if value not in (None, "")})
         auth_event_type, authentication_result = _auth_type_from_action(event_action)
         if structured.get("username"):
             detected_username = structured["username"]
@@ -331,6 +401,7 @@ def parse_auth(
             "source_file": source_path,
             "line_number": line_number,
             "timestamp": timestamp,
+            "timestamp_status": "assumed_year_utc" if timestamp else "missing",
             "detected_host": host,
             "username": detected_username,
             "attempted_username": attempted_username,
@@ -345,6 +416,9 @@ def parse_auth(
             "authentication_result": authentication_result,
             "auth_event_type": auth_event_type,
             "effective_failure_count": structured.get("effective_failure_count"),
+            "run_as": structured.get("run_as", ""),
+            "cwd": structured.get("cwd", ""),
+            "command": structured.get("command", ""),
             "event_action": event_action,
             "message": message[:2000],
             "raw_excerpt": raw_excerpt,

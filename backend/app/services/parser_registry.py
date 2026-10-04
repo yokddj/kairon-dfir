@@ -265,7 +265,7 @@ _REGISTRY: dict[str, dict[str, Any]] = {
         "primary_timestamp_field": "@timestamp",
         "searchable_fields": ["message", "linux.username", "linux.vpn_software", "linux.vpn_assigned_ip", "linux.suspicious_indicators"],
         "filter_fields": COMMON_SEARCH_FILTER_FIELDS + ["linux.artifact_family", "linux.username", "linux.source_ip", "linux.vpn_software", "linux.vpn_status", "linux.vpn_assigned_ip", "linux.suspicious_indicators"],
-        "notes": ["OpenVPN server logs and status files and strongSwan charon logs: connections and disconnections, failed authentication with the account and source address, and the tunnel address given. Times without a zone are read as UTC (assumed_utc) and syslog-style times without a year as the current year (assumed_year_utc)."],
+        "notes": ["OpenVPN server logs and status files and strongSwan charon logs: connections and disconnections, failed authentication with the account and source address, and the tunnel address given. Times without a zone are converted with the host's timezone when known, and syslog-style times without a year get the year the machine was running."],
     },
     "linux_container": {
         "artifact_type": "linux_container",

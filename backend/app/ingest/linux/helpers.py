@@ -239,6 +239,10 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
         return ("linux_os_info", "hostnamectl", "linux_os_info_raw")
     if _UNAME_RE.search(path_str) and not _BIN_OR_SHARE_DIR_RE.search(path_str):
         return ("linux_os_info", "uname", "linux_os_info_raw")
+    if path_str.lower().endswith("var/lib/dpkg/status-old"):
+        # dpkg's backup of the package database before its last change: parsing it would list
+        # every installed package a second time.
+        return None
     for marker, (family, artifact_type, parser) in _LINUX_ARTIFACT_MAP.items():
         if "/" in marker:
             # Directory-scoped marker: full relative-path context is required,

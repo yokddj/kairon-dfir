@@ -301,8 +301,9 @@ class TestAuthLogParser:
         sudo_cmds = [r for r in results if r.get("process") == "sudo"]
         assert len(sudo_cmds) >= 1
         entry = sudo_cmds[0]
-        assert entry["username"] == "root"
-        assert "systemctl" in entry.get("message", "")
+        # The account that ran sudo is the actor; the account it ran as is kept apart.
+        assert entry["username"] == "analyst" and entry["run_as"] == "root"
+        assert "systemctl" in entry.get("command", "")
 
     def test_su_auth(self, auth_log_content):
         from app.ingest.linux.auth import parse_auth

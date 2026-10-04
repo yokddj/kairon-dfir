@@ -453,9 +453,9 @@ describe("ArtifactExplorer", () => {
     renderPage();
 
     expect(await screen.findByTestId("linux-artifacts-view")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Linux Journal" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Linux Auth" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Linux Syslog" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Journal" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Auth Logs" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Syslog" })).not.toBeInTheDocument();
   });
 
   it("regression: selecting a facet-derived artifact type sends the literal indexed value, not its canonicalized display id", async () => {
@@ -523,9 +523,9 @@ describe("ArtifactExplorer", () => {
 
     expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
     const artifactSelector = await screen.findByLabelText("Artifact view");
-    await waitFor(() => expect(artifactSelector).toHaveTextContent("Linux Auth"));
-    expect(artifactSelector).toHaveTextContent("Linux Syslog");
-    expect(artifactSelector).toHaveTextContent("Linux Cron");
+    await waitFor(() => expect(artifactSelector).toHaveTextContent("Auth Logs"));
+    expect(artifactSelector).toHaveTextContent("Syslog");
+    expect(artifactSelector).toHaveTextContent("Cron");
     expect(artifactSelector).not.toHaveTextContent("Windows Events");
     expect(artifactSelector).not.toHaveTextContent("PowerShell");
   });
@@ -541,7 +541,7 @@ describe("ArtifactExplorer", () => {
     expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
     const artifactSelector = await screen.findByLabelText("Artifact view");
     await waitFor(() => expect(artifactSelector).toHaveTextContent("Windows Events"));
-    expect(artifactSelector).toHaveTextContent("Linux Syslog");
+    expect(artifactSelector).toHaveTextContent("Syslog");
   });
 
   it("host with real data never leaves the dropdown on only 'All artifact types'", async () => {

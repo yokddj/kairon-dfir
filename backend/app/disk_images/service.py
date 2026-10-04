@@ -6,6 +6,7 @@ import hashlib
 import fnmatch
 from functools import lru_cache
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -946,6 +947,21 @@ def _should_materialize(path: str) -> bool:
 _MATERIALIZE_PROGRESS_INTERVAL_SECONDS = 5.0
 
 
+def _preserve_file_times(target: Path, meta) -> None:
+    """Give the extracted copy the access and modification times it had in the image.
+
+    Parsers read these: a syslog line carries no year, which is taken from the file's modification
+    time, so a copy stamped with the extraction time would move a 2016 log into the current year.
+    """
+    try:
+        mtime = int(getattr(meta, "mtime", 0) or 0)
+        atime = int(getattr(meta, "atime", 0) or 0) or mtime
+        if mtime > 0:
+            os.utime(target, (atime, mtime))
+    except (OSError, OverflowError, ValueError, TypeError):
+        pass
+
+
 def _materialize_volume_installation(
     *,
     fs_info: pytsk3.FS_Info,
@@ -1034,6 +1050,7 @@ def _materialize_volume_installation(
             warnings.append("max_bytes_per_volume_exceeded")
             break
         target.write_bytes(data)
+        _preserve_file_times(target, meta)
         relative_output = str(target.relative_to(destination_root))
         extracted_files.append(relative_output)
         manifest_entries.append({"path": relative_output, "ignored": False, "reason": None, "size": len(data), "status": "extracted", "local_path": str(target)})
@@ -1116,6 +1133,7 @@ def _materialize_volume_installation(
                 warnings.append("max_bytes_per_volume_exceeded")
                 break
             target.write_bytes(data)
+            _preserve_file_times(target, entry_meta)
             relative_output = str(target.relative_to(destination_root))
             extracted_files.append(relative_output)
             manifest_entries.append({"path": relative_output, "ignored": False, "reason": None, "size": len(data), "status": "extracted", "local_path": str(target)})

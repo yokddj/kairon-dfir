@@ -128,6 +128,8 @@ def _legacy_mysql_time(value: str) -> tuple[str | None, str]:
 _MYSQL_ERROR_RE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2}[T ]\s?\d{1,2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\s+(?:(?P<thread>\d+)\s+)?\[(?P<level>[A-Za-z]+)\]\s+(?:\[(?P<code>MY-\d+)\]\s+)?(?:\[(?P<subsystem>[A-Za-z_ ]+)\]\s+)?(?P<msg>.*)$"
 )
+# MySQL 5.5 / 5.6 and older MariaDB: "160403 19:02:55 [Note] ..." or "160403 19:02:55 InnoDB: ...".
+_MYSQL_ERROR_LEGACY_RE = re.compile(r"^(?P<ts>\d{6}\s+\d{1,2}:\d{2}:\d{2})\s+(?:\[(?P<level>[A-Za-z]+)\]\s+)?(?P<msg>.*)$")
 _ACCESS_DENIED_RE = re.compile(r"Access denied for user '(?P<user>[^']*)'@'(?P<host>[^']*)'(?: \(using password: (?P<pw>YES|NO)\))?")
 _ABORTED_RE = re.compile(r"Aborted connection (?P<id>\d+) to db: '(?P<db>[^']*)' user: '(?P<user>[^']*)' host: '(?P<host>[^']*)'(?: \((?P<reason>[^)]*)\))?")
 _BLOCKED_RE = re.compile(r"Host '(?P<host>[^']*)' is blocked because of many connection errors")
@@ -163,17 +165,24 @@ def _parse_mysql_error(content: str, source_path: str) -> list[dict]:
         if not stripped:
             continue
         match = _MYSQL_ERROR_RE.match(stripped)
-        if not match:
+        legacy = None if match else _MYSQL_ERROR_LEGACY_RE.match(stripped)
+        if not match and not legacy:
             rows.append(_row("mysql", "mysql_error", source_path, number, timestamp=None, status="missing", message=stripped, raw=stripped))
             continue
-        stamp, status = _iso(match.group("ts"))
-        message = match.group("msg")
-        level = match.group("level").lower()
+        if match:
+            stamp, status = _iso(match.group("ts"))
+            level = match.group("level").lower()
+            thread, code = match.group("thread"), match.group("code")
+        else:
+            stamp, status = _legacy_mysql_time(legacy.group("ts"))
+            level = (legacy.group("level") or "note").lower()
+            thread = code = None
+        message = (match or legacy).group("msg")
         fields: dict[str, Any] = {
             "db_level": level,
             "severity": _MYSQL_LEVEL.get(level, level),
-            "db_thread_id": match.group("thread"),
-            "db_error_code": match.group("code"),
+            "db_thread_id": thread,
+            "db_error_code": code,
             "event_action": "db_log",
         }
         denied = _ACCESS_DENIED_RE.search(message)
@@ -442,7 +451,7 @@ def _parse_pg_text(content: str, source_path: str) -> list[dict]:
         stamp, status = _pg_time(match.group("ts"), match.group("tz"))
         fields = _pg_message_fields(level, message, match.group("user"), match.group("db"))
         fields["db_thread_id"] = match.group("pid")
-        fields["severity"] = level.lower()
+        fields["severity"] = _pg_severity(level)
         current = _row("postgresql", "postgres_log", source_path, number, timestamp=stamp, status=status, message=message, raw=line, **fields)
         rows.append(current)
     return rows
@@ -465,7 +474,7 @@ def _parse_pg_json(content: str, source_path: str) -> list[dict]:
         level = str(record.get("error_severity") or "LOG")
         message = str(record.get("message") or "")
         fields = _pg_message_fields(level, message, record.get("user"), record.get("dbname"), record.get("remote_host"), str(record.get("remote_port") or ""))
-        fields.update(db_thread_id=str(record.get("pid") or ""), severity=level.lower(), db_error_code=record.get("state_code") or "", db_application=record.get("application_name") or "")
+        fields.update(db_thread_id=str(record.get("pid") or ""), severity=_pg_severity(level), db_error_code=record.get("state_code") or "", db_application=record.get("application_name") or "")
         if record.get("query"):
             fields["db_statement"] = str(record["query"])
         rows.append(_row("postgresql", "postgres_log", source_path, number, timestamp=stamp, status=status, message=message + (f"\nDETAIL: {record['detail']}" if record.get("detail") else ""), raw=stripped, **fields))
@@ -495,13 +504,20 @@ def _parse_pg_csv(content: str, source_path: str) -> list[dict]:
             host, _, port = data["connection_from"].rpartition(":")
             level = data["error_severity"] or "LOG"
             fields = _pg_message_fields(level, data["message"], data["user_name"], data["database_name"], host or data["connection_from"], port)
-            fields.update(db_thread_id=data["process_id"], severity=level.lower(), db_error_code=data["sql_state_code"], db_application=data["application_name"], db_command=data["command_tag"])
+            fields.update(db_thread_id=data["process_id"], severity=_pg_severity(level), db_error_code=data["sql_state_code"], db_application=data["application_name"], db_command=data["command_tag"])
             if data["query"]:
                 fields["db_statement"] = data["query"]
             rows.append(_row("postgresql", "postgres_log", source_path, number, timestamp=stamp, status=status, message=data["message"], raw=",".join(record), **fields))
     except csv.Error:
         pass
     return rows
+
+
+def _pg_severity(level: str) -> str:
+    """PostgreSQL's FATAL ends one session (a refused login, a missing role), not the server: it is an
+    error. PANIC, which stops the server, stays the most severe."""
+    lowered = str(level or "").strip().lower()
+    return "error" if lowered == "fatal" else lowered
 
 
 def parse_database_log(content: str, *, source_path: str = "", truncated: bool = False) -> list[dict]:

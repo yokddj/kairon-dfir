@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import importlib
+import re
 import gzip
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from app.ingest.linux.local_time import ASSUMED_YEAR, ASSUMED_ZONE, file_reference_time, host_clock_for, resolve_local_times
 
 
 class LinuxParserDispatchError(RuntimeError):
@@ -68,7 +71,19 @@ def resolve_linux_parser(parser: str | None) -> tuple[LinuxParserTarget, Callabl
     return target, parse_func
 
 
+_UTMP_NAME_RE = re.compile(r"^[bw]tmp(?:\.\d+)?$", re.IGNORECASE)
+
+
 def parse_linux_artifact_file(path: Path, *, parser: str | None, artifact_type: str | None, source_path: str) -> list[dict[str, Any]]:
+    rows = _parse_linux_artifact_file(path, parser=parser, artifact_type=artifact_type, source_path=source_path)
+    if any(row.get("timestamp_status") in {ASSUMED_YEAR, ASSUMED_ZONE} for row in rows):
+        # Local, zone-less (and year-less) times become UTC using the host's own timezone, boot
+        # records and the file's modification time; see app.ingest.linux.local_time.
+        resolve_local_times(rows, reference=file_reference_time(path), clock=host_clock_for(path))
+    return rows
+
+
+def _parse_linux_artifact_file(path: Path, *, parser: str | None, artifact_type: str | None, source_path: str) -> list[dict[str, Any]]:
     target, parse_func = resolve_linux_parser(parser)
     try:
         if target.parser == "linux_lastlog_raw":
@@ -86,6 +101,10 @@ def parse_linux_artifact_file(path: Path, *, parser: str | None, artifact_type: 
             if Path(str(source_path or path.name)).name.lower() == "localtime":
                 return parse_func(path.read_bytes(), source_path=source_path)
         if str(artifact_type or "").lower() in target.binary_artifact_types:
+            return parse_func(path.read_bytes(), source_path=source_path)
+        if target.parser == "linux_auth_raw" and _UTMP_NAME_RE.match(Path(str(source_path or path.name)).name):
+            # Same disk-image case as localtime above: the coarse family arrives as artifact_type,
+            # so the binary login records (wtmp, btmp and rotated copies) were text-decoded.
             return parse_func(path.read_bytes(), source_path=source_path)
         if target.parser == "linux_journal_raw":
             from app.ingest.linux.journal import parse_journal_binary_file

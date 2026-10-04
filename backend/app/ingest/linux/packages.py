@@ -159,6 +159,7 @@ def _parse_yum_dnf_log(
                 "source_file": source_path,
                 "line_number": line_number,
                 "timestamp": timestamp,
+                "timestamp_status": "assumed_year_utc" if timestamp else "missing",
                 "package_manager": manager,
                 "action": action,
                 "package": package,
