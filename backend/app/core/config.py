@@ -41,7 +41,10 @@ class Settings(BaseSettings):
     backend_host: str = "0.0.0.0"
     backend_port: int = 8000
     backend_cors_origins: str = "*"
-    backend_cors_origin_regex: str = r".*"
+    # Empty by default: the browser reaches the API on the page's own origin (/api through Nginx or
+    # the Vite proxy), so only the KAIRON_ALLOWED_ORIGINS list is ever needed. A catch-all pattern
+    # here would let any web page make requests with the analyst's session.
+    backend_cors_origin_regex: str = ""
     session_secret_key: str = os.getenv("KAIRON_SESSION_SECRET", "CHANGE_ME_SESSION_SECRET")
     auth_enabled: bool = os.getenv("KAIRON_AUTH_ENABLED", "true").lower() not in ("0", "false", "no")
     bootstrap_admin_username: str = os.getenv("KAIRON_BOOTSTRAP_ADMIN_USERNAME", "")

@@ -31,6 +31,7 @@
 
 ### Fixed
 
+- The API no longer accepts cross-origin requests carrying the analyst's session from any web page: a catch-all CORS origin pattern overrode the configured `KAIRON_ALLOWED_ORIGINS`. Only the configured origins are allowed now; `BACKEND_CORS_ORIGIN_REGEX` remains available as an explicit opt-in.
 - Stale indexing-plan completion state now reconciles correctly instead of leaving a plan looking incomplete after it finished.
 - Memory tab parameter routing and the Memory runs evidence route.
 
