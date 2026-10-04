@@ -2,6 +2,16 @@ import os
 from pathlib import Path
 
 import pytest
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.ext.compiler import compiles
+
+
+@compiles(UUID, "sqlite")
+def _uuid_as_text_on_sqlite(type_, compiler, **kw):
+    # Tests run the models on SQLite, where a column declared UUID has numeric affinity: a random
+    # id that happens to read as a number (digits and a single "e") was stored as a float and
+    # failed on read. Text affinity keeps every id a string. Production runs on PostgreSQL.
+    return "CHAR(36)"
 
 
 def pytest_configure():

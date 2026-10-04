@@ -9,6 +9,7 @@ on:
 jobs:
   repo-sanity:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Check required files
@@ -29,6 +30,7 @@ jobs:
 
   backend-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: backend
@@ -49,6 +51,12 @@ jobs:
         env:
           BACKEND_DATA_DIR: ${{ runner.temp }}/kairon-ci-data
           BACKEND_TEMP_DIR: ${{ runner.temp }}/kairon-ci-data/tmp
+          # No services run in this job. Point the service hosts at a closed local port so a test
+          # that tries to connect fails at once instead of waiting on DNS for "postgres"/"redis".
+          POSTGRES_HOST: 127.0.0.1
+          REDIS_URL: redis://127.0.0.1:1/0
+          OPENSEARCH_HOST: 127.0.0.1
+          OPENSEARCH_PORT: "1"
         # Known pre-existing failures are marked xfail via
         # tests/conftest.py + tests/known_failures.txt, so this job now
         # genuinely fails on any regression instead of being advisory.
@@ -56,6 +64,7 @@ jobs:
 
   frontend-typecheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: frontend
@@ -69,8 +78,25 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
+  frontend-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm ci
+      - name: Run tests
+        run: npm test
+
   frontend-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: frontend-typecheck
     defaults:
       run:
@@ -87,6 +113,7 @@ jobs:
 
   scripts-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Bash syntax check
@@ -107,6 +134,7 @@ jobs:
 
   setup-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Setup --help
@@ -138,6 +166,7 @@ jobs:
 
   compose-config:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Create placeholder .env for config check

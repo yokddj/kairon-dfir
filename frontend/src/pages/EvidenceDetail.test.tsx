@@ -633,7 +633,7 @@ describe("EvidenceDetail minimal processing UX", () => {
     expect(screen.getAllByText("45%").length).toBeGreaterThan(0);
     expect(screen.getByText(/Current artifact: PowerShell Operational\.evtx/i)).toBeInTheDocument();
     expect(screen.getByText("200 / 866")).toBeInTheDocument();
-    expect(screen.getByText("1,399")).toBeInTheDocument();
+    expect(screen.getByText((1399).toLocaleString())).toBeInTheDocument();
   });
 
   it("excludes skipped empty artifacts from the main real failures table", async () => {

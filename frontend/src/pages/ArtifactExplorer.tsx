@@ -62,7 +62,8 @@ const USER_ACTIVITY_TABS = [
   { value: "runmru", label: "RunMRU" },
   { value: "opensavemru", label: "OpenSaveMRU" },
 ];
-const USER_ACTIVITY_TYPES = new Set(USER_ACTIVITY_TABS.map((item) => item.value));
+// Compared with the canonical view id ("shellbag" is an alias of "shellbags"), which is what artifactType holds.
+const USER_ACTIVITY_TYPES = new Set(USER_ACTIVITY_TABS.map((item) => canonicalArtifactView(item.value)));
 const INTERNAL_ARTIFACT_TYPES_HIDDEN_FROM_MAIN = new Set(["registry_persistence"]);
 // Mirrors backend/app/api/routes_search.py's SORT_FIELD_MAP keys. Clicking a
 // column header only re-sorts the current page client-side (EventTable's own
@@ -1237,7 +1238,7 @@ export default function ArtifactExplorer() {
                   key={tab.value}
                   type="button"
                   onClick={() => setArtifactTypeFilter(tab.value)}
-                  className={`rounded-xl border px-3 py-2 text-sm ${artifactType === tab.value ? "border-accent/50 bg-accent/15 text-accent" : "border-line bg-abyss/80 text-muted"}`}
+                  className={`rounded-xl border px-3 py-2 text-sm ${artifactType === canonicalArtifactView(tab.value) ? "border-accent/50 bg-accent/15 text-accent" : "border-line bg-abyss/80 text-muted"}`}
                 >
                   {tab.label}
                 </button>
