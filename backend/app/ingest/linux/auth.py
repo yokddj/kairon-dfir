@@ -99,21 +99,35 @@ def _extract_username(log_message: str, fallback: str | None = None) -> str | No
     return None
 
 
-def _extract_event_action(log_message: str) -> str:
+_SUDO_LINE_RE = re.compile(
+    r"^\s*(?P<user>[^\s:]+)\s*:\s*(?:(?P<problem>[^;]*?)\s*;\s*)?TTY=(?P<tty>[^;]*?)\s*;\s*PWD=(?P<pwd>[^;]*?)\s*;\s*USER=(?P<runas>[^;]*?)\s*;(?:[^;]*;)*?\s*COMMAND=(?P<cmd>.*)$"
+)
+_MAX_ATTEMPTS_RE = re.compile(r"maximum authentication attempts exceeded for (?:invalid user )?(?P<user>\S+) from (?P<ip>[0-9a-fA-F:.]+) port (?P<port>\d+)", re.IGNORECASE)
+_CONSOLE_LOGIN_RE = re.compile(r"(?:ROOT LOGIN\s+on '?(?P<tty1>[^'\s]+)'?|LOGIN ON (?P<tty2>\S+) BY (?P<user>\S+))")
+
+
+def _extract_event_action(log_message: str, process: str | None = None) -> str:
     lower = log_message.lower()
+    program = (process or "").lower()
     if "accepted" in lower and "password" in lower:
         return "password_accepted"
     if "accepted" in lower and "publickey" in lower:
         return "publickey_accepted"
     if "failed password" in lower:
         return "password_failed"
+    # Before "invalid user": the line may name one ("... for invalid user x from ...").
+    if "maximum authentication attempts exceeded" in lower:
+        return "max_auth_attempts"
     if "invalid user" in lower:
         return "invalid_user"
-    if lower.startswith("sudo") or "sudo:" in lower:
-        if "command" in lower:
+    # The program name is split off the message, so "sudo:" is usually not in the text itself.
+    if program == "sudo" or lower.startswith("sudo") or "sudo:" in lower:
+        if "incorrect password" in lower or "not in the sudoers" in lower or "authentication failure" in lower:
+            return "sudo_failed"
+        if "command=" in lower:
             return "sudo_command"
         return "sudo_auth"
-    if "su:" in lower:
+    if program == "su" or "su:" in lower:
         return "su_auth"
     if "pam_unix" in lower and "session opened" in lower:
         return "session_opened"
@@ -121,7 +135,34 @@ def _extract_event_action(log_message: str) -> str:
         return "session_closed"
     if "authentication failure" in lower:
         return "auth_failure"
+    if _CONSOLE_LOGIN_RE.search(log_message):
+        return "console_login"
+    if "connection closed by" in lower and "[preauth]" in lower:
+        return "preauth_disconnect"
+    if lower.startswith(("received disconnect", "disconnected from")):
+        return "ssh_disconnect"
+    if lower.startswith("server listening on"):
+        return "sshd_listening"
     return "unknown"
+
+
+def _extract_privilege_and_console(message: str, action: str) -> dict:
+    """sudo's user, target account, directory, terminal and command; console and brute-force details."""
+    data: dict = {}
+    if action in {"sudo_command", "sudo_failed"}:
+        match = _SUDO_LINE_RE.match(message)
+        if match:
+            data.update(username=match.group("user"), run_as=match.group("runas").strip(), cwd=match.group("pwd").strip(),
+                        terminal=match.group("tty").strip(), command=match.group("cmd").strip()[:4000])
+    elif action == "max_auth_attempts":
+        match = _MAX_ATTEMPTS_RE.search(message)
+        if match:
+            data.update(username=match.group("user"), attempted_username=match.group("user"), source_ip=match.group("ip"), source_port=int(match.group("port")))
+    elif action == "console_login":
+        match = _CONSOLE_LOGIN_RE.search(message)
+        if match:
+            data.update(username=match.group("user") or "root", terminal=(match.group("tty1") or match.group("tty2") or "").replace("/dev/", ""))
+    return data
 
 
 def _extract_auth_method(log_message: str) -> str | None:
@@ -172,6 +213,12 @@ def _auth_type_from_action(action: str) -> tuple[str, str]:
         return "authentication_failure", "failure"
     if action in {"sudo_auth", "su_auth", "sudo_command"}:
         return "privilege_authentication", "success" if action == "sudo_command" else "unknown"
+    if action == "sudo_failed":
+        return "privilege_authentication", "failure"
+    if action == "max_auth_attempts":
+        return "login_failure", "failure"
+    if action == "console_login":
+        return "login_success", "success"
     return "other", "unknown"
 
 
@@ -337,9 +384,10 @@ def parse_auth(
         if ip_matches:
             source_ip = ip_matches[0]
 
-        event_action = _extract_event_action(message)
+        event_action = _extract_event_action(message, process)
         auth_method = _extract_auth_method(message)
         structured = _extract_structured_auth(message, process)
+        structured.update({key: value for key, value in _extract_privilege_and_console(message, event_action).items() if value not in (None, "")})
         auth_event_type, authentication_result = _auth_type_from_action(event_action)
         if structured.get("username"):
             detected_username = structured["username"]
@@ -368,6 +416,9 @@ def parse_auth(
             "authentication_result": authentication_result,
             "auth_event_type": auth_event_type,
             "effective_failure_count": structured.get("effective_failure_count"),
+            "run_as": structured.get("run_as", ""),
+            "cwd": structured.get("cwd", ""),
+            "command": structured.get("command", ""),
             "event_action": event_action,
             "message": message[:2000],
             "raw_excerpt": raw_excerpt,

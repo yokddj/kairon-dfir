@@ -68,7 +68,7 @@ def test_linux_and_network_fields_are_queryable(text, field):
         ("verdict:block", {"linux.firewall_action"}),
         ("xff:198.51.100.77", {"linux.x_forwarded_for"}),
         ("webserver:nginx", {"linux.web_server"}),
-        ("indicator:reverse_shell", {"linux.suspicious_indicators"}),
+        ("indicator:reverse_shell", {"linux.suspicious_indicators", "linux.suspicious_url_indicators"}),
         ("audit:EXECVE", {"linux.audit_type"}),
         ("timequality:assumed_utc", {"linux.timestamp_status"}),
         ("proto:tcp", {"network.protocol", "linux.network_protocol"}),

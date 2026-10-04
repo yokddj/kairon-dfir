@@ -451,7 +451,7 @@ def _parse_pg_text(content: str, source_path: str) -> list[dict]:
         stamp, status = _pg_time(match.group("ts"), match.group("tz"))
         fields = _pg_message_fields(level, message, match.group("user"), match.group("db"))
         fields["db_thread_id"] = match.group("pid")
-        fields["severity"] = level.lower()
+        fields["severity"] = _pg_severity(level)
         current = _row("postgresql", "postgres_log", source_path, number, timestamp=stamp, status=status, message=message, raw=line, **fields)
         rows.append(current)
     return rows
@@ -474,7 +474,7 @@ def _parse_pg_json(content: str, source_path: str) -> list[dict]:
         level = str(record.get("error_severity") or "LOG")
         message = str(record.get("message") or "")
         fields = _pg_message_fields(level, message, record.get("user"), record.get("dbname"), record.get("remote_host"), str(record.get("remote_port") or ""))
-        fields.update(db_thread_id=str(record.get("pid") or ""), severity=level.lower(), db_error_code=record.get("state_code") or "", db_application=record.get("application_name") or "")
+        fields.update(db_thread_id=str(record.get("pid") or ""), severity=_pg_severity(level), db_error_code=record.get("state_code") or "", db_application=record.get("application_name") or "")
         if record.get("query"):
             fields["db_statement"] = str(record["query"])
         rows.append(_row("postgresql", "postgres_log", source_path, number, timestamp=stamp, status=status, message=message + (f"\nDETAIL: {record['detail']}" if record.get("detail") else ""), raw=stripped, **fields))
@@ -504,13 +504,20 @@ def _parse_pg_csv(content: str, source_path: str) -> list[dict]:
             host, _, port = data["connection_from"].rpartition(":")
             level = data["error_severity"] or "LOG"
             fields = _pg_message_fields(level, data["message"], data["user_name"], data["database_name"], host or data["connection_from"], port)
-            fields.update(db_thread_id=data["process_id"], severity=level.lower(), db_error_code=data["sql_state_code"], db_application=data["application_name"], db_command=data["command_tag"])
+            fields.update(db_thread_id=data["process_id"], severity=_pg_severity(level), db_error_code=data["sql_state_code"], db_application=data["application_name"], db_command=data["command_tag"])
             if data["query"]:
                 fields["db_statement"] = data["query"]
             rows.append(_row("postgresql", "postgres_log", source_path, number, timestamp=stamp, status=status, message=data["message"], raw=",".join(record), **fields))
     except csv.Error:
         pass
     return rows
+
+
+def _pg_severity(level: str) -> str:
+    """PostgreSQL's FATAL ends one session (a refused login, a missing role), not the server: it is an
+    error. PANIC, which stops the server, stays the most severe."""
+    lowered = str(level or "").strip().lower()
+    return "error" if lowered == "fatal" else lowered
 
 
 def parse_database_log(content: str, *, source_path: str = "", truncated: bool = False) -> list[dict]:
