@@ -87,6 +87,19 @@ def test_without_boot_records_the_year_comes_from_the_file_modification_time(tmp
     assert {row["timestamp_status"] for row in rows} == {"inferred_year"}   # no zone known: still read as UTC
 
 
+def test_the_zone_of_the_machine_running_kairon_is_never_used(tmp_path, monkeypatch):
+    # A collection without /etc must not pick up the analysis machine's own /etc further up.
+    local_time._host_clock_for_root.cache_clear()
+    monkeypatch.setattr(local_time, "_is_outside_evidence", lambda candidate: candidate == tmp_path)
+    (tmp_path / "etc").mkdir()
+    (tmp_path / "var").mkdir()
+    (tmp_path / "etc" / "timezone").write_text("Asia/Tokyo\n")
+    log = tmp_path / "collection" / "var" / "log" / "syslog"
+    log.parent.mkdir(parents=True)
+    log.write_text("x")
+    assert local_time.host_clock_for(log).zone is None
+
+
 def test_a_few_lines_out_of_order_are_not_a_new_year():
     clock = HostClock()
     rows = [{"timestamp": "2026-03-10T10:00:05+00:00", "timestamp_status": "assumed_year_utc"},

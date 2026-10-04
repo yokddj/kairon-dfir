@@ -59,10 +59,30 @@ class HostClock:
         return end is None or moment <= end + _UPTIME_SLACK
 
 
+def _is_outside_evidence(candidate: Path) -> bool:
+    """The machine Kairon runs on, not the evidence: its root, or a directory holding Kairon's data."""
+    try:
+        resolved = candidate.resolve()
+        if resolved == Path(resolved.anchor):
+            return True
+        from app.core.config import get_settings
+
+        data_dir = Path(get_settings().backend_data_dir).resolve()
+        return data_dir == resolved or resolved in data_dir.parents
+    except (OSError, RuntimeError, ValueError):
+        return True
+
+
 def _evidence_root(path: Path) -> Path | None:
-    """The directory holding this file's ``etc`` and ``var`` (the root of the collected filesystem)."""
+    """The directory holding this file's ``etc`` and ``var`` (the root of the collected filesystem).
+
+    The walk stops before it leaves the evidence: the host Kairon runs on has an /etc too, and its
+    timezone must never be applied to a collection that did not include one.
+    """
     try:
         for candidate in list(path.parents)[:_MAX_ROOT_DEPTH]:
+            if _is_outside_evidence(candidate):
+                return None
             if (candidate / "etc").is_dir() and (candidate / "var").is_dir():
                 return candidate
     except OSError:
