@@ -68,6 +68,7 @@ describe("Topbar", () => {
     activeCaseState.selectedHostId = "host-1";
     activeCaseState.selectedHost = "TEST-WIN10-01";
     activeCaseState.selectedEvidenceId = "ev-1";
+    activeCaseState.caseContext.summary.warnings = [];
   });
 
   it("renders topbar with active case, host and evidence selectors", async () => {
@@ -77,5 +78,34 @@ describe("Topbar", () => {
     expect(screen.getByRole("combobox", { name: /evidence filter/i })).toBeInTheDocument();
     expect(screen.getByText(/Case: Case Alpha/i)).toBeInTheDocument();
     expect(screen.getByText(/includes 1 aliases/i)).toBeInTheDocument();
+  });
+
+  it("shows actionable warnings in plain words and leaves informational codes out", async () => {
+    activeCaseState.caseContext.summary.warnings = ["multi_host_case", "failed_evidence_present", "parser_errors_present"];
+    renderWithProviders(<Topbar />);
+    const warning = await screen.findByRole("link", { name: /Some evidence failed to process \(\+1\)/ });
+    expect(warning).toHaveAttribute("href", "/cases/case-1/evidence");
+    expect(screen.queryByText(/multi_host_case/)).not.toBeInTheDocument();
+  });
+
+  it("shows no technical API address", async () => {
+    renderWithProviders(<Topbar />);
+    await screen.findByRole("combobox", { name: /active case/i });
+    expect(screen.queryByText(/127\.0\.0\.1:8000|^API /)).not.toBeInTheDocument();
+  });
+
+  it("lists the evidence filter only while it is active, with a way to clear it", async () => {
+    renderWithProviders(<Topbar />);
+    expect(await screen.findByText("Evidence: Collection.zip")).toBeInTheDocument();
+    screen.getByRole("button", { name: "Clear evidence filter" }).click();
+    expect(activeCaseState.clearSelectedEvidenceId).toHaveBeenCalled();
+  });
+
+  it("does not repeat 'All hosts / All evidence' when nothing is filtered", async () => {
+    activeCaseState.selectedEvidenceId = "";
+    renderWithProviders(<Topbar />);
+    await screen.findByRole("combobox", { name: /active case/i });
+    expect(screen.queryByText("Evidence: Collection.zip")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Clear evidence filter" })).not.toBeInTheDocument();
   });
 });

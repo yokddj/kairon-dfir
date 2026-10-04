@@ -1,10 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { API_BASE_URL } from "../api/client";
 import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { useHostContext } from "../hooks/useHostContext";
+
+const CASE_WARNING_TEXT: Record<string, string> = {
+  failed_evidence_present: "Some evidence failed to process",
+  parser_errors_present: "Some artifacts had parser errors",
+};
 
 function formatEvidenceStatus(status: string) {
   if (!status) return "unknown";
@@ -28,18 +32,10 @@ export default function Topbar() {
   const { activeHostId, activeHostSummary, setHostFilter, clearHostFilter } = useHostContext();
   const { timezoneMode, setTimezoneMode, effectiveTimezone, userTimezone } = useTimezonePreference();
   const { data: cases } = useQuery({ queryKey: ["cases"], queryFn: api.listCases });
-  const now = new Intl.DateTimeFormat(undefined, {
-    timeZone: effectiveTimezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date());
-
   const selectedEvidence = caseContext?.evidences.find((item) => item.id === selectedEvidenceId) ?? null;
-  const warnings = caseContext?.summary.warnings ?? [];
+  // Only warnings the analyst can act on reach the top bar; informational codes such as
+  // multi_host_case are already visible in the host selector.
+  const warnings = (caseContext?.summary.warnings ?? []).flatMap((code) => (CASE_WARNING_TEXT[code] ? [CASE_WARNING_TEXT[code]] : []));
 
   function handleCaseChange(caseId: string) {
     const nextCase = (cases ?? []).find((item) => item.id === caseId) ?? null;
@@ -132,35 +128,39 @@ export default function Topbar() {
             <option value="case">TZ: Case</option>
             <option value="utc">TZ: UTC</option>
           </select>
-          <div className="hidden max-w-[320px] truncate rounded-full border border-line bg-abyss/80 px-4 py-2 font-mono text-[11px] text-muted xl:block">
-            API {API_BASE_URL}
-          </div>
-          {warnings.length ? (
-            <div className="rounded-full border border-warning/40 bg-warning/10 px-4 py-2 font-mono text-[11px] text-warning">
+          {warnings.length && activeCase ? (
+            <Link
+              to={`/cases/${activeCase.id}/evidence`}
+              title={warnings.join("\n")}
+              className="rounded-full border border-warning/40 bg-warning/10 px-4 py-2 text-xs text-warning"
+            >
               {warnings[0]}
-            </div>
+              {warnings.length > 1 ? ` (+${warnings.length - 1})` : ""}
+            </Link>
           ) : null}
-          <div className="rounded-full border border-line bg-abyss/80 px-4 py-2 font-mono text-xs text-muted">{now}</div>
         </div>
       </div>
 
+      {!activeCase || activeHostSummary || selectedEvidence || location.pathname === "/" ? (
       <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted">
         {activeCase ? (
           <>
-            <Link className="rounded-full border border-line bg-abyss/70 px-3 py-1.5" to={`/cases/${activeCase.id}/overview`}>
-              Overview
-            </Link>
-            <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">
-              {activeHostSummary ? `Host: ${activeHostSummary.display_name}${activeHostSummary.alias_count ? ` · includes ${activeHostSummary.alias_count} aliases` : ""}` : "Host: All hosts"}
-            </span>
             {activeHostSummary ? (
-              <button type="button" onClick={clearHostFilter} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-muted">
-                Clear host filter
-              </button>
+              <span className="flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-accent">
+                {`Host: ${activeHostSummary.display_name}${activeHostSummary.alias_count ? ` · includes ${activeHostSummary.alias_count} aliases` : ""}`}
+                <button type="button" onClick={clearHostFilter} aria-label="Clear host filter" className="text-muted hover:text-ink">
+                  ✕
+                </button>
+              </span>
             ) : null}
-            <span className="max-w-[280px] truncate rounded-full border border-line bg-abyss/70 px-3 py-1.5">
-              {selectedEvidence ? `Evidence: ${selectedEvidence.name}` : "Evidence: All evidence"}
-            </span>
+            {selectedEvidence ? (
+              <span className="flex max-w-[320px] items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-accent">
+                <span className="truncate">{`Evidence: ${selectedEvidence.name}`}</span>
+                <button type="button" onClick={clearSelectedEvidenceId} aria-label="Clear evidence filter" className="text-muted hover:text-ink">
+                  ✕
+                </button>
+              </span>
+            ) : null}
           </>
         ) : (
           <div className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">
@@ -173,6 +173,7 @@ export default function Topbar() {
           </button>
         ) : null}
       </div>
+      ) : null}
     </header>
   );
 }

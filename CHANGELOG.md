@@ -28,6 +28,10 @@
 ### Changed
 
 - CI runs the frontend test suite, every job has a time limit, and the backend tests point the service hosts at a closed local port so a connection attempt fails at once instead of hanging on DNS. Tests on SQLite store UUID columns as text, which removes a rare random failure.
+- Top bar: only warnings the analyst can act on (failed evidence, parser errors) are shown, in plain words and linking to the evidence list; informational codes such as `multi_host_case` are no longer shown raw. The technical API address and a clock that did not tick are gone, and the host and evidence chips appear only while that filter is active, each with a button to clear it.
+- Home: counts use the locale's number format, the stat cards without data ("via OpenSearch", "Ready") are replaced with open and total cases, and the 10,000-result paging note moved next to the paging it describes.
+- Findings has its own icon in the sidebar (it shared Detections').
+- The Search table no longer has a separate Parser column; the parser is in the Source badge and the event detail.
 - The API port (8000) is published on the host's loopback address only; the UI reaches the API through the frontend's `/api` proxy and other machines keep using the UI port. Set `KAIRON_API_BIND=0.0.0.0` to expose it again.
 - Memory's routers and startup reconciliation hooks are now mounted/run only when `memory_enabled` is true, instead of unconditionally.
 - Duplicate evidence requests now return `409` with `{error_code: EVIDENCE_DUPLICATE, duplicate: true, existing_evidence_id, existing_filename}` instead of silently creating a second Evidence row.
@@ -45,6 +49,7 @@
 - USB device class GUIDs keep their closing brace when the setupapi line carries an extra trailing one.
 - A USB event whose only host clue was the setupapi file name no longer gets that file name as its host.
 - Process trees no longer count a child with only a descriptive badge (such as `cmd.exe` marked `lolbin`, with no risk) as a suspicious chain.
+- Search and Artifact Views no longer offer a next or last page beyond the first 10,000 results, which the server refuses; they say when more results match than can be paged.
 - Stale indexing-plan completion state now reconciles correctly instead of leaving a plan looking incomplete after it finished.
 - Memory tab parameter routing and the Memory runs evidence route.
 

@@ -281,6 +281,11 @@ EVENT_SORTS = {
     "risk_asc": [{"risk_score": {"order": "asc", "missing": "_last"}}, {"@timestamp": {"order": "desc", "missing": "_last"}}, {"event_id": {"order": "asc", "missing": "_last"}}],
 }
 OPENSEARCH_RESULT_WINDOW_LIMIT = 10000
+
+
+def _next_page_reachable(offset: int, page_size: int, shown: int, total: int) -> bool:
+    """Whether a next page exists and can be fetched inside the OpenSearch result window."""
+    return offset + shown < total and offset + 2 * page_size <= OPENSEARCH_RESULT_WINDOW_LIMIT
 TIMELINE_LOW_VALUE_TYPES = {"file_observed", "generic_record", "process_observed"}
 # Authentication event types, kept cross-platform on purpose: a "Logins" filter
 # that only understood Windows would quietly return nothing on a Linux case,
@@ -1621,7 +1626,8 @@ def search_case_v2(db: Session, case_id: str, params: dict[str, Any]) -> dict[st
             "page_size": page_size,
             "items_count": len(results),
             "has_previous": offset > 0,
-            "has_next": offset + len(results) < total,
+            "has_next": _next_page_reachable(offset, page_size, len(results), total),
+            "beyond_result_window": total > OPENSEARCH_RESULT_WINDOW_LIMIT,
             "pagination_mode": "offset" if not params.get("cursor") else "cursor",
             "debug_pagination": {"from": offset, "size": page_size, "sort": _event_sort(str(params.get("sort") or "timestamp_desc"), bool(params.get("q"))), "search_after_used": False},
             "next_cursor": next_cursor,
@@ -1686,7 +1692,8 @@ def search_case_v2(db: Session, case_id: str, params: dict[str, Any]) -> dict[st
         "page_size": page_size,
         "items_count": len(page_results),
         "has_previous": offset > 0,
-        "has_next": offset + len(page_results) < total,
+        "has_next": _next_page_reachable(offset, page_size, len(page_results), total),
+        "beyond_result_window": total > OPENSEARCH_RESULT_WINDOW_LIMIT,
         "pagination_mode": "offset" if not params.get("cursor") else "cursor",
         "debug_pagination": {"from": offset, "size": page_size, "sort": str(params.get("sort") or "timestamp_desc"), "search_after_used": False},
         "next_cursor": next_cursor,

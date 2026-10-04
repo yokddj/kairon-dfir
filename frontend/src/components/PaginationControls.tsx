@@ -7,11 +7,13 @@ type Props = {
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
   pageSizeOptions?: number[];
+  /** More results match than can be paged through (OpenSearch result window). */
+  beyondResultWindow?: boolean;
 };
 
 const DEFAULT_PAGE_SIZE_OPTIONS = [25, 50, 100, 250, 500];
 
-export default function PaginationControls({ page, totalPages, total, totalRelation = "eq", pageSize, onPageChange, onPageSizeChange, pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS }: Props) {
+export default function PaginationControls({ page, totalPages, total, totalRelation = "eq", pageSize, onPageChange, onPageSizeChange, pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS, beyondResultWindow = false }: Props) {
   const atStart = page <= 1;
   const atEnd = totalPages === 0 || page >= totalPages;
 
@@ -35,7 +37,8 @@ export default function PaginationControls({ page, totalPages, total, totalRelat
         <span>
           Page {Math.min(page, Math.max(totalPages, 1))} / {Math.max(totalPages, 1)}
         </span>
-        <span>{totalRelation === "gte" ? `${total}+ results` : `${total} results`}</span>
+        <span>{totalRelation === "gte" ? `${total.toLocaleString()}+ results` : `${total.toLocaleString()} results`}</span>
+        {beyondResultWindow ? <span className="text-warning">Only the first 10,000 can be paged; narrow the filters to reach the rest.</span> : null}
         <label className="flex items-center gap-2">
           <span>Page size</span>
           <select value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value))} className="rounded-xl border border-line bg-abyss/70 px-2 py-1">

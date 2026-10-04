@@ -4,6 +4,7 @@ import {
   Database,
   FileArchive,
   Fingerprint,
+  Flag,
   FolderSearch2,
   GitCommitHorizontal,
   Home,
@@ -50,7 +51,7 @@ const INVESTIGATION_ITEMS: NavItem[] = [
     description: "Curated chronology for reporting: high-signal findings, marked events, command history and detections -- noisy raw artifacts excluded.",
   },
   { to: "/cases/:caseId/detections", label: "Detections", icon: ShieldAlert, requiresCase: true },
-  { to: "/cases/:caseId/findings", label: "Findings", icon: ShieldAlert, requiresCase: true },
+  { to: "/cases/:caseId/findings", label: "Findings", icon: Flag, requiresCase: true },
   { to: "/cases/:caseId/reports", label: "Reports", icon: FileArchive, requiresCase: true },
 ];
 
