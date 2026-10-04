@@ -24,3 +24,14 @@ def test_next_page_is_offered_only_inside_the_window(offset, page_size, shown, t
 
 def test_the_window_is_ten_thousand():
     assert OPENSEARCH_RESULT_WINDOW_LIMIT == 10_000
+
+
+def test_a_linux_result_is_summarised_by_its_log_line_not_the_field_dump():
+    from app.services.search_service import _format_event_result
+
+    hit = {"_id": "1", "_source": {
+        "@timestamp": "2019-10-05T11:20:59+00:00", "message": "btmp login failure user=root terminal=ssh:notty source=203.0.113.9",
+        "raw_summary": "artifact_family=linux_auth | artifact_type=btmp | source_file=var/log/btmp",
+        "event": {"type": "login_failure"}, "artifact": {"type": "linux_auth"}, "linux": {"artifact_family": "linux_auth"}, "host": {}, "user": {},
+    }}
+    assert _format_event_result(hit)["summary"].startswith("btmp login failure user=root")
