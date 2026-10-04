@@ -12,6 +12,10 @@
 
 ### Added
 
+- An optional, case-scoped AI assistant with read-only lookups over the case's data; off until an administrator configures a model provider (`docs/operations/ai-assistant.md`).
+- Linux: the binary systemd journal, a generic reader for other text logs (always showing the message), nginx next to Apache, firewall and fail2ban logs, persistence hooks (ld.so.preload, rc.local, PAM, shell start-up files, at jobs), Sysmon for Linux, Kubernetes audit, Docker and Kubernetes container logs and configuration, Postfix/Dovecot mail, MySQL/MariaDB/PostgreSQL, and OpenVPN/strongSwan. Syslog and journal priorities set the severity.
+- Linux events are searchable by their own fields (`linux.*`, and shortcuts such as `ip:`, `process:`, `jail:`, `container:`, `sql:`, `vpn:`), and Artifact Views has a table layout per Linux log family with a message column and click-to-filter cells.
+- Sigma: Linux rules run on the Linux logs (including keyword rules), and the web-server rules run on Apache and nginx access logs.
 - A single `memory_enabled` setting as the sole authority for activating Memory at the application-composition level (default true, preserving existing deployment behavior).
 - A dependency-free `GET /api/system/capabilities` endpoint exposing declarative capability activation state.
 - Case-scoped, content-based (SHA-256) duplicate evidence detection across every general evidence-creation path: direct upload, disk-image upload, folder upload, register-by-path, and the legacy Velociraptor upload routes.

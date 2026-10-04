@@ -107,3 +107,6 @@ demo/evidence/
 
 # Local-only AI agent instructions (contains maintainer-specific deploy authority)
 CLAUDE.md
+
+# Vite cache created when the frontend is run from the repository root
+.vite/

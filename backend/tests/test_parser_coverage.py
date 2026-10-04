@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 COVERAGE_PATH = ROOT / "docs" / "data" / "parser-coverage.json"
-DOC_PATH = ROOT / "docs" / "parser-coverage.md"
+DOC_PATH = ROOT / "docs" / "artifacts" / "parser-coverage.md"
 
 ALLOWED_STATUSES = {"stable", "partial", "experimental", "planned", "unsupported", "deprecated"}
 ALLOWED_VIEWS = {
@@ -16,6 +16,7 @@ ALLOWED_VIEWS = {
     "Process Graph",
     "Memory views",
     "Rules",
+    "Linux Authentication",
 }
 
 
@@ -58,7 +59,9 @@ def test_real_expected_families_are_present_with_honest_statuses():
 
     assert by_family["evtx"]["status"] == "stable"
     assert by_family["memory"]["status"] == "experimental"
-    assert by_family["linux_macos_triage"]["status"] == "unsupported"
+    assert by_family["macos_triage"]["status"] == "unsupported"
+    for family in ("linux_journal", "linux_database", "linux_vpn", "linux_container", "linux_k8s_audit"):
+        assert by_family[family]["status"] == "partial"
     assert by_family["srum"]["status"] == "partial"
     assert "Raw SRUDB.dat" in " ".join(by_family["srum"]["limitations"])
 

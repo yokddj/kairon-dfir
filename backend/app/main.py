@@ -53,7 +53,7 @@ Request._get_form = _patched_request_get_form
 Request.form = _patched_request_form
 
 
-app = FastAPI(title="Kairon DFIR API", version="0.1.0")
+app = FastAPI(title="Kairon DFIR API", version=settings.app_version)
 allow_all_origins = settings.cors_origins == ["*"]
 app.add_middleware(
     CORSMiddleware,

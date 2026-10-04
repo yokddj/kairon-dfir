@@ -67,7 +67,7 @@ This documentation describes the real state of the platform. Partial capabilitie
 
 ## Linux
 
-- [linux/linux-support.md](linux/linux-support.md): full Linux support — collection formats, auto-discovery, the 12 parsed families, and limitations.
+- [linux/linux-support.md](linux/linux-support.md): full Linux support — collection formats, auto-discovery, every parsed family (logs, journal, web servers, databases, mail, VPN, containers, Kubernetes, persistence, configuration), Sigma on Linux logs, and limitations.
 
 ## Memory
 
