@@ -36,19 +36,24 @@ Kairon DFIR is intended for trusted labs and controlled, self-hosted deployments
 - Per-host Host Facts (Linux identity/OS attributes today) and a cross-platform Local Accounts inventory (Linux passwd/shadow/group; Windows SAM accounts corroborated by ProfileList). See [docs/evidence/host-information.md](docs/evidence/host-information.md).
 - Case-scoped Search, Timeline, Command History, Execution Story, Incident Timeline, Findings, and Markdown Reports.
 - Sigma and YARA detections, analyst-triggered rather than an always-on background scan. See [docs/rules/rules_sigma_yara.md](docs/rules/rules_sigma_yara.md).
+- An optional AI assistant, scoped to the open case, that answers questions with read-only lookups over the same data the analyst can open; it is off until an administrator configures a model provider. See [docs/operations/ai-assistant.md](docs/operations/ai-assistant.md).
 - A Preview Memory Analysis capability for authorized RAM evidence, isolated from global Search/Timeline/Detections/Findings/Reports/SIEM; actual Volatility/MemProcFS analysis execution is opt-in per deployment. See [docs/memory/memory_analysis.md](docs/memory/memory_analysis.md).
 - Evidence SHA-256, integrity checks, and custody events. See [docs/evidence/evidence-integrity.md](docs/evidence/evidence-integrity.md).
 
 ## Linux Support
 
-Kairon ingests Linux triage collections (manual ZIP/TAR or Velociraptor)
-and normalizes auth logs, syslog, audit logs, shell history, cron,
-systemd unit files, SSH artifacts, sudoers, package logs, network config,
-and OS identity into Search and Timeline. Linux memory images are
-accepted and analyzed for process listing, network connections, and
-shell history recovered from memory via Volatility 3 — but Kairon does not provide full advanced Linux memory analysis yet. See
-[docs/linux-support.md](docs/linux-support.md) for exact coverage and
-known gaps.
+Kairon ingests Linux triage collections (manual ZIP/TAR or Velociraptor) and
+disk images, and normalizes them into Search, Timeline and Artifact Views:
+authentication and system logs, the systemd journal (including binary
+`.journal` files), audit logs, Apache and nginx, MySQL/MariaDB and PostgreSQL,
+Postfix/Dovecot/Exim mail, OpenVPN and strongSwan, firewalls and fail2ban,
+Docker/Kubernetes logs and audit, Sysmon for Linux, shell history, cron,
+systemd units, SSH, sudoers, packages, persistence hooks and OS identity.
+Linux Sigma rules (including the web-server rules) run against these logs.
+Linux memory images are accepted and analyzed for process listing, network
+connections and shell history via Volatility 3, but Kairon does not provide full advanced Linux memory analysis yet.
+See [docs/linux/linux-support.md](docs/linux/linux-support.md) for exact
+coverage and known gaps.
 
 ## Architecture
 

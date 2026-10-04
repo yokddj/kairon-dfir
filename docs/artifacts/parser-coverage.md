@@ -91,7 +91,7 @@ Quick reference for locating the parser code and recognizing typical input filen
 
 ## Linux Artifact Support
 
-Linux artifacts are supported with partial parser coverage. Evidence from Linux triage collections is ingested and searchable across 12 artifact families. See [Linux Support](../linux/linux-support.md) for detailed per-family documentation and collection layout.
+Linux artifacts are supported with partial parser coverage. Evidence from Linux triage collections and disk images is ingested and searchable: system and authentication logs, the systemd journal (text and binary), web servers, databases, mail, VPN gateways, containers and Kubernetes audit, persistence and system configuration, plus a generic reader for other text logs. See [Linux Support](../linux/linux-support.md) for detailed per-family documentation and collection layout.
 
 ## Collector Compatibility
 
