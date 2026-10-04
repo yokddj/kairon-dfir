@@ -3037,6 +3037,8 @@ export type SearchV2Response = {
   page_size: number;
   items_count?: number;
   has_next?: boolean;
+  /** More results match than the first 10,000 that can be paged through. */
+  beyond_result_window?: boolean;
   has_previous?: boolean;
   pagination_mode?: "offset" | "cursor";
   debug_pagination?: Record<string, unknown>;

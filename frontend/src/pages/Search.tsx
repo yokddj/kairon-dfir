@@ -17,6 +17,9 @@ import { artifactLabel } from "../lib/artifactRegistry";
 import EmptyState from "../components/EmptyState";
 import NaturalLanguageSearchToggle from "../components/ai/NaturalLanguageSearchToggle";
 
+// OpenSearch returns at most this many results through from/size paging (backend: OPENSEARCH_RESULT_WINDOW_LIMIT).
+const RESULT_WINDOW_LIMIT = 10000;
+
 type Scope = "events" | "findings" | "all";
 type SortValue = "timestamp_desc" | "timestamp_asc" | "risk_desc" | "risk_asc" | "relevance";
 type SourceCategory = string;
@@ -742,7 +745,7 @@ function genericColumns(timezone: string, installationsById: Map<string, Install
     { key: "artifact", label: "Artifact", defaultWidth: 135, minWidth: 110, render: (result, _summary, pivot, density) => pivot({ label: "artifact type", field: "artifact.type", value: result.artifact_type, display: artifactLabel(result.artifact_type), className: cellTextClass(density) }) },
     { key: "source", label: "Source", defaultWidth: 190, minWidth: 130, render: (result) => <SourceBadge result={result} /> },
     ...(installationsById.size > 0 ? [{ key: "installation", label: "Installation", defaultWidth: 150, minWidth: 110, render: (result: SearchV2Result) => <InstallationBadge result={result} installationsById={installationsById} /> } satisfies ColumnDef] : []),
-    { key: "parser", label: "Parser", defaultWidth: 170, minWidth: 120, render: (result, _summary, pivot, density) => pivot({ label: "parser", field: "artifact.parser", value: applyCellFallbacks(result.parser, asString(asRecord(result.raw).artifact && asRecord(asRecord(result.raw).artifact).parser)), className: cellTextClass(density) }) },
+    // The parser is part of the Source badge and of the event detail; a column of its own only took width.
     { key: "source_file", label: "Source file", defaultWidth: 260, minWidth: 150, render: (result, _summary, pivot, density) => pivot({ label: "source file", field: "source_file", value: fullSourceFile(result), operator: "contains", className: cellTextClass(density) }) },
     { key: "type", label: "Event Type / Finding Type", defaultWidth: 180, minWidth: 130, render: (result, _summary, pivot, density) => pivot({ label: "event type", field: "event.type", value: result.event_type, display: applyCellFallbacks(result.event_type), className: cellTextClass(density) }) },
     { key: "host", label: "Host", defaultWidth: 145, minWidth: 110, render: (_result, summary, pivot, density) => pivot({ label: "host", field: "host.name", value: summary.primaryHost, className: cellTextClass(density) }) },
@@ -2207,7 +2210,8 @@ export default function Search() {
         className={`${position === "bottom" ? "sticky bottom-0 z-10 bg-panel/90 backdrop-blur" : ""} flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line px-4 py-3`}
       >
         <p className="text-xs text-muted">
-          {results.length ? `Showing ${pageStart}-${pageEnd} of ${response?.total ?? results.length} · Page ${currentPage}` : `Page ${currentPage}`}
+          {results.length ? `Showing ${pageStart}-${pageEnd} of ${(response?.total ?? results.length).toLocaleString()} · Page ${currentPage}` : `Page ${currentPage}`}
+          {response?.beyond_result_window ? <span className="ml-2 text-warning">Only the first {RESULT_WINDOW_LIMIT.toLocaleString()} results can be paged; narrow the search to reach the rest.</span> : null}
         </p>
         <div className="flex flex-wrap items-center gap-2">
           {pageSizeClampNotice ? <span className="rounded-full border border-warning/40 bg-warning/10 px-3 py-1 text-[11px] text-warning">Requested page size exceeded the backend maximum. Using {SEARCH_UI_MAX_PAGE_SIZE}.</span> : null}

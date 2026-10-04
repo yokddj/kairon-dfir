@@ -1475,7 +1475,7 @@ export default function ArtifactExplorer() {
         />
       ) : (
         <>
-          <PaginationControls page={page} totalPages={result.data?.total_pages ?? 0} total={result.data?.total ?? 0} totalRelation={result.data?.total_relation ?? "eq"} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} pageSizeOptions={[25, 50, 100, 200]} />
+          <PaginationControls page={page} totalPages={result.data?.total_pages_visible ?? result.data?.total_pages ?? 0} total={result.data?.total ?? 0} totalRelation={result.data?.total_relation ?? "eq"} beyondResultWindow={Boolean(result.data?.has_more_beyond_window)} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} pageSizeOptions={[25, 50, 100, 200]} />
           <EventTable
             items={result.data?.items ?? []}
             view={view}

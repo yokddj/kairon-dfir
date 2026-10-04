@@ -56,23 +56,20 @@ export default function Dashboard() {
       {activeCase ? (
         <section className="grid gap-4 md:grid-cols-4">
           <Stat label="Indexed Events" value={formatEventCount(summaryQuery.data?.event_count_info?.count ?? summaryQuery.data?.total_events, summaryQuery.data?.event_count_info?.relation)} />
-          <Stat label="Detections" value={summaryQuery.data?.counts.detections ?? 0} />
-          <Stat label="Findings" value={summaryQuery.data?.counts.findings ?? 0} />
-          <Stat label="High severity" value={summaryQuery.data?.suspicious_events ?? 0} />
+          <Stat label="Detections" value={(summaryQuery.data?.counts.detections ?? 0).toLocaleString()} />
+          <Stat label="Findings" value={(summaryQuery.data?.counts.findings ?? 0).toLocaleString()} />
+          <Stat label="High-severity events" value={(summaryQuery.data?.suspicious_events ?? 0).toLocaleString()} />
         </section>
       ) : (
-      <section className="grid gap-4 md:grid-cols-4">
-        <Stat label="Open Cases" value={openCases} />
-        <Stat label="Recent Evidences" value={cases.length ? "Ready" : "0"} />
-        <Stat label="Indexed Events" value="via OpenSearch" />
-        <Stat label="Open Findings" value="Track by case" />
+      <section className="grid gap-4 md:grid-cols-2">
+        <Stat label="Open cases" value={openCases.toLocaleString()} />
+        <Stat label="All cases" value={cases.length.toLocaleString()} />
       </section>
       )}
 
       {activeCase ? (
         <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Continue investigation</p>
-          <p className="mt-2 text-sm text-muted">Search pagination is limited to the first 10,000 results by the OpenSearch result window. Total indexed events can be higher.</p>
           <div className="mt-4 flex flex-wrap gap-3">
             <Link to={`/cases/${activeCase.id}/overview`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open overview</Link>
             <Link to={`/cases/${activeCase.id}/search`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Search case</Link>
