@@ -37,6 +37,10 @@
 - State-changing API requests (POST, PUT, PATCH, DELETE) sent by a browser from another origin, including another port of the same host, are refused (cross-site request forgery). The check uses the browser's `Origin`/`Referer` against the server's own address and `KAIRON_ALLOWED_ORIGINS`; requests without either header (curl, scripts) are unaffected. The bundled Nginx now forwards the `Host` header with its port.
 - Sign-in throttling no longer locks legitimate users out. Behind the bundled Nginx every request came from the proxy's address, so five sign-ins (successful ones included) within five minutes blocked everybody. Only failed attempts now count, per client address and username, and a successful sign-in clears them: guessing one account's password from one address is slowed down while nobody else is refused. A refused sign-in explains why instead of reporting invalid credentials. Audit records and sessions keep the real client address.
 - Artifact Views shows the User Activity tabs (Shellbags, UserAssist, RecentDocs, RunMRU, OpenSaveMRU) for Shellbags again: the view id was compared before being resolved from its `shellbag` alias.
+- Shortcut (LNK) targets keep the file name: the target is the base path followed by the common path suffix, so `C:\Users\alex` + `Desktop\note.txt` and network shares (`\\server\share` + `docs\plan.docx`) no longer resolve to the folder only.
+- USB device class GUIDs keep their closing brace when the setupapi line carries an extra trailing one.
+- A USB event whose only host clue was the setupapi file name no longer gets that file name as its host.
+- Process trees no longer count a child with only a descriptive badge (such as `cmd.exe` marked `lolbin`, with no risk) as a suspicious chain.
 - Stale indexing-plan completion state now reconciles correctly instead of leaving a plan looking incomplete after it finished.
 - Memory tab parameter routing and the Memory runs evidence route.
 
