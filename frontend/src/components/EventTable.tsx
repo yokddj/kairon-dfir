@@ -894,7 +894,30 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
     }
     return output;
   }, [allColumns, items]);
-  const columns = useMemo(() => allColumns.filter((column) => !hiddenColumns.includes(column.key)), [allColumns, hiddenColumns]);
+  // A column empty on every row of the page says nothing: it is hidden until the analyst asks for
+  // it in the column chooser. The message stays, so the log's own text is always on screen.
+  const emptyColumns = useMemo(() => {
+    const output = new Set<string>();
+    if (!items.length) return output;
+    for (const column of allColumns) {
+      if (column.key === "message" || column.key === "summary") continue;
+      const allEmpty = items.every((item) => {
+        const value = column.render(item).trim();
+        return value === "" || value === "-" || value === "null" || value === "undefined" || value === "No timestamp";
+      });
+      if (allEmpty) output.add(column.key);
+    }
+    return output;
+  }, [allColumns, items]);
+  const [shownEmptyColumns, setShownEmptyColumns] = useState<string[]>([]);
+  useEffect(() => {
+    setShownEmptyColumns([]);
+  }, [profileKey]);
+  const isColumnVisible = (key: string) => !hiddenColumns.includes(key) && (!emptyColumns.has(key) || shownEmptyColumns.includes(key));
+  const columns = useMemo(
+    () => allColumns.filter((column) => !hiddenColumns.includes(column.key) && (!emptyColumns.has(column.key) || shownEmptyColumns.includes(column.key))),
+    [allColumns, hiddenColumns, emptyColumns, shownEmptyColumns],
+  );
 
   // Widths are remembered per view, because the column that deserves the room
   // in a PowerShell view is not the one that deserves it in a file view.
@@ -943,15 +966,24 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
                   <label key={column.key} className="flex items-center justify-between gap-3 text-xs text-muted">
                     <span>{column.label}</span>
                     <span className="flex items-center gap-2">
-                      {mostlyEmptyColumns.has(column.key) ? <span className="rounded-full border border-line px-2 py-0.5 text-[10px] uppercase tracking-[0.12em]">Mostly empty</span> : null}
+                      {emptyColumns.has(column.key) ? (
+                        <span className="rounded-full border border-line px-2 py-0.5 text-[10px] uppercase tracking-[0.12em]">Empty on this page</span>
+                      ) : mostlyEmptyColumns.has(column.key) ? (
+                        <span className="rounded-full border border-line px-2 py-0.5 text-[10px] uppercase tracking-[0.12em]">Mostly empty</span>
+                      ) : null}
                       <input
                         type="checkbox"
-                        checked={!hiddenColumns.includes(column.key)}
-                        onChange={() =>
-                          setHiddenColumns((current) =>
-                            current.includes(column.key) ? current.filter((item) => item !== column.key) : [...current, column.key],
-                          )
-                        }
+                        aria-label={`Show column ${column.label}`}
+                        checked={isColumnVisible(column.key)}
+                        onChange={() => {
+                          if (isColumnVisible(column.key)) {
+                            setHiddenColumns((current) => [...current, column.key]);
+                            setShownEmptyColumns((current) => current.filter((item) => item !== column.key));
+                          } else {
+                            setHiddenColumns((current) => current.filter((item) => item !== column.key));
+                            if (emptyColumns.has(column.key)) setShownEmptyColumns((current) => [...current, column.key]);
+                          }
+                        }}
                       />
                     </span>
                   </label>

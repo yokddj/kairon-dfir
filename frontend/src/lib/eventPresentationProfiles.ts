@@ -805,6 +805,230 @@ const linuxVpnProfile: PresentationProfile = {
   ],
 };
 
+const lineColumn: PresentationColumn = { key: "line_number", label: "Line", paths: ["linux.line_number", "raw.line_number"], defaultVisible: false };
+const visibleSourceFile: PresentationColumn = { key: "source_file", label: "Source File", paths: ["source_file", "artifact.source_path", "linux.source_file"] };
+
+function simpleLinuxProfile(id: string, label: string, columns: PresentationColumn[], sectionTitle: string, fields: Array<{ label: string; paths: string[] }>, dated = false): PresentationProfile {
+  return {
+    id,
+    label,
+    columns: [...(dated ? [timestampColumn] : []), ...columns, severityColumn, ...(dated ? [timeQualityColumn] : []), visibleSourceFile, lineColumn],
+    details: [eventSection, ...(dated ? [timeDetail] : []), { title: sectionTitle, fields }, provenanceSection, rawSection],
+  };
+}
+
+/** dpkg/apt/yum/dnf history and the installed-package database. */
+const linuxPackagesProfile = simpleLinuxProfile(
+  "linux_packages",
+  "Packages",
+  [
+    { key: "package_action", label: "Action", paths: ["linux.package_action", "raw.action"] },
+    { key: "package", label: "Package", paths: ["linux.package", "raw.package"] },
+    { key: "package_version", label: "Version", paths: ["linux.package_version", "raw.version"] },
+    { key: "package_previous_version", label: "Previous Version", paths: ["linux.package_previous_version", "raw.previous_version"], defaultVisible: false },
+    { key: "package_status", label: "Status", paths: ["linux.package_status", "raw.package_status"] },
+    { key: "package_manager", label: "Manager", paths: ["linux.package_manager", "raw.package_manager"] },
+  ],
+  "Package",
+  [
+    { label: "Package", paths: ["linux.package", "raw.package"] },
+    { label: "Action", paths: ["linux.package_action", "raw.action"] },
+    { label: "Version", paths: ["linux.package_version", "raw.version"] },
+    { label: "Previous version", paths: ["linux.package_previous_version", "raw.previous_version"] },
+    { label: "Status", paths: ["linux.package_status", "raw.package_status"] },
+    { label: "Package manager", paths: ["linux.package_manager", "raw.package_manager"] },
+  ],
+  true,
+);
+
+/** ~/.bash_history and similar: who typed what. */
+const linuxShellHistoryProfile = simpleLinuxProfile(
+  "linux_shell_history",
+  "Shell history",
+  [
+    { key: "user", label: "User", paths: ["linux.username", "raw.username", "user.name"] },
+    { key: "shell", label: "Shell", paths: ["raw.shell_type", "linux.shell"] },
+    { key: "command", label: "Command", paths: ["raw.command", "linux.command", "process.command_line"] },
+  ],
+  "Command",
+  [
+    { label: "User", paths: ["linux.username", "raw.username", "user.name"] },
+    { label: "Shell", paths: ["raw.shell_type", "linux.shell"] },
+    { label: "Command", paths: ["raw.command", "linux.command", "process.command_line"] },
+  ],
+  true,
+);
+
+/** /etc/passwd, /etc/group, /etc/shadow (password status only; hashes are never stored). */
+const linuxIdentityProfile = simpleLinuxProfile(
+  "linux_identity",
+  "Users & groups",
+  [
+    { key: "kind", label: "File", paths: ["event.type"] },
+    { key: "name", label: "Name", paths: ["raw.username", "raw.group_name", "linux.username"] },
+    { key: "uid", label: "UID", paths: ["raw.uid", "linux.uid"] },
+    { key: "gid", label: "GID", paths: ["raw.gid"] },
+    { key: "home", label: "Home", paths: ["raw.home"] },
+    { key: "shell", label: "Shell", paths: ["raw.shell"] },
+    { key: "members", label: "Members", paths: ["raw.members"] },
+    { key: "password", label: "Password", paths: ["raw.password_status"] },
+    { key: "gecos", label: "Full Name / Comment", paths: ["raw.gecos"], defaultVisible: false },
+  ],
+  "Account",
+  [
+    { label: "Name", paths: ["raw.username", "raw.group_name", "linux.username"] },
+    { label: "UID / GID", paths: ["raw.uid", "raw.gid"] },
+    { label: "Home", paths: ["raw.home"] },
+    { label: "Shell", paths: ["raw.shell"] },
+    { label: "Members", paths: ["raw.members"] },
+    { label: "Password", paths: ["raw.password_status"] },
+    { label: "Full name / comment", paths: ["raw.gecos"] },
+  ],
+);
+
+/** crontab lines: when, as whom, what. */
+const linuxCronProfile = simpleLinuxProfile(
+  "linux_cron",
+  "Cron",
+  [
+    { key: "user", label: "User", paths: ["raw.username", "linux.username", "user.name"] },
+    { key: "schedule", label: "Schedule", paths: ["raw.schedule", "linux.schedule"] },
+    { key: "command", label: "Command", paths: ["raw.command", "linux.command"] },
+    { key: "kind", label: "Kind", paths: ["event.type"], defaultVisible: false },
+  ],
+  "Scheduled job",
+  [
+    { label: "User", paths: ["raw.username", "linux.username", "user.name"] },
+    { label: "Schedule", paths: ["raw.schedule", "linux.schedule"] },
+    { label: "Command", paths: ["raw.command", "linux.command"] },
+  ],
+);
+
+/** sshd_config / ssh_config options, authorized_keys and known_hosts entries. */
+const linuxSshProfile = simpleLinuxProfile(
+  "linux_ssh",
+  "SSH",
+  [
+    { key: "kind", label: "File", paths: ["event.type"] },
+    { key: "user", label: "User", paths: ["raw.username", "linux.username"] },
+    { key: "option", label: "Option", paths: ["raw.option"] },
+    { key: "value", label: "Value", paths: ["raw.value"] },
+    { key: "host_pattern", label: "Host Pattern", paths: ["raw.host_pattern"] },
+    { key: "key_type", label: "Key Type", paths: ["raw.key_type"] },
+    { key: "key_fingerprint", label: "Key Fingerprint", paths: ["raw.key_fingerprint"] },
+    { key: "key_comment", label: "Key Comment", paths: ["raw.key_comment"] },
+  ],
+  "SSH",
+  [
+    { label: "User", paths: ["raw.username", "linux.username"] },
+    { label: "Option / value", paths: ["raw.option", "raw.value"] },
+    { label: "Host pattern", paths: ["raw.host_pattern"] },
+    { label: "Key", paths: ["raw.key_type", "raw.key_fingerprint", "raw.key_comment"] },
+  ],
+);
+
+/** /etc/sudoers and sudoers.d: who may run what as whom. */
+const linuxSudoersProfile = simpleLinuxProfile(
+  "linux_sudoers",
+  "Sudoers",
+  [
+    { key: "principal", label: "User / Group", paths: ["raw.principal"] },
+    { key: "host_spec", label: "Hosts", paths: ["raw.host_spec"] },
+    { key: "run_as", label: "Run As", paths: ["raw.run_as", "linux.run_as"] },
+    { key: "command_spec", label: "Commands", paths: ["raw.command_spec"] },
+    { key: "options", label: "Options", paths: ["linux.sudo_options", "raw.options"] },
+    { key: "defaults", label: "Defaults", paths: ["raw.defaults_value"] },
+    { key: "indicators", label: "Flags", paths: ["linux.suspicious_indicators"] },
+  ],
+  "Rule",
+  [
+    { label: "User / group", paths: ["raw.principal"] },
+    { label: "Hosts", paths: ["raw.host_spec"] },
+    { label: "Run as", paths: ["raw.run_as", "linux.run_as"] },
+    { label: "Commands", paths: ["raw.command_spec"] },
+    { label: "Options", paths: ["linux.sudo_options", "raw.options"] },
+    { label: "Defaults", paths: ["raw.defaults_value"] },
+  ],
+);
+
+/** /var/log/lastlog: each account's last login. */
+const linuxLastlogProfile = simpleLinuxProfile(
+  "linux_lastlog",
+  "Last logins",
+  [
+    { key: "user", label: "User", paths: ["user.name", "raw.username", "linux.username"] },
+    { key: "uid", label: "UID", paths: ["raw.uid", "user.id"] },
+    { key: "terminal", label: "Terminal", paths: ["raw.terminal", "raw.lastlog_tty", "linux.terminal"] },
+    { key: "source_ip", label: "From", paths: ["network.source_ip", "raw.lastlog_host", "raw.source_ip"] },
+  ],
+  "Last login",
+  [
+    { label: "User", paths: ["user.name", "raw.username"] },
+    { label: "UID", paths: ["raw.uid", "user.id"] },
+    { label: "Terminal", paths: ["raw.terminal", "raw.lastlog_tty"] },
+    { label: "From", paths: ["network.source_ip", "raw.lastlog_host", "raw.source_ip"] },
+  ],
+  true,
+);
+
+/** Facts read from configuration: distribution, version, hostname, timezone. */
+const linuxHostFactsProfile = simpleLinuxProfile(
+  "linux_host_facts",
+  "Host facts",
+  [
+    { key: "fact", label: "Fact", paths: ["raw.fact_type", "event.type"] },
+    { key: "value", label: "Value", paths: ["raw.normalized_value", "raw.os_name", "raw.raw_value"] },
+    { key: "raw_value", label: "As Found", paths: ["raw.raw_value"], defaultVisible: false },
+    { key: "confidence", label: "Confidence", paths: ["raw.confidence"] },
+    { key: "parse_status", label: "Status", paths: ["raw.parse_status"] },
+    { key: "reason", label: "Reason", paths: ["raw.reason"], defaultVisible: false },
+  ],
+  "Fact",
+  [
+    { label: "Fact", paths: ["raw.fact_type", "event.type"] },
+    { label: "Value", paths: ["raw.normalized_value", "raw.os_name", "raw.raw_value"] },
+    { label: "As found", paths: ["raw.raw_value"] },
+    { label: "Confidence / status", paths: ["raw.confidence", "raw.parse_status"] },
+    { label: "Reason", paths: ["raw.reason"] },
+  ],
+);
+
+/** /etc/network/interfaces, netplan, NetworkManager, resolv.conf. */
+const linuxNetworkConfigProfile = simpleLinuxProfile(
+  "linux_network",
+  "Network configuration",
+  [
+    { key: "config_type", label: "File", paths: ["raw.config_type", "event.type"] },
+    { key: "interface", label: "Interface", paths: ["raw.interface"] },
+    { key: "iface_type", label: "Setting", paths: ["raw.iface_type"] },
+    { key: "value", label: "Value", paths: ["raw.value", "raw.address", "raw.nameserver", "dns.name", "dns.ip"] },
+  ],
+  "Network setting",
+  [
+    { label: "Interface", paths: ["raw.interface"] },
+    { label: "Setting", paths: ["raw.iface_type"] },
+    { label: "Value", paths: ["raw.value", "raw.address"] },
+  ],
+);
+
+/** hosts-file entries (Linux /etc/hosts and the Windows hosts file). */
+const hostsFileProfile = simpleLinuxProfile(
+  "hosts_file",
+  "Hosts file",
+  [
+    { key: "ip", label: "IP Address", paths: ["raw.IP", "dns.ip"] },
+    { key: "hostnames", label: "Host Names", paths: ["raw.HostName", "dns.name"] },
+  ],
+  "Hosts entry",
+  [
+    { label: "IP address", paths: ["raw.IP", "dns.ip"] },
+    { label: "Host names", paths: ["raw.HostName", "dns.name"] },
+  ],
+);
+
+// Tables whose columns already show everything the line says: the message is offered, not shown.
+const MESSAGE_ALREADY_IN_COLUMNS = new Set(["linux_web_access", "linux_packages", "linux_shell_history", "linux_identity", "linux_cron", "linux_ssh", "linux_sudoers", "linux_lastlog", "linux_host_facts", "linux_network", "hosts_file"]);
+
 const CONTAINER_KINDS: Record<string, string> = {
   container_config: "Container",
   container_hostconfig: "Host configuration",
@@ -1029,6 +1253,39 @@ export function presentationProfileForItems(items: Record<string, unknown>[]): P
     case "linux_database":
       profile = linuxDatabaseProfile;
       break;
+    case "linux_packages":
+      profile = linuxPackagesProfile;
+      break;
+    case "linux_shell_history":
+      profile = linuxShellHistoryProfile;
+      break;
+    case "linux_identity":
+      profile = linuxIdentityProfile;
+      break;
+    case "linux_cron":
+      profile = linuxCronProfile;
+      break;
+    case "linux_ssh":
+      profile = linuxSshProfile;
+      break;
+    case "linux_sudoers":
+      profile = linuxSudoersProfile;
+      break;
+    case "linux_lastlog":
+      profile = linuxLastlogProfile;
+      break;
+    case "linux_os_info":
+    case "linux_timezone":
+      profile = linuxHostFactsProfile;
+      break;
+    case "linux_network":
+      profile = linuxNetworkConfigProfile;
+      break;
+    case "network":
+      // The network artifact type covers many Windows sources; only a page of hosts-file entries gets this layout.
+      if ([...eventTypes].length > 0 && [...eventTypes].every((type) => type === "hosts_entry")) profile = hostsFileProfile;
+      else return null;
+      break;
     case "linux_vpn":
       profile = linuxVpnProfile;
       break;
@@ -1037,5 +1294,5 @@ export function presentationProfileForItems(items: Record<string, unknown>[]): P
   }
   // A web access line's content already sits in the method, request and status columns, so the
   // message is offered but not shown by default there.
-  return withVisibility(withMessageColumn(profile, profile.id !== "linux_web_access"), items);
+  return withVisibility(withMessageColumn(profile, !MESSAGE_ALREADY_IN_COLUMNS.has(profile.id)), items);
 }

@@ -194,7 +194,8 @@ describe("EventTable network service-log profiles", () => {
     render(<EventTable items={[malformedExim]} view="network" />);
 
     expect(screen.getByText("not a timestamped exim line but still forensic content")).toBeInTheDocument();
-    expect(screen.getAllByText("-").length).toBeGreaterThan(0);
+    // Nothing is invented: the columns this record has no value for are simply not shown.
+    expect(screen.queryByRole("columnheader", { name: /Sender/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("not a timestamped exim line but still forensic content"));
     expect(screen.getByText("Provenance")).toBeInTheDocument();
     expect(screen.getByText("volume-0/linux/var/log/exim4/rejectlog")).toBeInTheDocument();
@@ -239,7 +240,7 @@ describe("EventTable network service-log profiles", () => {
   });
 
   it("uses the existing generic network fallback for unknown artifact families", () => {
-    render(<EventTable items={[{ id: "dns-1", artifact: { type: "linux_network" }, event: { category: "network", type: "dns" }, dns: { name: "example.test" }, network: { source_ip: "10.0.0.5" } }]} view="network" />);
+    render(<EventTable items={[{ id: "dns-1", artifact: { type: "some_unknown_family" }, event: { category: "network", type: "dns" }, dns: { name: "example.test" }, network: { source_ip: "10.0.0.5" } }]} view="network" />);
 
     expect(screen.getByRole("columnheader", { name: /URL \/ Domain \/ IP/i })).toBeInTheDocument();
     expect(screen.getByText("example.test")).toBeInTheDocument();

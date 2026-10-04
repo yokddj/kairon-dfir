@@ -27,6 +27,7 @@
 
 ### Changed
 
+- Artifact Views: a column that is empty on every row of the page is hidden (the column chooser marks it and can show it again), and Linux packages, shell history, users and groups, cron, SSH, sudoers, last logins, host facts, network configuration and hosts-file entries have tables of their own fields instead of Windows task, prefetch or web layouts whose columns were all empty.
 - Artifact Views: SSH configuration and Linux network configuration have their own names instead of three entries called "Network", Linux artifact names no longer repeat "Linux", and the mixed-type table shows the artifact's name and a Message column instead of raw ids in Category and Artifact.
 - CI runs the frontend test suite, every job has a time limit, and the backend tests point the service hosts at a closed local port so a connection attempt fails at once instead of hanging on DNS. Tests on SQLite store UUID columns as text, which removes a rare random failure.
 - Top bar: only warnings the analyst can act on (failed evidence, parser errors) are shown, in plain words and linking to the evidence list; informational codes such as `multi_host_case` are no longer shown raw. The technical API address and a clock that did not tick are gone, and the host and evidence chips appear only while that filter is active, each with a button to clear it.
@@ -42,6 +43,7 @@
 
 ### Fixed
 
+- dpkg.log lines name the right package and versions (`status installed man-db 2.6.7` was read as package "installed"), and package name, version, action and status are indexed and searchable (`package:`, `pkgaction:`).
 - Linux log times are real UTC times. Lines without a zone were read as UTC and syslog-style lines without a year got the current year, so on a 2016 disk image every syslog and auth.log line landed in the ingestion year and hours off. The host's timezone (`/etc/timezone`, `/etc/localtime`) now converts local times, the year is the one in which the machine was running according to `wtmp` (or the file's modification time), and disk images keep file modification times on extraction. `timestamp_status` says what was applied.
 - `wtmp` and `btmp` from disk images were decoded as text, which showed binary garbage and lost the login records; they are read as binary, IPv4 addresses with the high bit set no longer fail, and boots, shutdowns and runlevel changes are named.
 - The MySQL 5.5/5.6 error log layout (`160403 19:02:55 [Note] ...`) is dated, syslog lines without a host name (the installer's syslog) are dated, and dpkg's backup database (`status-old`) is no longer listed as a second copy of every package.
