@@ -40,8 +40,14 @@ describe("ParserCoveragePage", () => {
     expect(rows.length).toBeGreaterThan(1);
     expect(screen.queryByText("Windows Event Logs / EVTX")).not.toBeInTheDocument();
 
+    // The filters combine: a partial family that reads EVTX is listed, the stable EVTX family is not.
     await userEvent.selectOptions(screen.getByDisplayValue("All formats"), "EVTX");
+    expect(screen.getByText("WMI persistence and WMI-Activity")).toBeInTheDocument();
+    expect(screen.queryByText("Windows Event Logs / EVTX")).not.toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByDisplayValue("partial"), "stable");
     expect(screen.getByText("Windows Event Logs / EVTX")).toBeInTheDocument();
+    expect(screen.queryByText("WMI persistence and WMI-Activity")).not.toBeInTheDocument();
   });
 
   it("shows columns required by the matrix", () => {

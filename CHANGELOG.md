@@ -23,6 +23,7 @@
 
 ### Changed
 
+- CI runs the frontend test suite, every job has a time limit, and the backend tests point the service hosts at a closed local port so a connection attempt fails at once instead of hanging on DNS. Tests on SQLite store UUID columns as text, which removes a rare random failure.
 - The API port (8000) is published on the host's loopback address only; the UI reaches the API through the frontend's `/api` proxy and other machines keep using the UI port. Set `KAIRON_API_BIND=0.0.0.0` to expose it again.
 - Memory's routers and startup reconciliation hooks are now mounted/run only when `memory_enabled` is true, instead of unconditionally.
 - Duplicate evidence requests now return `409` with `{error_code: EVIDENCE_DUPLICATE, duplicate: true, existing_evidence_id, existing_filename}` instead of silently creating a second Evidence row.
@@ -35,6 +36,7 @@
 - The API no longer accepts cross-origin requests carrying the analyst's session from any web page: a catch-all CORS origin pattern overrode the configured `KAIRON_ALLOWED_ORIGINS`. Only the configured origins are allowed now; `BACKEND_CORS_ORIGIN_REGEX` remains available as an explicit opt-in.
 - State-changing API requests (POST, PUT, PATCH, DELETE) sent by a browser from another origin, including another port of the same host, are refused (cross-site request forgery). The check uses the browser's `Origin`/`Referer` against the server's own address and `KAIRON_ALLOWED_ORIGINS`; requests without either header (curl, scripts) are unaffected. The bundled Nginx now forwards the `Host` header with its port.
 - Sign-in throttling no longer locks legitimate users out. Behind the bundled Nginx every request came from the proxy's address, so five sign-ins (successful ones included) within five minutes blocked everybody. Only failed attempts now count, per client address and username, and a successful sign-in clears them: guessing one account's password from one address is slowed down while nobody else is refused. A refused sign-in explains why instead of reporting invalid credentials. Audit records and sessions keep the real client address.
+- Artifact Views shows the User Activity tabs (Shellbags, UserAssist, RecentDocs, RunMRU, OpenSaveMRU) for Shellbags again: the view id was compared before being resolved from its `shellbag` alias.
 - Stale indexing-plan completion state now reconciles correctly instead of leaving a plan looking incomplete after it finished.
 - Memory tab parameter routing and the Memory runs evidence route.
 
