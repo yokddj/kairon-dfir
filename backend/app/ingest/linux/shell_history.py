@@ -70,6 +70,7 @@ def parse_bsd_shell_audit_log(content: str, *, source_path: str = "") -> list[di
             "pid": int(pid_str) if pid_str else None,
             "command": command[:4000],
             "timestamp": _parse_bsd_syslog_timestamp(ts_str),
+            "timestamp_status": "assumed_year_utc",
             "message": command[:2000],
             "raw_excerpt": stripped[:2000],
         })

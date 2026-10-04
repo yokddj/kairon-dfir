@@ -42,6 +42,8 @@ _FORWARDED_AUDIT_RE = re.compile(
 )
 
 
+_HOSTLESS_SYSLOG_RE = re.compile(r"^([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+([^\s:\[\]]+)(?:\[(\d+)\])?:\s?(.*)$")
+
 def _parse_syslog_timestamp(ts_str: str, year: int | None = None) -> str | None:
     ts_str = ts_str.strip()
     if year is None:
@@ -88,13 +90,15 @@ def parse_syslog(
         forwarded_match = _FORWARDED_AUDIT_RE.match(stripped)
         if forwarded_match:
             outer_ts_str, facility, source_ip, inner_ts_str, host, unit_id, message = forwarded_match.groups()
-            timestamp = _parse_forwarded_audit_timestamp(inner_ts_str) or _parse_syslog_timestamp(outer_ts_str)
+            inner_timestamp = _parse_forwarded_audit_timestamp(inner_ts_str)
+            timestamp = inner_timestamp or _parse_syslog_timestamp(outer_ts_str)
             results.append({
                 "artifact_family": "linux_syslog",
                 "artifact_type": "syslog",
                 "source_file": source_path,
                 "line_number": line_number,
                 "timestamp": timestamp,
+                "timestamp_status": "ok" if inner_timestamp else "assumed_year_utc" if timestamp else "missing",
                 "host": host,
                 "process": unit_id,
                 "pid": None,
@@ -122,6 +126,7 @@ def parse_syslog(
                 "source_file": source_path,
                 "line_number": line_number,
                 "timestamp": timestamp,
+                "timestamp_status": "assumed_year_utc" if timestamp else "missing",
                 "host": host,
                 "process": process,
                 "pid": pid,
@@ -132,6 +137,24 @@ def parse_syslog(
             # Before the 2000-character clip above: a Sysmon event line is routinely longer.
             enrich_with_sysmon(results[-1], message)
             enrich_with_mail(results[-1], process, message)
+        elif hostless_match := _HOSTLESS_SYSLOG_RE.match(stripped):
+            # The installer's syslog (and a few minimal loggers) write no host name.
+            ts_str, process, pid_str, message = hostless_match.groups()
+            timestamp = _parse_syslog_timestamp(ts_str)
+            results.append({
+                "artifact_family": "linux_syslog",
+                "artifact_type": "syslog",
+                "source_file": source_path,
+                "line_number": line_number,
+                "timestamp": timestamp,
+                "timestamp_status": "assumed_year_utc" if timestamp else "missing",
+                "host": None,
+                "process": process,
+                "pid": int(pid_str) if pid_str else None,
+                "severity": None,
+                "message": message[:2000],
+                "raw_excerpt": raw_excerpt,
+            })
         else:
             results.append({
                 "artifact_family": "linux_syslog",

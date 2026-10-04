@@ -8,6 +8,7 @@ import { useResizableColumns } from "./table/useResizableColumns";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 import { compareValues, getNestedValue, nextSortDirection } from "../lib/sorting";
 import { isPresent, presentationProfileForItems, renderPresentationValue, type PresentationProfile } from "../lib/eventPresentationProfiles";
+import { artifactLabel } from "../lib/artifactRegistry";
 
 // Maps a column's resolved sort field to the simple filter-dimension name
 // the parent's onFilterField/onExcludeField callbacks expect. Only fields
@@ -831,10 +832,11 @@ function getColumns(view: EventView): Column[] {
         severity,
         host,
         user,
-        { key: "category", label: "Category", render: (item) => String(((item.event as Record<string, unknown>) ?? {}).category ?? "-") },
+        // The artifact by its readable name; event.category repeated the artifact type for most
+        // families (linux_auth / linux_auth), so it is no longer a column of its own.
+        { key: "artifact", label: "Artifact", render: (item) => artifactLabel(String(((item.artifact as Record<string, unknown>) ?? {}).type ?? ((item.artifact as Record<string, unknown>) ?? {}).name ?? "")) },
         { key: "type", label: "Type", render: (item) => String(((item.event as Record<string, unknown>) ?? {}).type ?? "-") },
-        { key: "artifact", label: "Artifact", render: (item) => String(((item.artifact as Record<string, unknown>) ?? {}).type ?? ((item.artifact as Record<string, unknown>) ?? {}).name ?? "-") },
-        summary,
+        { key: "summary", label: "Message", render: (item) => String(item.message ?? ((item.event as Record<string, unknown>) ?? {}).message ?? "") },
         tags,
       ];
   }

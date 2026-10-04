@@ -84,6 +84,15 @@ Current Linux parsers cover 12 families. Coverage is calculated from detected ar
 - Safety: journals are untrusted evidence. Every offset and size is bounds-checked, a single field is capped at 1 MiB decompressed, at most 1,000,000 entries are read per file, and a damaged file yields the entries read before the damage plus an explicit "incomplete" event instead of failing.
 - Not verified: checksums and Forward Secure Sealing are not checked.
 
+### Times of log lines without a zone or a year
+
+Most Linux logs write the host's local time with no zone, and syslog-style lines (`Apr  3 18:15:13`) write no year either. Each parser first marks such lines `assumed_utc` or `assumed_year_utc`; Kairon then corrects them per host, using the rest of the same evidence:
+
+- **Zone.** The host's timezone is read from `/etc/timezone` or the `/etc/localtime` TZif file, and local times are converted to UTC with it, daylight saving included. Such lines are marked `host_timezone`.
+- **Year.** A line was written while the machine was running, and `wtmp` records every boot and shutdown with an exact UTC time. The year chosen is the one in which the line falls inside a boot-to-shutdown interval (the last boot runs until the last login record seen). Without `wtmp`, or when no year fits, the year comes from the file itself as plaso does it: the last line belongs to the year of the file's modification time, and walking back up the file a jump forward in the calendar means the previous year. These lines are marked `inferred_year_host_timezone`, or `inferred_year` when the zone is unknown and the time is read as UTC.
+- Disk images keep each file's modification time on extraction so this works; collections that do not keep it (a ZIP extracted without times) fall back to the extraction date, which assumes the current year as before.
+- `assumed_utc` and `assumed_year_utc` therefore remain only on hosts whose timezone could not be found. Check a line's `timestamp_status` (search `timequality:`) before relying on its exact time.
+
 ### Severity of log lines
 For syslog, the systemd journal, the generic text parser and fail2ban, the severity column reflects the line's own level instead of a blanket `info`: syslog and journal priorities 0-2 (emerg, alert, crit) are `high`, 3 (err) `medium`, 4 (warning) `low` and 5-7 `info`; level words (`error`, `WARNING`, `crit`, ...) and the `facility.level` form (`auth.err`) map the same way. A line with no recognisable level keeps the previous default. This is the log's own claim about itself, not an assessment of whether the event matters.
 
@@ -159,7 +168,7 @@ Search accepts the Linux fields directly (`linux.jail:sshd`, `linux.firewall_act
 | `library:` / `pam:` | `ld.so.preload` library path, PAM module | `library:*hook*` |
 | `exe:` | executable (auditd, journal) | `exe:*/curl` |
 | `audit:` / `auditkey:` | auditd record type / key | `audit:EXECVE` |
-| `timequality:` | how far the time can be trusted (`ok`, `assumed_utc`, `assumed_year_utc`, `missing`) | `NOT timequality:ok` |
+| `timequality:` | how far the time can be trusted (`ok`, `host_timezone`, `inferred_year_host_timezone`, `inferred_year`, `assumed_utc`, `assumed_year_utc`, `missing`) | `NOT timequality:ok` |
 
 Plain text still searches every field, so `203.0.113.9` alone finds an address anywhere. The fields above are declared in the index mapping when an evidence item is ingested or reprocessed: events indexed before then still answer to plain text, but not to the newer field names, and authentication events indexed earlier lack `network.source_ip` until they are reprocessed.
 
@@ -189,7 +198,7 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 - Last resort: a file is only routed here after every dedicated parser (auth, syslog, audit, Apache, Exim, packages, ...) has declined it, so it never changes how a recognised artifact is parsed.
 - Format: sniffed once per file from a sample of lines. Supported: JSON lines, ISO 8601 / `YYYY-MM-DD HH:MM:SS` / `YYYY/MM/DD HH:MM:SS`, BSD syslog, and Common/Combined Log Format. Lines that do not start a new entry (stack traces, wrapped output) are folded into the entry before them.
 - Fields: `timestamp`, `message`, `process`, `pid`, `severity`, `username`, `source_ip`, `host` (syslog format), `log_format`, `timestamp_status`, `source_file`, `line_number`. User, IP, process and severity are extracted heuristically from the text; the original line is always kept.
-- Timestamps: `timestamp_status` says how far to trust the time: `ok` (explicit offset or epoch), `assumed_utc` (no timezone in the log, read as UTC), `assumed_year_utc` (syslog lines carry no year; the current year is assumed, rolling back a year if that would land in the future) or `missing` (undated; the line is still indexed and searchable). Dates before 1990 or more than a year ahead are rejected.
+- Timestamps: `timestamp_status` says how far to trust the time: `ok` (explicit offset or epoch), `assumed_utc` (no timezone in the log, read as UTC), `assumed_year_utc` (syslog lines carry no year; it is then inferred as described in *Times of log lines without a zone or a year*) or `missing` (undated; the line is still indexed and searchable). Dates before 1990 or more than a year ahead are rejected.
 - Limits: at most 256 MiB of text is read per file (the decompressed size for compressed logs); a truncated or damaged archive keeps what could be read and adds an explicit "log truncated" event. Binary files produce no events.
 - Limitations: heuristic extraction, not a schema-aware parser. A loose `.log` or `.txt` uploaded on its own, with no Linux path around it, is not routed here.
 
@@ -218,7 +227,7 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 - Events (`event_action`): `db_connect`, `db_auth_failed`, `db_connection_received`, `db_connection_aborted`, `db_disconnect`, `db_query`, `db_slow_query`, `db_host_blocked`, `db_error` and `log`.
 - Fields: `timestamp`, `username`, `source_ip` and `source_port` (also on `network.*`), `db_engine`, `db_name`, `db_command`, `db_statement` (a multi-line statement is kept whole and searchable), `db_status`, `db_level`, `db_error_code`, `db_thread_id`, `db_application`, and for the slow log `db_query_time`, `db_rows_sent` and `db_rows_examined`. A PostgreSQL `STATEMENT:` line is attached to the error above it. Search shortcuts: `dbengine:`, `database:`, `dbcommand:`, `dbstatus:`, `dberror:`, `sql:`.
 - Flags for review, never verdicts (`suspicious_indicators`): `account_change` (`GRANT`, `CREATE USER`, `ALTER ROLE`, `SET PASSWORD`), `destructive_statement` (`DROP`, `TRUNCATE`, `DELETE` without `WHERE`), `file_access` (`LOAD_FILE`, `INTO OUTFILE`, `LOAD DATA INFILE`, `pg_read_file`, `COPY` from a file), `command_execution` (`COPY ... PROGRAM`, `sys_exec`, a UDF from a shared library), `credential_table_access` (`mysql.user`, `pg_shadow`), `schema_enumeration` (`information_schema`) and `sql_injection_pattern` (`UNION SELECT`, tautologies, `SLEEP`/`pg_sleep`, error-based functions). A failed login or any flag is `medium`; otherwise the severity follows the log level (`PANIC`/`FATAL` high, error/warning medium).
-- Timestamps: MySQL 8 and PostgreSQL write an exact time with a zone; MariaDB's error log and the older MySQL general log have none and are read as UTC (`assumed_utc`). The slow log's `SET timestamp=` epoch is used when present, and the general log's older layout, which prints the time only when it changes, inherits the previous time.
+- Timestamps: MySQL 8 and PostgreSQL write an exact time with a zone; MariaDB's error log, the MySQL 5.5/5.6 error log (`160403 19:02:55`) and the older MySQL general log have none and are local times converted with the host's timezone when it is known. The slow log's `SET timestamp=` epoch is used when present, and the general log's older layout, which prints the time only when it changes, inherits the previous time.
 - Limits: statements appear only if the server was configured to log them (general log, `log_statement`, audit plugin); a log without them records connections and errors only. Statement text is capped, and the flags are pattern matches that miss obfuscated or split statements. Redo/binary logs, table files and the MongoDB, Redis and Oracle logs are not parsed here.
 
 ### VPN gateways (`linux_vpn`)

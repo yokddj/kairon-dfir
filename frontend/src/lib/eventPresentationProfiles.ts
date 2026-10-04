@@ -222,6 +222,9 @@ const TIME_QUALITY_LABELS: Record<string, string> = {
   ok: "Exact",
   assumed_utc: "Assumed UTC (log has no timezone)",
   assumed_year_utc: "Assumed year and UTC (syslog has neither)",
+  host_timezone: "Local time, converted with the host's timezone",
+  inferred_year: "Year inferred (from boot records or the file date); read as UTC",
+  inferred_year_host_timezone: "Year inferred (from boot records or the file date); local time converted with the host's timezone",
   missing: "No time in the log",
 };
 

@@ -140,13 +140,21 @@ def _clean_bytes(value: bytes) -> str:
 
 
 def _source_host_from_addr(addr_words: tuple[int, int, int, int], host: str) -> str:
-    first = addr_words[0] if addr_words else 0
-    if first:
-        try:
-            return socket.inet_ntoa(struct.pack("=I", first))
-        except OSError:
-            pass
-    return host
+    """ut_addr_v6: four 32-bit words in network byte order. IPv4 uses only the first word.
+
+    The words are unpacked as signed ints, so they are packed back the same way to recover the
+    raw bytes: an address such as 192.168.x.x has the high bit set and is negative as a signed int.
+    """
+    words = tuple(addr_words or ())
+    if len(words) != 4 or not any(words):
+        return host
+    try:
+        raw = struct.pack("=4i", *words)
+        if any(words[1:]):
+            return socket.inet_ntop(socket.AF_INET6, raw)
+        return socket.inet_ntoa(raw[:4])
+    except (OSError, struct.error, ValueError):
+        return host
 
 
 def _auth_type_from_action(action: str) -> tuple[str, str]:
@@ -237,7 +245,21 @@ def parse_wtmp_btmp(content: bytes, *, source_path: str = "") -> list[dict]:
         event_type = "login_success" if record_type == 7 else "logout" if record_type == 8 else "other"
         if artifact_type == "btmp" and record_type in {6, 7}:
             event_type = "login_failure"
-        message = f"{artifact_type} {event_type} user={username or '-'} terminal={terminal or '-'} source={host or '-'}"
+        elif record_type == 2:
+            event_type = "system_boot"
+        elif record_type == 1:
+            # RUN_LVL records carry "shutdown" or "runlevel" as the user and the new level in the pid.
+            event_type = "system_shutdown" if username == "shutdown" else "runlevel_change"
+        elif record_type == 6:
+            event_type = "login_prompt"
+        elif record_type == 5:
+            event_type = "init_process"
+        elif record_type in {3, 4}:
+            event_type = "clock_change"
+        if record_type in {1, 2}:
+            message = f"{artifact_type} {event_type.replace('_', ' ')}" + (f" (kernel {host})" if host and record_type == 2 else "")
+        else:
+            message = f"{artifact_type} {event_type.replace('_', ' ')} user={username or '-'} terminal={terminal or '-'} source={host or '-'}"
         rows.append({
             "artifact_family": "linux_auth",
             "artifact_type": artifact_type,
@@ -331,6 +353,7 @@ def parse_auth(
             "source_file": source_path,
             "line_number": line_number,
             "timestamp": timestamp,
+            "timestamp_status": "assumed_year_utc" if timestamp else "missing",
             "detected_host": host,
             "username": detected_username,
             "attempted_username": attempted_username,

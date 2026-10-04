@@ -27,6 +27,7 @@
 
 ### Changed
 
+- Artifact Views: SSH configuration and Linux network configuration have their own names instead of three entries called "Network", Linux artifact names no longer repeat "Linux", and the mixed-type table shows the artifact's name and a Message column instead of raw ids in Category and Artifact.
 - CI runs the frontend test suite, every job has a time limit, and the backend tests point the service hosts at a closed local port so a connection attempt fails at once instead of hanging on DNS. Tests on SQLite store UUID columns as text, which removes a rare random failure.
 - Top bar: only warnings the analyst can act on (failed evidence, parser errors) are shown, in plain words and linking to the evidence list; informational codes such as `multi_host_case` are no longer shown raw. The technical API address and a clock that did not tick are gone, and the host and evidence chips appear only while that filter is active, each with a button to clear it.
 - Home: counts use the locale's number format, the stat cards without data ("via OpenSearch", "Ready") are replaced with open and total cases, and the 10,000-result paging note moved next to the paging it describes.
@@ -41,6 +42,9 @@
 
 ### Fixed
 
+- Linux log times are real UTC times. Lines without a zone were read as UTC and syslog-style lines without a year got the current year, so on a 2016 disk image every syslog and auth.log line landed in the ingestion year and hours off. The host's timezone (`/etc/timezone`, `/etc/localtime`) now converts local times, the year is the one in which the machine was running according to `wtmp` (or the file's modification time), and disk images keep file modification times on extraction. `timestamp_status` says what was applied.
+- `wtmp` and `btmp` from disk images were decoded as text, which showed binary garbage and lost the login records; they are read as binary, IPv4 addresses with the high bit set no longer fail, and boots, shutdowns and runlevel changes are named.
+- The MySQL 5.5/5.6 error log layout (`160403 19:02:55 [Note] ...`) is dated, syslog lines without a host name (the installer's syslog) are dated, and dpkg's backup database (`status-old`) is no longer listed as a second copy of every package.
 - The API no longer accepts cross-origin requests carrying the analyst's session from any web page: a catch-all CORS origin pattern overrode the configured `KAIRON_ALLOWED_ORIGINS`. Only the configured origins are allowed now; `BACKEND_CORS_ORIGIN_REGEX` remains available as an explicit opt-in.
 - State-changing API requests (POST, PUT, PATCH, DELETE) sent by a browser from another origin, including another port of the same host, are refused (cross-site request forgery). The check uses the browser's `Origin`/`Referer` against the server's own address and `KAIRON_ALLOWED_ORIGINS`; requests without either header (curl, scripts) are unaffected. The bundled Nginx now forwards the `Host` header with its port.
 - Sign-in throttling no longer locks legitimate users out. Behind the bundled Nginx every request came from the proxy's address, so five sign-ins (successful ones included) within five minutes blocked everybody. Only failed attempts now count, per client address and username, and a successful sign-in clears them: guessing one account's password from one address is slowed down while nobody else is refused. A refused sign-in explains why instead of reporting invalid credentials. Audit records and sessions keep the real client address.
