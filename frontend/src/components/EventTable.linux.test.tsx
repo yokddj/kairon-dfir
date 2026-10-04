@@ -416,3 +416,12 @@ describe("Empty columns", () => {
     expect(screen.getByRole("columnheader", { name: /Client IP/ })).toBeInTheDocument();
   });
 });
+
+describe("Linux auth table", () => {
+  it("names the event by what happened, not by the log it came from", () => {
+    const item = row("linux_auth", { event: { type: "auth_log", action: "privilege_authentication", severity: "info", message: "m" }, message: "m", linux: { event_action: "sudo_command", timestamp_status: "valid" } });
+    render(<EventTable items={[item]} view="network" />);
+    expect(screen.getByText("sudo command")).toBeInTheDocument();
+    expect(screen.queryByText("auth_log")).not.toBeInTheDocument();
+  });
+});

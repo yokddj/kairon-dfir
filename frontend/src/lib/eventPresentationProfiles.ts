@@ -220,6 +220,7 @@ const sourceFileColumns: PresentationColumn[] = [
 
 const TIME_QUALITY_LABELS: Record<string, string> = {
   ok: "Exact",
+  valid: "Exact",
   assumed_utc: "Assumed UTC (log has no timezone)",
   assumed_year_utc: "Assumed year and UTC (syslog has neither)",
   host_timezone: "Local time, converted with the host's timezone",
@@ -492,7 +493,7 @@ const linuxAuthProfile: PresentationProfile = {
     timestampColumn,
     hostColumn,
     { key: "user", label: "User", paths: ["user.name", "linux.username", "linux.attempted_username"] },
-    { key: "event", label: "Event", paths: ["title", "event.type"] },
+    { key: "event", label: "Event", paths: ["title", "linux.event_action", "event.type"], format: (value) => String(value).replaceAll("_", " ") },
     { key: "source_ip", label: "Source IP", paths: ["network.source_ip", "linux.source_ip"] },
     { key: "method", label: "Method", paths: ["linux.auth_method"] },
     { key: "outcome", label: "Result", paths: ["linux.authentication_result", "event.outcome"] },
