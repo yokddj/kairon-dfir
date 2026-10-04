@@ -5187,6 +5187,32 @@ def test_lnk_effective_target_helper_merges_local_and_common_path() -> None:
     assert result["effective_path_source"] == "local_path+common_path"
 
 
+def test_lnk_effective_target_joins_a_network_share_and_its_common_path() -> None:
+    result = select_lnk_effective_target({"network_path": "\\\\fileserver\\share", "common_path": "docs\\plan.docx"})
+    assert result["effective_path"] == "\\\\fileserver\\share\\docs\\plan.docx"
+    assert result["effective_path_source"] == "network_path+common_path"
+
+
+def test_lnk_effective_target_keeps_a_base_that_already_ends_with_the_suffix() -> None:
+    result = select_lnk_effective_target({"local_path": "C:\\Users\\alex\\Desktop\\note.txt", "common_path": "Desktop\\note.txt"})
+    assert result["effective_path"] == "C:\\Users\\alex\\Desktop\\note.txt"
+
+
+def test_a_descriptive_badge_alone_is_not_a_suspicious_chain() -> None:
+    from app.services.process_tree import _build_process_tree_sample_chains
+
+    graph = {
+        "nodes": [
+            {"id": "p", "name": "powershell.exe", "risk_score": 95, "badges": ["suspicious_chain"], "risk_reasons": ["Process uses encoded PowerShell"]},
+            {"id": "c", "name": "cmd.exe", "risk_score": 0, "badges": ["lolbin"], "risk_reasons": []},
+            {"id": "w", "name": "winword.exe", "risk_score": 0, "badges": [], "risk_reasons": []},
+        ],
+        "edges": [{"source": "w", "target": "p"}, {"source": "p", "target": "c"}],
+    }
+    chains = _build_process_tree_sample_chains(graph)
+    assert [chain["chain"][-1]["name"] for chain in chains] == ["powershell.exe"]
+
+
 def test_lnk_effective_target_helper_uses_target_path_when_full() -> None:
     result = select_lnk_effective_target({"target_path": "C:\\Users\\alex\\Desktop\\note.txt"})
     assert result["effective_path"] == "C:\\Users\\alex\\Desktop\\note.txt"

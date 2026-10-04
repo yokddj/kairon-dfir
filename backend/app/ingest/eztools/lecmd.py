@@ -251,19 +251,26 @@ def resolve_lnk_effective_path(lnk: dict, raw: dict | None = None) -> dict[str, 
     merged_local_common = None
     if working_directory and relative_path and not is_lnk_partial_or_shell_target(relative_path):
         combined_relative = _merge_local_path(working_directory, relative_path)
-    if local_path and common_path and (is_lnk_partial_or_shell_target(local_path) or not is_lnk_useful_path(local_path)):
+    merged_network_common = None
+    # The link's target is the base path followed by the common path suffix (MS-SHLLINK LinkInfo):
+    # a base of "C:\Users\alex" with a suffix of "Desktop\note.txt" names the file, not the folder.
+    # _merge_local_path keeps a base that already ends with the suffix unchanged.
+    if local_path and common_path:
         merged_local_common = _merge_local_path(local_path, common_path)
+    if network_path and common_path:
+        merged_network_common = _merge_local_path(network_path, common_path)
     cleaned_icon_location = _clean_icon_location_target(icon_location)
 
     candidates: list[tuple[str, str | None, bool]] = [
-        ("local_path", local_path, False),
         ("local_path+common_path", merged_local_common, False),
+        ("local_path", local_path, False),
         ("target_path", target_path, False),
         ("environment_target", environment_target, False),
         ("property_store_target_path", property_store_target, False),
         ("appusermodel_relaunch_command", relaunch_command, False),
         ("working_directory+relative_path", combined_relative, False),
         ("target_id_absolute_path", target_id_absolute_path, False),
+        ("network_path+common_path", merged_network_common, False),
         ("network_path", network_path, False),
         ("relative_path", relative_path, True),
         ("icon_location_low_confidence", cleaned_icon_location, False),

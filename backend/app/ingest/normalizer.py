@@ -1968,7 +1968,10 @@ def normalize_row(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
     if file_path and not document["file"].get("name"):
         document["file"]["name"] = Path(file_path).name
         document["file"]["extension"] = Path(file_path).suffix
-    document["host"]["name"] = document["host"]["name"] or extract_host(row, artifact_meta)
+    # An artifact normalizer that rejected the host because it was only a file name (setupapi.dev.log,
+    # SYSTEM...) has decided: refilling it from the same row would bring the file name back.
+    if "host_name_not_inferred_from_filename" not in (document.get("data_quality") or []):
+        document["host"]["name"] = document["host"]["name"] or extract_host(row, artifact_meta)
     document["host"]["hostname"] = document["host"]["name"]
     if document["host"].get("name"):
         document["observed_host"] = {

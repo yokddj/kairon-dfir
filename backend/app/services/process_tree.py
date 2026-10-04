@@ -831,7 +831,9 @@ def _build_process_tree_sample_chains(graph: dict) -> list[dict]:
             continue
         if "browser_internal_child" in (child.get("badges") or []) and int(child.get("risk_score") or 0) < 70:
             continue
-        if not child.get("risk_reasons") and not child.get("badges"):
+        # A descriptive badge alone (lolbin, powershell...) on a child with no risk is not a
+        # suspicious chain: cmd.exe started by anything would otherwise be counted as one.
+        if not child.get("risk_reasons") and int(child.get("risk_score") or 0) <= 0 and "suspicious_chain" not in (child.get("badges") or []):
             continue
         chains.append(
             {

@@ -206,6 +206,12 @@ def clean_setupapi_value(value: str | None) -> str | None:
     if re.fullmatch(r"\{[0-9a-fA-F\-]+\}", cleaned):
         return cleaned
     while cleaned and cleaned[-1] in {"}", "]", '"', "'", " "}:
+        # A closing brace or bracket that matches an opening one belongs to the value (a GUID such
+        # as {36FC9E60-...}); only an unmatched one is trailing noise from the log line.
+        if cleaned[-1] == "}" and cleaned.count("{") >= cleaned.count("}"):
+            break
+        if cleaned[-1] == "]" and cleaned.count("[") >= cleaned.count("]"):
+            break
         candidate = cleaned[:-1].rstrip()
         if not candidate:
             break
