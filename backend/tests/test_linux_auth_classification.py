@@ -71,3 +71,22 @@ def test_sudo_targets_terminals_and_web_flags_are_searchable(monkeypatch):
     query = str(analyze_query_syntax("indicator:embedded_base64", lambda t: {"simple_query_string": {"query": t}})["query"])
     assert "linux.suspicious_url_indicators" in query
     assert "linux.run_as" in str(analyze_query_syntax("runas:root", lambda t: {"simple_query_string": {"query": t}})["query"])
+
+
+@pytest.mark.parametrize("line, package, version, previous, status, action", [
+    ("2014-04-16 21:02:50 install base-passwd:i386 <none> 3.5.33", "base-passwd:i386", "3.5.33", None, None, "install"),
+    ("2016-05-04 17:45:00 upgrade dpkg 1.17.5ubuntu5 1.17.5ubuntu5.7", "dpkg", "1.17.5ubuntu5.7", "1.17.5ubuntu5", None, "upgrade"),
+    ("2016-05-04 17:45:00 status installed man-db:i386 2.6.7.1-1ubuntu1", "man-db:i386", "2.6.7.1-1ubuntu1", None, "installed", "status"),
+    ("2016-05-04 17:45:00 remove ubuntu-minimal:i386 1.325 <none>", "ubuntu-minimal:i386", "1.325", None, None, "remove"),
+    ("2016-05-04 17:45:00 startup archives unpack", None, None, None, None, "startup"),
+])
+def test_dpkg_log_lines_name_the_package_and_its_versions(line, package, version, previous, status, action):
+    from app.ingest.linux.packages import parse_packages
+
+    row = parse_packages(line + "\n", source_path="var/log/dpkg.log")[0]
+    assert (row["package"], row["version"], row["previous_version"], row["package_status"], row["action"]) == (package, version, previous, status, action)
+    if package:
+        base = base_document("c", "e", "a", row, {"artifact_type": "linux_packages"})
+        doc = normalize_linux_row(base, row, source_path="var/log/dpkg.log", artifact_type="linux_packages")
+        assert (doc["linux"]["package"], doc["linux"]["package_action"]) == (package, action)
+        assert "linux.package" in str(analyze_query_syntax("package:netcat*", lambda t: {"simple_query_string": {"query": t}})["query"])

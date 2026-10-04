@@ -83,6 +83,23 @@ def _detect_action(text: str) -> str:
     return "unknown"
 
 
+def _dpkg_fields(action: str, words: list[str]) -> tuple[str | None, str | None, str | None, str | None]:
+    """(package, version, previous version, status) from the words after a dpkg.log action.
+
+    ``install|upgrade|trigproc PKG OLD NEW``, ``remove|purge|configure PKG VER [..]``,
+    ``status STATE PKG VER``; ``startup`` and ``conffile`` lines name no package.
+    """
+    clean = [word for word in words if word]
+    none_if_placeholder = lambda value: None if value in (None, "<none>") else value  # noqa: E731
+    if action == "status" and len(clean) >= 3:
+        return clean[1], none_if_placeholder(clean[2]), None, clean[0]
+    if action in {"install", "upgrade", "trigproc"} and len(clean) >= 3:
+        return clean[0], none_if_placeholder(clean[2]), none_if_placeholder(clean[1]), None
+    if action in {"remove", "purge", "configure", "unpack"} and clean:
+        return clean[0], none_if_placeholder(clean[1] if len(clean) > 1 else None), None, None
+    return None, None, None, None
+
+
 def _parse_dpkg_log(
     content: str,
     *,
@@ -97,8 +114,9 @@ def _parse_dpkg_log(
         raw_excerpt = stripped[:2000]
         dpkg_match = _DPKG_RE.match(stripped)
         if dpkg_match:
-            ts_str, action, package, message = dpkg_match.groups()
+            ts_str, action, first, rest = dpkg_match.groups()
             timestamp = _parse_dpkg_timestamp(ts_str)
+            package, version, previous_version, package_status = _dpkg_fields(action, [first, *rest.split()])
             results.append({
                 "artifact_family": "linux_packages",
                 "artifact_type": "dpkg_log",
@@ -107,9 +125,11 @@ def _parse_dpkg_log(
                 "timestamp": timestamp,
                 "package_manager": "dpkg",
                 "action": action.strip(),
-                "package": package.strip(),
-                "version": None,
-                "message": message[:2000],
+                "package": package,
+                "version": version,
+                "previous_version": previous_version,
+                "package_status": package_status,
+                "message": f"{action} {first} {rest}"[:2000],
                 "raw_excerpt": raw_excerpt,
             })
         else:

@@ -3776,6 +3776,12 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["apache_module"] = row.get("apache_module", "")
     linux_data["web_server"] = row.get("web_server", "")
     linux_data["jail"] = row.get("jail", "")
+    linux_data["package"] = row.get("package") or ""
+    linux_data["package_version"] = row.get("version") or ""
+    linux_data["package_previous_version"] = row.get("previous_version") or ""
+    linux_data["package_action"] = (row.get("action") or "") if row.get("artifact_family") == "linux_packages" else ""
+    linux_data["package_status"] = row.get("package_status") or ""
+    linux_data["package_manager"] = row.get("package_manager") or ""
     linux_data["db_engine"] = row.get("db_engine", "")
     linux_data["db_name"] = row.get("db_name", "")
     linux_data["db_command"] = row.get("db_command", "")
