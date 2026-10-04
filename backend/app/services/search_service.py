@@ -1194,7 +1194,10 @@ def _format_event_result(
     user = dict(source.get("user") or {})
     matched_fields = sorted((hit.get("highlight") or {}).keys())
     title = str(event.get("message") or source.get("raw_summary") or event.get("type") or artifact.get("name") or "Event")
-    summary = str(source.get("raw_summary") or event.get("message") or title)
+    # Linux rows always carry the log line itself; their raw_summary is only the generic
+    # "field=value | ..." dump of the parsed row, which is unreadable as a summary.
+    linux_message = (source.get("message") or event.get("message")) if isinstance(source.get("linux"), dict) else None
+    summary = str(linux_message or source.get("raw_summary") or event.get("message") or title)
     return {
         "kind": "event",
         "id": hit.get("_id") or source.get("event_id"),
