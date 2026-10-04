@@ -72,7 +72,9 @@ services:
       opensearch:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      # The UI reaches the API through the frontend's /api proxy, so the API port is published on
+      # this machine only. Other machines use the UI port. Set KAIRON_API_BIND=0.0.0.0 to expose it.
+      - "${KAIRON_API_BIND:-127.0.0.1}:8000:8000"
     volumes:
       - ./data:/app/data
       - ./data/local-mounts/mnt-evidence:/mnt/evidence:ro

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -9,6 +8,7 @@ from sqlalchemy import text
 from pydantic import BaseModel, Field
 from datetime import datetime, timedelta, timezone
 
+from app.core.client_ip import client_ip
 from app.core.database import get_db
 from app.models.user import User
 from app.models.session import Session as UserSession
@@ -18,30 +18,39 @@ from app.services.auth_utils import (
 )
 from app.services.audit import log_audit
 
-_login_attempts: dict[str, list[float]] = defaultdict(list)
-_LOGIN_RATE_LIMIT = 5
-_LOGIN_RATE_WINDOW = 300
+# Failed sign-ins per (address, username). Only failures count and a successful sign-in clears
+# its pair, so guessing one account's password from one address is slowed down while nobody else,
+# including the account's owner from another address, is ever refused.
+_failed_logins: dict[tuple[str, str], list[float]] = {}
+_LOGIN_FAILURE_LIMIT = 10
+_LOGIN_FAILURE_WINDOW = 300
+_MAX_TRACKED_PAIRS = 10_000
 
 
-def _check_login_rate(ip: str) -> bool:
+def _login_key(ip: str, username: str) -> tuple[str, str]:
+    return ip, username.strip().lower()
+
+
+def _login_wait_seconds(key: tuple[str, str]) -> int:
+    """Seconds this pair must wait before trying again; 0 when it may try now."""
     now = time.time()
-    window_start = now - _LOGIN_RATE_WINDOW
-    _login_attempts[ip] = [t for t in _login_attempts[ip] if t > window_start]
-    _login_attempts[ip].append(now)
-    return len(_login_attempts[ip]) <= _LOGIN_RATE_LIMIT
+    recent = [t for t in _failed_logins.get(key, []) if t > now - _LOGIN_FAILURE_WINDOW]
+    if recent:
+        _failed_logins[key] = recent
+    else:
+        _failed_logins.pop(key, None)
+    if len(recent) < _LOGIN_FAILURE_LIMIT:
+        return 0
+    return max(1, int(recent[0] + _LOGIN_FAILURE_WINDOW - now) + 1)
 
 
-_setup_attempts: dict[str, list[float]] = defaultdict(list)
-_SETUP_RATE_LIMIT = 10
-_SETUP_RATE_WINDOW = 60
+def _record_login_failure(key: tuple[str, str]) -> None:
+    if len(_failed_logins) >= _MAX_TRACKED_PAIRS:
+        cutoff = time.time() - _LOGIN_FAILURE_WINDOW
+        for stale in [k for k, times in _failed_logins.items() if not times or times[-1] <= cutoff]:
+            del _failed_logins[stale]
+    _failed_logins.setdefault(key, []).append(time.time())
 
-
-def _check_setup_rate(ip: str) -> bool:
-    now = time.time()
-    window_start = now - _SETUP_RATE_WINDOW
-    _setup_attempts[ip] = [t for t in _setup_attempts[ip] if t > window_start]
-    _setup_attempts[ip].append(now)
-    return len(_setup_attempts[ip]) <= _SETUP_RATE_LIMIT
 
 router = APIRouter(tags=["auth"])
 
@@ -97,20 +106,29 @@ def _get_session_user(db: Session, request: Request) -> User | None:
 
 @router.post("/api/auth/login")
 def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
-    client_ip = request.client.host if request.client else "unknown"
-    if not _check_login_rate(client_ip):
+    ip = client_ip(request)
+    key = _login_key(ip, payload.username)
+    wait = _login_wait_seconds(key)
+    if wait:
         log_audit("login_failure", actor_user_id=None, result="failure",
-                  ip_address=client_ip, user_agent=request.headers.get("user-agent"))
-        raise HTTPException(status_code=429, detail="Too many login attempts")
+                  ip_address=ip, user_agent=request.headers.get("user-agent"))
+        minutes = max(1, round(wait / 60))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed sign-in attempts for this account from this address. Try again in {minutes} minute{'s' if minutes != 1 else ''}.",
+            headers={"Retry-After": str(wait)},
+        )
 
     user = db.query(User).filter(User.username == payload.username).first()
     if not user or not verify_password(payload.password, user.password_hash):
+        _record_login_failure(key)
         log_audit("login_failure", actor_user_id=None, result="failure",
-                  ip_address=client_ip, user_agent=request.headers.get("user-agent"))
+                  ip_address=ip, user_agent=request.headers.get("user-agent"))
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    _failed_logins.pop(key, None)
     if not user.is_active:
         log_audit("login_failure", actor_user_id=user.id, result="failure",
-                  ip_address=client_ip, user_agent=request.headers.get("user-agent"))
+                  ip_address=ip, user_agent=request.headers.get("user-agent"))
         raise HTTPException(status_code=401, detail="Account disabled")
 
     token = create_session_token()
@@ -120,7 +138,7 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
         token_hash=token_h,
         created_at=datetime.now(timezone.utc).isoformat(),
         expires_at=(datetime.now(timezone.utc) + timedelta(hours=SESSION_EXPIRY_HOURS)).isoformat(),
-        ip_address=client_ip,
+        ip_address=ip,
         user_agent=request.headers.get("user-agent"),
     )
     db.add(session)
@@ -128,7 +146,7 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
     db.commit()
 
     log_audit("login_success", actor_user_id=user.id, result="success",
-              ip_address=client_ip, user_agent=request.headers.get("user-agent"))
+              ip_address=ip, user_agent=request.headers.get("user-agent"))
 
     _set_session_cookie(response, token)
     return {
@@ -202,10 +220,6 @@ class SetupRequest(BaseModel):
 
 @router.get("/api/auth/needs-setup")
 def needs_setup(request: Request, response: Response, db: Session = Depends(get_db)):
-    # Rate limit
-    client_ip = request.client.host if request.client else "unknown"
-    if not _check_setup_rate(client_ip):
-        raise HTTPException(status_code=429, detail="Too many requests")
     # No cache
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
@@ -252,7 +266,7 @@ def create_first_admin(payload: SetupRequest, response: Response, request: Reque
         token_hash=token_h,
         created_at=datetime.now(timezone.utc).isoformat(),
         expires_at=(datetime.now(timezone.utc) + timedelta(hours=SESSION_EXPIRY_HOURS)).isoformat(),
-        ip_address=request.client.host if request.client else None,
+        ip_address=client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )
     db.add(session)
