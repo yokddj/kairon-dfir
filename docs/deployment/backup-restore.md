@@ -1,113 +1,57 @@
 # Backup and Restore
 
-Backups must be taken before updates, before migrations, and before deleting large evidence.
+The code is on GitHub; what a backup protects is your data: the database (cases, evidence records, findings, users, settings) and the `.env` configuration, whose secrets sign sessions and encrypt stored provider keys. An upgrade changes the database, never the evidence, so the backup before an upgrade only needs the database.
 
-## What To Back Up
+## Which Backup When
 
-Required:
-
-- PostgreSQL logical dump.
-- `./data` directory, excluding temporary files and external read-only mounts.
-- OpenSearch index inventory and either OpenSearch snapshots or a documented reindex path.
-
-Included in PostgreSQL:
-
-- cases
-- evidence metadata
-- findings and markings
-- reports metadata
-- rule library metadata
-- validation matrices
-- incident timeline metadata
-
-Included in `./data`:
-
-- uploaded evidence storage
-- extracted evidence files
-- generated report files where stored on disk
-- parser outputs and derived data
-
-Not included by the lightweight backup script:
-
-- Docker images
-- external evidence mounted read-only under `/mnt/evidence`, `/data/evidence`, or `/cases`
-- physical OpenSearch shard snapshots
-
-## Dry Run
-
-The default script mode is safe and writes no data:
+| Mode | Contents | Time / size | Use it |
+| --- | --- | --- | --- |
+| `--db-only` | database dump, `.env`, index inventory | seconds, tens of MB | before every upgrade |
+| `--run` | the same plus `./data` (uploaded evidence, extracted files, reports) | minutes, as big as the evidence | now and then, and before deleting evidence or moving the installation |
+| `--dry-run` (default) | nothing is written; prints what would be done | — | to check the paths |
 
 ```bash
-./scripts/dfir-backup.sh --dry-run
-```
-
-## Create A Backup
-
-```bash
+./scripts/dfir-backup.sh --db-only
 ./scripts/dfir-backup.sh --run
 ```
 
-Output defaults to:
+Each backup goes to `./backups/<UTC timestamp>/` (set `DFIR_BACKUP_ROOT` to change it):
 
-```text
-./backups/<UTC timestamp>/
-```
+- `postgres.sql`: logical dump of the database
+- `env.backup`: copy of `.env`, readable only by its owner (it holds secrets; keep backups on the Kairon host or encrypted media)
+- `app-data.tgz`: `./data` without `data/tmp` and local mounts (`--run` only)
+- `opensearch-indices.json`: list of the search indexes
+- `manifest.json`: mode, what is and is not included
 
-Files:
+A full backup can take several GB. Keep one recent full backup and a few database-only ones, and delete older ones: a full disk stops ingestion.
 
-- `postgres.sql`
-- `app-data.tgz`
-- `opensearch-indices.json`
-- `manifest.json`
+If a file changes while `./data` is archived (a log being written), the backup still completes and the manifest says so; only a real archive error stops it.
 
-## OpenSearch Snapshot Strategy
+## What Is Not Backed Up
 
-The minimum supported strategy is:
+- Docker images (rebuilt from the code).
+- Evidence mounted read-only from outside (`/mnt/evidence`, `/data/evidence`, `/cases`): it never leaves its source.
+- The OpenSearch indexes. The search data is derived from the evidence: if it is lost, reprocess the evidence. For large installations, configure an OpenSearch snapshot repository and snapshot the `dfir-events-*` indexes before upgrades.
 
-1. Back up PostgreSQL.
-2. Back up `./data`.
-3. Record OpenSearch index inventory.
-4. Keep original evidence so indexed events can be regenerated if OpenSearch data is lost.
-
-For larger deployments, configure an OpenSearch snapshot repository and snapshot all `dfir-events-*` indices before updates.
-
-## Restore Order
-
-1. Stop services:
+## Restore
 
 ```bash
-docker compose down
-```
-
-2. Restore `./data` from `app-data.tgz`.
-
-3. Start Postgres only:
-
-```bash
-docker compose up -d postgres
-```
-
-4. Restore database:
-
-```bash
-cat backups/<timestamp>/postgres.sql | docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
-```
-
-5. Restore OpenSearch from snapshot, or reindex from evidence if snapshot was not taken.
-
-6. Start the full stack:
-
-```bash
+./scripts/restore.sh backups/<timestamp>
 docker compose up -d
-```
-
-7. Run:
-
-```bash
 ./scripts/dfir-healthcheck.sh
 ```
 
-## Expected Downtime
+`restore.sh` waits 10 seconds so it can be cancelled, then:
 
-PostgreSQL logical restore and OpenSearch snapshot restore require downtime. Do not run ingest jobs during backup or restore.
+1. stops the frontend, backend and workers;
+2. restores `.env` if the backup has it (the current one is kept as `.env.before-restore-<time>`);
+3. restores `./data` if the backup is a full one; a database-only backup leaves `./data` as it is;
+4. empties the database schema and loads the dump, stopping at the first error.
 
+It replaces the database completely: anything created after the backup is lost. Run it from the installation directory, or set `APP_DIR`. Backups made by the older `scripts/backup.sh` (`data.tar.gz`, `.env.backup`) are also accepted.
+
+Try a restore on a test machine before you need one.
+
+## Downtime
+
+Kairon is stopped during a restore. Do not run ingest jobs while a full backup is being taken.

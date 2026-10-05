@@ -58,6 +58,15 @@ The setup wizard generates:
 
 **Kairon does not manage TLS certificates automatically.** You must configure TLS on your reverse proxy (Nginx, Traefik, Caddy, etc.) before exposing the deployment.
 
+## Request Protection
+
+These apply in every mode and need no configuration:
+
+- **Cross-site requests.** A request that changes something (POST, PUT, PATCH, DELETE) sent by a browser is accepted only when the page that sent it is Kairon itself (same address and port as the request) or an origin listed in `KAIRON_ALLOWED_ORIGINS`. A page on another site, or on another port of the same machine, gets `403 Cross-site request refused`. Scripts and the CLI, which send no `Origin`/`Referer`, are not affected; they still need a session or token.
+- **CORS.** Only the origins in `KAIRON_ALLOWED_ORIGINS` may read API responses from another origin; there is no catch-all. The UI does not need CORS: it reaches the API through its own `/api` proxy. Opening the UI by IP or by name from other machines works because those requests come from the UI itself.
+- **Failed logins.** After 10 failed passwords for the same user from the same address within 5 minutes, that address gets `429 Too many failed sign-in attempts` with a `Retry-After` until the window passes. A correct password clears the count. The user can still sign in from other machines, and other users are never affected: Kairon never locks an account.
+- **Addresses.** Behind the bundled Nginx (or any proxy on a private or loopback address), the client address recorded in audit logs and used for the login limit is the real one from `X-Real-IP`; a client cannot fake it.
+
 ## Changing Mode
 
 To change the deployment mode after initial setup:

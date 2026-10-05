@@ -26,7 +26,7 @@ Rules, reports, parser rebuilds and SRUM Windows-worker parsing are not part of 
 ## First-Time Setup
 
 1. Run the setup script, which generates `.env` with real random secrets
-   (session/CSRF/Postgres/OpenSearch passwords) instead of placeholder
+   (session secret, Postgres and OpenSearch passwords) instead of placeholder
    values you'd otherwise have to fill in by hand:
 
 ```bash
@@ -202,6 +202,8 @@ If you change `OPENSEARCH_JAVA_HEAP`, recreate `opensearch`. If you change `BACK
 ## Security Notes
 
 The stack is intended for a trusted private network, VPN, or authenticated reverse proxy.
+
+By default only the UI (`5173`) listens on the network; the API (`8000`) listens on this machine only (`KAIRON_API_BIND`), and OpenSearch, Postgres and Redis are not published at all. Kairon requires its own sign-in; see [Deployment Modes](deployment-modes.md#request-protection) for how requests and sign-in attempts are protected.
 
 Do not expose these ports directly to the public Internet:
 

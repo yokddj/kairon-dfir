@@ -10,11 +10,13 @@ Use this process for Kairon DFIR updates.
 ./scripts/dfir-healthcheck.sh
 ```
 
-2. Take a backup:
+2. Back up the database and configuration (seconds; an upgrade does not touch the evidence):
 
 ```bash
-./scripts/dfir-backup.sh --run
+./scripts/dfir-backup.sh --db-only
 ```
+
+Take a full backup (`--run`) instead if you have none recent. See [Backup and Restore](backup-restore.md).
 
 3. Confirm no ingest/rules/report jobs are running in the System page or queue status.
 
@@ -23,10 +25,10 @@ Use this process for Kairon DFIR updates.
 ## Update
 
 ```bash
-git pull
-docker compose build
-docker compose up -d
+./scripts/upgrade.sh
 ```
+
+It pulls the code (`git pull`), keeps the secrets in `.env` (a copy is left as `.env.backup-<time>` next to it; old copies can be deleted), rebuilds the images and recreates the containers. Data volumes and `./data` are kept. Run it in a terminal that stays open until it finishes: if the session that started it ends halfway, the stack may be left partly rebuilt; run it again.
 
 Database migrations and compatibility schema checks run during backend startup. Do not open the UI to analysts until the backend health endpoint reports healthy after the update.
 
@@ -63,13 +65,17 @@ docker compose up -d
 ./scripts/dfir-healthcheck.sh
 ```
 
-If migrations or data changes occurred:
+If migrations or data changes occurred, go back to the previous version and restore the backup taken before the update:
 
-1. Stop the stack.
-2. Restore PostgreSQL backup.
-3. Restore OpenSearch snapshot or reindex if snapshot was not taken.
-4. Restore `./data` if files were changed or removed.
-5. Start the previous known-good version.
+```bash
+git checkout <previous-known-good-ref>
+./scripts/restore.sh backups/<timestamp>
+docker compose build
+docker compose up -d
+./scripts/dfir-healthcheck.sh
+```
+
+Restore OpenSearch from a snapshot if you took one; otherwise reprocess evidence whose search data changed.
 
 ## 0.9.0-beta Notes
 

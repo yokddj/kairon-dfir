@@ -43,6 +43,8 @@
   - `tags`
   - `suspicious_reasons`
 - **Create findings**: select events from the current artifact and create a finding linked to the case
+- **Empty columns**: a column with no value on any row of the current page is hidden automatically, so each view shows what the data actually has; it comes back by itself on a page where it has values. The **Columns** menu marks such columns "Empty on this page" (and columns with few values "Mostly empty") and lets you show or hide any column.
+- **Types listed**: the artifact type list shows only what the case contains. Linux families appear by their own name (SSH, Network Config, Packages…); DNS is offered only when the case has DNS events: Sysmon DNS queries, other DNS query logs, DNS cache entries or resolver configuration.
 
 ## Memory Analysis
 
@@ -127,6 +129,14 @@
   - `EVTX`
   - `Semi-automatic analysis`
   - `Troubleshooting`
+
+## Investigation Guide
+
+- **What it's for**: knowing where to look for the common questions of an investigation, in the spirit of the SANS DFIR posters.
+- **Where**: sidebar, just below Docs.
+- **What it shows**: one card per question (what was executed, persistence, logons, lateral movement, PowerShell, USB devices, deleted files, browsing, Linux logins, sudo, cron, web attacks…). Each card has ready searches, buttons that open the right view (Artifact Views, Process Graph, Timeline, Host Information…), where the system records the answer, and what stands out.
+- **How to use it**: select a case first; then each search opens Search on that case with the query filled in. Filter the cards by Windows/Linux, by topic or by text (`persistence`, `4624`, `sudo`).
+- **Keep in mind**: no result does not prove the activity did not happen; the log may be off or not collected.
 
 ## System
 

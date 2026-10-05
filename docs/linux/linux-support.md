@@ -70,9 +70,15 @@ Kairon attempts to detect:
 Current Linux parsers cover 12 families. Coverage is calculated from detected artifacts only (`supported_detected / total_detected`) — Kairon does not invent a percentage for artifacts that were not present in the collection.
 
 ### Linux Authentication (`linux_auth`)
-- Sources: `/var/log/auth.log`, `/var/log/secure`
-- Events: SSH accepted/failed, sudo, su, PAM sessions, invalid users, authentication failures
-- Fields: `timestamp`, `username`, `process`, `pid`, `source_ip`, `auth_method`, `event_action`, `message`
+- Sources: `/var/log/auth.log`, `/var/log/secure` (and rotated copies), and the binary login records `wtmp` and `btmp` (including `wtmp.1`, `btmp.1`).
+- Events (`event_action`, searchable with `action:`):
+  - SSH: `login_success`, `login_failure`, `invalid_user`, `max_auth_attempts` (the "maximum authentication attempts exceeded" line, with user, address and port), `preauth_disconnect`, `ssh_disconnect`, `sshd_listening`.
+  - sudo: `sudo_command` (the command, target user in `run_as`, working directory and terminal), `sudo_failed` (incorrect password or user not in sudoers), `sudo_auth`; su: `su_auth`.
+  - Console logins (`login[pid]: ROOT LOGIN ON tty1`, `LOGIN ON tty1 BY user`): `console_login`.
+  - PAM: `session_opened`, `session_closed`, `authentication_failure`.
+  - `wtmp`: `login_success`, `logout`, `system_boot` (with the kernel version), `system_shutdown`, `runlevel_change`, `clock_change`. `btmp`: `login_failure` for every failed login, with user, terminal and source address.
+- Fields: `timestamp`, `username`, `process`, `pid`, `source_ip`, `source_port`, `auth_method`, `run_as`, `command`, `terminal`, `event_action`, `authentication_result`, `message`. Search: `action:sudo_command runas:root`, `action:login_failure ip:203.0.113.9`.
+- `wtmp` and `btmp` store exact UTC times (no zone or year to guess); they are also what dates the syslog-style lines (see below).
 
 ### Linux Journal (`linux_journal`)
 - Sources: binary systemd journals (`/var/log/journal/<machine-id>/system.journal`, `user-<uid>.journal`, rotated `system@<id>.journal`, the `.journal~` left by an unclean shutdown, and the volatile `/run/log/journal`), plus `journalctl -o export` and `-o json` text exports.
@@ -200,7 +206,12 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 - Fields: `timestamp`, `message`, `process`, `pid`, `severity`, `username`, `source_ip`, `host` (syslog format), `log_format`, `timestamp_status`, `source_file`, `line_number`. User, IP, process and severity are extracted heuristically from the text; the original line is always kept.
 - Timestamps: `timestamp_status` says how far to trust the time: `ok` (explicit offset or epoch), `assumed_utc` (no timezone in the log, read as UTC), `assumed_year_utc` (syslog lines carry no year; it is then inferred as described in *Times of log lines without a zone or a year*) or `missing` (undated; the line is still indexed and searchable). Dates before 1990 or more than a year ahead are rejected.
 - Limits: at most 256 MiB of text is read per file (the decompressed size for compressed logs); a truncated or damaged archive keeps what could be read and adds an explicit "log truncated" event. Binary files produce no events.
-- Limitations: heuristic extraction, not a schema-aware parser. A loose `.log` or `.txt` uploaded on its own, with no Linux path around it, is not routed here.
+- Log folders anywhere: a file inside any folder named `log` or `logs` is also read, wherever the folder is (for example a folder of logs copied from an appliance or uploaded as it is), unless the path looks like a Windows layout (`Windows`, `Program Files`, `Users`, a drive letter…). In such a folder, `access.log`/`error.log` files under an `apache`, `apache2`, `httpd` or `nginx` directory go to the web parser.
+- Limitations: heuristic extraction, not a schema-aware parser. A loose `.log` or `.txt` uploaded on its own, with no Linux path or log folder around it, is not routed here.
+
+### Rotated and compressed logs
+- Rotated copies (`auth.log.1`, `syslog-20240101`) are read by the same parser as the current file.
+- A log compressed on its own (`auth.log.2.gz`, `sh.log.3.gz`) is read once, in place, by its parser, keeping its original path. Archives (`.tar.gz`, `.tgz`) and binary records (`wtmp`, journals) are unpacked first. Earlier versions also unpacked single gzip logs as nested archives and indexed them twice; reprocess evidence ingested before 2026-10-05 if its rotated logs look duplicated.
 
 ### Web Server Logs: Apache and nginx (`linux_apache`)
 - Sources: `/var/log/apache2/`, `/var/log/httpd/` and `/var/log/nginx/` access and error logs, including per-site files (`shop.access.log`, `site-error.log`) and rotated or compressed copies.
@@ -270,10 +281,10 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 - Limitations: multi-line event reconstruction is partial in v1
 
 ### Linux Shell History (`linux_shell_history`)
-- Sources: `.bash_history`, `.zsh_history`
-- Events: shell commands with inferred username
-- Fields: `username`, `shell`, `command`, `source_file`, `line_number`
-- ZSH extended history timestamps are extracted; history without extended timestamps has no time context
+- Sources: `.bash_history`, `.zsh_history`, and BSD shell audit logs `bash.log`/`sh.log` (syslog lines of the form `user on tty shell_command="…"`, written by some FreeBSD-based appliances), plain, rotated or gzip-compressed.
+- Events: shell commands with inferred username. In the audit logs every line is kept: a recorded command becomes a command event, and any other line (a shell starting, an error) is indexed with its message so nothing in the file is lost.
+- Fields: `username`, `shell`, `command`, `terminal`, `source_file`, `line_number`
+- ZSH extended history timestamps are extracted; `.bash_history` without timestamps has no time context. Audit-log lines have the syslog time and their year is resolved like other syslog lines.
 
 ### Linux Cron (`linux_cron`)
 - Sources: `/etc/crontab`, `/etc/cron.d/*`, `/var/spool/cron/*`
