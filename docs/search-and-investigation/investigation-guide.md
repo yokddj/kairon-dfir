@@ -15,6 +15,10 @@ have been logged, or the logs may not be in the evidence.
 > question at hand. Note the time and the host of anything relevant and pivot on them in
 > **Timeline**.
 
+> Event IDs are reused across logs: 104 is a cleared System log for `Microsoft-Windows-Eventlog`
+> but something else for a dozen other providers. When an ID could belong to several logs, the
+> searches below add `channel:` or `provider:`; do the same when you write your own.
+
 ## Windows
 
 ### What ran? (program execution)
@@ -60,7 +64,7 @@ eventid:7045 OR eventid:4697
 ```
 
 ```kairon
-eventid:4698 OR eventid:106
+eventid:4698 OR (eventid:106 AND channel:*TaskScheduler*)
 ```
 
 ```kairon
@@ -208,7 +212,7 @@ Where it is recorded: Security log cleared (1102), System log cleared (104), Def
 configuration changes (1116, 1117, 5001), audit policy changes (4719).
 
 ```kairon
-eventid:1102 OR eventid:104
+(eventid:1102 OR eventid:104) AND provider:*Eventlog*
 ```
 
 ```kairon
