@@ -50,7 +50,7 @@ jobs:
 
       - name: Check CHANGE_ME in release-critical vars
         run: |
-          if grep -q 'CHANGE_ME_SESSION_SECRET\|CHANGE_ME_CSRF_SECRET\|CHANGE_ME_POSTGRES_PASSWORD\|CHANGE_ME_OPENSEARCH_PASSWORD' \
+          if grep -q 'CHANGE_ME_SESSION_SECRET\|CHANGE_ME_POSTGRES_PASSWORD\|CHANGE_ME_OPENSEARCH_PASSWORD' \
             .env.example 2>/dev/null; then
             echo "WARNING: CHANGE_ME placeholders in .env.example (expected in template)"
           fi

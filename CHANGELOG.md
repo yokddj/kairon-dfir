@@ -28,6 +28,7 @@
 
 ### Changed
 
+- `dfir-backup.sh --db-only` saves the database, the configuration and the index inventory in seconds, enough before an upgrade (which changes the database, not the evidence); `--run` keeps the full backup, also saves `.env` now, and no longer aborts when a file changes while the data folder is archived. The unused `KAIRON_CSRF_SECRET` is no longer generated or required (cross-site requests are refused by origin, see Fixed).
 - Artifact Views: a column that is empty on every row of the page is hidden (the column chooser marks it and can show it again), and Linux packages, shell history, users and groups, cron, SSH, sudoers, last logins, host facts, network configuration and hosts-file entries have tables of their own fields instead of Windows task, prefetch or web layouts whose columns were all empty.
 - Artifact Views: SSH configuration and Linux network configuration have their own names instead of three entries called "Network", Linux artifact names no longer repeat "Linux", and the mixed-type table shows the artifact's name and a Message column instead of raw ids in Category and Artifact.
 - CI runs the frontend test suite, every job has a time limit, and the backend tests point the service hosts at a closed local port so a connection attempt fails at once instead of hanging on DNS. Tests on SQLite store UUID columns as text, which removes a rare random failure.

@@ -176,7 +176,6 @@ jobs:
           KAIRON_PUBLIC_URL=http://localhost:5173
           KAIRON_AUTH_ENABLED=true
           KAIRON_SESSION_SECRET=ci-placeholder-not-a-real-secret
-          KAIRON_CSRF_SECRET=ci-placeholder-not-a-real-secret
           POSTGRES_PASSWORD=ci-placeholder-not-a-real-secret
           OPENSEARCH_INITIAL_ADMIN_PASSWORD=ci-placeholder-not-a-real-secret
           KAIRON_BOOTSTRAP_ADMIN_USERNAME=
