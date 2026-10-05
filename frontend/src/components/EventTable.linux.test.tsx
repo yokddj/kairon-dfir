@@ -425,3 +425,13 @@ describe("Linux auth table", () => {
     expect(screen.queryByText("auth_log")).not.toBeInTheDocument();
   });
 });
+
+describe("Shell audit logs", () => {
+  it("show the text of lines that are not commands", () => {
+    const command = row("linux_shell_history", { event: { type: "bsd_shell_audit", message: "uname -a" }, message: "uname -a", raw: { command: "uname -a", username: "nsroot" } });
+    const other = row("linux_shell_history", { event: { type: "bsd_shell_audit", message: "logfile turned over" }, message: "logfile turned over", raw: {} });
+    render(<EventTable items={[command, other]} view="execution" />);
+    expect(screen.getByRole("columnheader", { name: /Message/ })).toBeInTheDocument();
+    expect(screen.getByText("logfile turned over")).toBeInTheDocument();
+  });
+});

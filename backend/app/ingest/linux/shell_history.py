@@ -41,6 +41,24 @@ def _parse_bsd_syslog_timestamp(ts_str: str) -> str | None:
         return None
 
 
+def _bsd_audit_other_line(source_path: str, line_number: int, raw: str, *, timestamp: str | None, host: str | None = None,
+                          process: str | None = None, pid: int | None = None, message: str | None = None) -> dict:
+    """A line of a shell audit log that is not a recorded command."""
+    return {
+        "artifact_family": "linux_shell_history",
+        "artifact_type": "bsd_shell_audit",
+        "source_file": source_path,
+        "line_number": line_number,
+        "hostname": host,
+        "process": process,
+        "pid": pid,
+        "timestamp": timestamp,
+        "timestamp_status": "assumed_year_utc" if timestamp else "missing",
+        "message": (message or raw)[:2000],
+        "raw_excerpt": raw[:2000],
+    }
+
+
 def parse_bsd_shell_audit_log(content: str, *, source_path: str = "") -> list[dict]:
     results: list[dict] = []
     for line_number, line in enumerate(content.splitlines(), start=1):
@@ -49,13 +67,18 @@ def parse_bsd_shell_audit_log(content: str, *, source_path: str = "") -> list[di
             continue
         envelope_match = _BSD_SHELL_AUDIT_ENVELOPE_RE.match(stripped)
         if not envelope_match:
+            # Never drop a line: whatever the file holds stays searchable, undated.
+            results.append(_bsd_audit_other_line(source_path, line_number, stripped, timestamp=None))
             continue
         ts_str, _facility, host, process_raw, pid_str, message = envelope_match.groups()
         audit_match = _BSD_SHELL_AUDIT_MESSAGE_RE.match(message.strip())
         if not audit_match:
-            # Not every line in these files is a command (startup/rotation
-            # notices share the file) -- only the shell_command= lines are
-            # this artifact's actual content.
+            # Not every line is a command (start-up and rotation notices, other programs logging to
+            # the same file, a different command format): kept with its time and text.
+            results.append(_bsd_audit_other_line(
+                source_path, line_number, stripped, timestamp=_parse_bsd_syslog_timestamp(ts_str),
+                host=host, process=(process_raw or "").rstrip(":") or None, pid=int(pid_str) if pid_str else None, message=message,
+            ))
             continue
         username, tty, command = audit_match.groups()
         results.append({
