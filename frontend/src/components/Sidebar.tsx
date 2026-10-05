@@ -1,6 +1,7 @@
 import {
   BookOpen,
   Bot,
+  Compass,
   Database,
   FileArchive,
   Fingerprint,
@@ -240,6 +241,17 @@ export default function Sidebar() {
         >
           <BookOpen size={16} />
           Docs
+        </NavLink>
+        <NavLink
+          to="/guide"
+          className={({ isActive }) =>
+            `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${
+              isActive ? "bg-accent/10 text-accent shadow-panel" : "text-muted hover:bg-white/5 hover:text-ink"
+            }`
+          }
+        >
+          <Compass size={16} />
+          Investigation Guide
         </NavLink>
         <NavLink
           to="/account/change-password"

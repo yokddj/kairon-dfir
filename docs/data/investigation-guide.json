@@ -1,0 +1,981 @@
+{
+  "title": "Investigation Guide",
+  "intro": "Short recipes for the questions most investigations start with: where the answer is recorded, which Kairon view shows it, and searches to run.",
+  "posters_url": "https://www.sans.org/posters/",
+  "topics": [
+    {
+      "id": "win-execution",
+      "platform": "windows",
+      "category": "Execution",
+      "icon": "play",
+      "question": "What ran on the host?",
+      "why": "Program execution is the backbone of most investigations: it tells you which tools the intruder used and when.",
+      "searches": [
+        {
+          "label": "Process creation in the Security log (4688)",
+          "query": "eventid:4688"
+        },
+        {
+          "label": "Sysmon process creation, with command line and hashes",
+          "query": "eventid:1 AND channel:*Sysmon*"
+        },
+        {
+          "label": "Anything run from a user's Temp folder",
+          "query": "path:*\\\\AppData\\\\Local\\\\Temp\\\\*"
+        },
+        {
+          "label": "Prefetch entries",
+          "query": "artifact:prefetch"
+        }
+      ],
+      "views": [
+        {
+          "label": "Prefetch",
+          "target": "artifacts",
+          "artifact_type": "prefetch"
+        },
+        {
+          "label": "Amcache",
+          "target": "artifacts",
+          "artifact_type": "amcache"
+        },
+        {
+          "label": "Shimcache",
+          "target": "artifacts",
+          "artifact_type": "shimcache"
+        },
+        {
+          "label": "Process Graph",
+          "target": "process-graph"
+        }
+      ],
+      "sources": [
+        {
+          "name": "Prefetch",
+          "detail": "C:\\Windows\\Prefetch: last run times and run count"
+        },
+        {
+          "name": "Amcache",
+          "detail": "Amcache.hve: path and SHA-1 of executables seen"
+        },
+        {
+          "name": "Shimcache",
+          "detail": "AppCompatCache in SYSTEM: presence and order"
+        },
+        {
+          "name": "Security 4688",
+          "detail": "process creation, when auditing is enabled"
+        },
+        {
+          "name": "Sysmon 1",
+          "detail": "process creation with command line, parent and hashes"
+        }
+      ],
+      "look_for": [
+        "Binaries in AppData, Temp, ProgramData or Downloads",
+        "Names that imitate system tools (scvhost.exe, lsas.exe)",
+        "Office or browsers starting cmd.exe or powershell.exe"
+      ]
+    },
+    {
+      "id": "win-persistence",
+      "platform": "windows",
+      "category": "Persistence",
+      "icon": "anchor",
+      "question": "How does it survive a reboot?",
+      "why": "Persistence is how an intruder keeps access; finding it tells you what to clean and often when the compromise began.",
+      "searches": [
+        {
+          "label": "New services (System 7045, Security 4697)",
+          "query": "eventid:7045 OR eventid:4697"
+        },
+        {
+          "label": "Scheduled tasks created",
+          "query": "eventid:4698 OR (eventid:106 AND channel:*TaskScheduler*)"
+        },
+        {
+          "label": "Run and RunOnce registry keys",
+          "query": "registry.key_path:*CurrentVersion\\\\Run*"
+        },
+        {
+          "label": "All scheduled tasks",
+          "query": "artifact:scheduled_task"
+        }
+      ],
+      "views": [
+        {
+          "label": "Startup & Persistence",
+          "target": "artifacts",
+          "artifact_type": "startup_persistence"
+        },
+        {
+          "label": "Services",
+          "target": "artifacts",
+          "artifact_type": "service"
+        },
+        {
+          "label": "Scheduled Tasks",
+          "target": "artifacts",
+          "artifact_type": "scheduled_task"
+        },
+        {
+          "label": "WMI",
+          "target": "artifacts",
+          "artifact_type": "wmi"
+        }
+      ],
+      "sources": [
+        {
+          "name": "Run / RunOnce",
+          "detail": "HKLM and HKCU \\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+        },
+        {
+          "name": "Services",
+          "detail": "System 7045 and Security 4697 when a service is installed"
+        },
+        {
+          "name": "Scheduled tasks",
+          "detail": "Security 4698, Task Scheduler 106, C:\\Windows\\System32\\Tasks"
+        },
+        {
+          "name": "WMI subscriptions",
+          "detail": "WMI-Activity 5861"
+        },
+        {
+          "name": "Startup folders",
+          "detail": "the Start Menu Startup folders of every user"
+        }
+      ],
+      "look_for": [
+        "Services or tasks pointing at user folders or script interpreters",
+        "Random-looking names or descriptions",
+        "Anything created shortly before the first suspicious activity"
+      ]
+    },
+    {
+      "id": "win-logons",
+      "platform": "windows",
+      "category": "Accounts",
+      "icon": "user-check",
+      "question": "Who logged on, and from where?",
+      "why": "Logons tie activity to an account and a source address, and show password guessing that eventually worked.",
+      "searches": [
+        {
+          "label": "Remote Desktop logons (type 10)",
+          "query": "eventid:4624 AND logontype:10"
+        },
+        {
+          "label": "Network logons (type 3)",
+          "query": "eventid:4624 AND logontype:3"
+        },
+        {
+          "label": "Failed logons",
+          "query": "eventid:4625"
+        },
+        {
+          "label": "Accounts created or added to a group",
+          "query": "eventid:4720 OR eventid:4732"
+        }
+      ],
+      "views": [
+        {
+          "label": "Host Information",
+          "target": "host-information"
+        },
+        {
+          "label": "Timeline",
+          "target": "timeline"
+        }
+      ],
+      "sources": [
+        {
+          "name": "4624 / 4625",
+          "detail": "successful and failed logons; the logon type says how (2 keyboard, 3 network, 10 RDP)"
+        },
+        {
+          "name": "4648",
+          "detail": "logon with explicit credentials (runas, lateral movement tools)"
+        },
+        {
+          "name": "4672",
+          "detail": "administrative privileges assigned at logon"
+        },
+        {
+          "name": "4720 / 4732",
+          "detail": "account created / user added to a local group"
+        }
+      ],
+      "look_for": [
+        "Many 4625 followed by a 4624 from the same address",
+        "Logons at unusual hours",
+        "Accounts created and used shortly after"
+      ]
+    },
+    {
+      "id": "win-lateral",
+      "platform": "windows",
+      "category": "Lateral movement",
+      "icon": "share",
+      "question": "Did it move to other machines?",
+      "why": "Lateral movement turns one compromised host into many; it decides the scope of the investigation.",
+      "searches": [
+        {
+          "label": "Admin share access (ADMIN$, C$)",
+          "query": "eventid:5140 OR eventid:5145"
+        },
+        {
+          "label": "PsExec service",
+          "query": "service:PSEXESVC"
+        },
+        {
+          "label": "WinRM / remote PowerShell sessions",
+          "query": "process:wsmprovhost.exe"
+        },
+        {
+          "label": "Remote Desktop logons",
+          "query": "eventid:4624 AND logontype:10"
+        }
+      ],
+      "views": [
+        {
+          "label": "Process Graph",
+          "target": "process-graph"
+        },
+        {
+          "label": "Timeline",
+          "target": "timeline"
+        }
+      ],
+      "sources": [
+        {
+          "name": "Remote Desktop",
+          "detail": "4624 type 10 and the RDP connection logs"
+        },
+        {
+          "name": "Admin shares",
+          "detail": "5140 / 5145 for ADMIN$ and C$"
+        },
+        {
+          "name": "PsExec and clones",
+          "detail": "a new PSEXESVC (or similar) service, 7045"
+        },
+        {
+          "name": "WinRM",
+          "detail": "wsmprovhost.exe running commands"
+        }
+      ],
+      "look_for": [
+        "The same account logging on to several hosts in a short time",
+        "A service installed right after a network logon from another host"
+      ]
+    },
+    {
+      "id": "win-powershell",
+      "platform": "windows",
+      "category": "Scripts",
+      "icon": "terminal",
+      "question": "What did PowerShell do?",
+      "why": "PowerShell is the most common tool for intruders on Windows; script block logging often records the whole payload.",
+      "searches": [
+        {
+          "label": "Script blocks (4104)",
+          "query": "eventid:4104"
+        },
+        {
+          "label": "Encoded commands",
+          "query": "artifact:powershell AND command:*-enc*"
+        },
+        {
+          "label": "Downloads and in-memory execution",
+          "query": "command:*DownloadString* OR command:*IEX*"
+        }
+      ],
+      "views": [
+        {
+          "label": "PowerShell",
+          "target": "artifacts",
+          "artifact_type": "powershell"
+        },
+        {
+          "label": "Command History",
+          "target": "command-history"
+        }
+      ],
+      "sources": [
+        {
+          "name": "PowerShell Operational",
+          "detail": "4104 script blocks, 4103 module logging"
+        },
+        {
+          "name": "Windows PowerShell",
+          "detail": "800 pipeline execution"
+        },
+        {
+          "name": "PSReadLine",
+          "detail": "ConsoleHost_history.txt of every user"
+        }
+      ],
+      "look_for": [
+        "-enc / -EncodedCommand",
+        "DownloadString, Invoke-WebRequest, IEX",
+        "Execution policy bypass, AMSI tampering"
+      ]
+    },
+    {
+      "id": "win-files",
+      "platform": "windows",
+      "category": "Files",
+      "icon": "file",
+      "question": "Which files and folders were opened?",
+      "why": "File opening shows what the user (or intruder) looked at or staged before taking it.",
+      "searches": [
+        {
+          "label": "Shortcuts (LNK)",
+          "query": "artifact:lnk"
+        },
+        {
+          "label": "Jump Lists",
+          "query": "artifact:jumplist"
+        }
+      ],
+      "views": [
+        {
+          "label": "LNK / Shortcuts",
+          "target": "artifacts",
+          "artifact_type": "lnk"
+        },
+        {
+          "label": "Jump Lists",
+          "target": "artifacts",
+          "artifact_type": "jumplist"
+        },
+        {
+          "label": "User Activity",
+          "target": "artifacts",
+          "artifact_type": "user_activity"
+        }
+      ],
+      "sources": [
+        {
+          "name": "LNK",
+          "detail": "the Recent folder: target path, volume and times"
+        },
+        {
+          "name": "Jump Lists",
+          "detail": "recent items per application"
+        },
+        {
+          "name": "ShellBags",
+          "detail": "folders browsed, including on removable drives and shares"
+        },
+        {
+          "name": "RecentDocs / OpenSaveMRU",
+          "detail": "files opened or saved per user"
+        }
+      ],
+      "look_for": [
+        "Archives or documents opened from USB drives or network shares",
+        "Folders browsed on other hosts"
+      ]
+    },
+    {
+      "id": "win-initial-access",
+      "platform": "windows",
+      "category": "Initial access",
+      "icon": "download",
+      "question": "Where did it come from?",
+      "why": "The way in (a download, an e-mail attachment) tells you what else may have been sent and to whom.",
+      "searches": [
+        {
+          "label": "Browser history",
+          "query": "artifact:browser"
+        },
+        {
+          "label": "Files downloaded from the internet (Mark of the Web)",
+          "query": "artifact:motw"
+        }
+      ],
+      "views": [
+        {
+          "label": "Browser History",
+          "target": "artifacts",
+          "artifact_type": "browser"
+        },
+        {
+          "label": "MOTW / Downloaded Files",
+          "target": "artifacts",
+          "artifact_type": "motw"
+        },
+        {
+          "label": "Email Artifacts",
+          "target": "artifacts",
+          "artifact_type": "email"
+        }
+      ],
+      "sources": [
+        {
+          "name": "Browser history",
+          "detail": "visited URLs and downloads"
+        },
+        {
+          "name": "Zone.Identifier",
+          "detail": "Mark of the Web stream with the source URL"
+        },
+        {
+          "name": "E-mail",
+          "detail": "attachments and links"
+        },
+        {
+          "name": "Office",
+          "detail": "trust records and alerts when macros were enabled"
+        }
+      ],
+      "look_for": [
+        "Executables, scripts, ISO or archive files downloaded shortly before the first execution",
+        "Documents whose macros were enabled"
+      ]
+    },
+    {
+      "id": "win-usb",
+      "platform": "windows",
+      "category": "Devices",
+      "icon": "usb",
+      "question": "Were USB devices used?",
+      "why": "USB devices can bring malware in or take data out.",
+      "searches": [
+        {
+          "label": "USB devices",
+          "query": "artifact:usb"
+        }
+      ],
+      "views": [
+        {
+          "label": "USB",
+          "target": "artifacts",
+          "artifact_type": "usb"
+        }
+      ],
+      "sources": [
+        {
+          "name": "setupapi.dev.log",
+          "detail": "first connection of each device"
+        },
+        {
+          "name": "USBSTOR / MountedDevices",
+          "detail": "SYSTEM hive: device, serial, drive letter"
+        },
+        {
+          "name": "Partition/Diagnostic",
+          "detail": "connection events with volume details"
+        }
+      ],
+      "look_for": [
+        "Devices first seen during the incident window",
+        "LNK files pointing at removable drives"
+      ]
+    },
+    {
+      "id": "win-deleted",
+      "platform": "windows",
+      "category": "Deletion",
+      "icon": "trash",
+      "question": "What was deleted?",
+      "why": "Deletion often follows staging or covers tracks; the file system remembers more than the Recycle Bin.",
+      "searches": [
+        {
+          "label": "Recycle Bin",
+          "query": "artifact:recycle_bin"
+        }
+      ],
+      "views": [
+        {
+          "label": "MFT",
+          "target": "artifacts",
+          "artifact_type": "mft"
+        },
+        {
+          "label": "NTFS / USN Journal",
+          "target": "artifacts",
+          "artifact_type": "ntfs"
+        },
+        {
+          "label": "Recycle Bin",
+          "target": "artifacts",
+          "artifact_type": "recycle_bin"
+        }
+      ],
+      "sources": [
+        {
+          "name": "MFT",
+          "detail": "every file record, including deleted ones"
+        },
+        {
+          "name": "USN Journal",
+          "detail": "create, rename and delete operations"
+        },
+        {
+          "name": "Recycle Bin",
+          "detail": "$I files with the original path and deletion time"
+        }
+      ],
+      "look_for": [
+        "Tools and archives deleted after use",
+        "Mass renames (ransomware)"
+      ]
+    },
+    {
+      "id": "win-evasion",
+      "platform": "windows",
+      "category": "Defence evasion",
+      "icon": "eye-off",
+      "question": "Were the tracks covered?",
+      "why": "Cleared logs and disabled defences are strong signs of hands-on-keyboard activity.",
+      "searches": [
+        {
+          "label": "Event logs cleared (Security 1102, System 104)",
+          "query": "(eventid:1102 OR eventid:104) AND provider:*Eventlog*"
+        },
+        {
+          "label": "Defender detections and configuration",
+          "query": "artifact:defender"
+        }
+      ],
+      "views": [
+        {
+          "label": "Defender",
+          "target": "artifacts",
+          "artifact_type": "defender"
+        },
+        {
+          "label": "Detections",
+          "target": "detections"
+        }
+      ],
+      "sources": [
+        {
+          "name": "1102 / 104",
+          "detail": "Security / System log cleared (provider Microsoft-Windows-Eventlog)"
+        },
+        {
+          "name": "Defender",
+          "detail": "1116/1117 detections, 5001 real-time protection disabled"
+        },
+        {
+          "name": "4719",
+          "detail": "audit policy changed"
+        }
+      ],
+      "look_for": [
+        "Log clearing shortly after suspicious logons",
+        "Defender disabled or exclusions added"
+      ]
+    },
+    {
+      "id": "win-network",
+      "platform": "windows",
+      "category": "Network",
+      "icon": "globe",
+      "question": "What did it connect to?",
+      "why": "Outbound connections reveal command-and-control servers and exfiltration.",
+      "searches": [
+        {
+          "label": "Sysmon network connections",
+          "query": "eventid:3 AND channel:*Sysmon*"
+        },
+        {
+          "label": "Sysmon DNS queries",
+          "query": "eventid:22 AND channel:*Sysmon*"
+        }
+      ],
+      "views": [
+        {
+          "label": "DNS",
+          "target": "artifacts",
+          "artifact_type": "dns"
+        },
+        {
+          "label": "Network",
+          "target": "artifacts",
+          "artifact_type": "network"
+        }
+      ],
+      "sources": [
+        {
+          "name": "Sysmon 3 / 22",
+          "detail": "network connections and DNS queries per process"
+        },
+        {
+          "name": "Windows Firewall log",
+          "detail": "allowed and dropped connections"
+        }
+      ],
+      "look_for": [
+        "Rare domains or direct connections to IP addresses",
+        "Scripting engines or Office making network connections"
+      ]
+    },
+    {
+      "id": "linux-auth",
+      "platform": "linux",
+      "category": "Accounts",
+      "icon": "user-check",
+      "question": "Who logged in, and who tried?",
+      "why": "On Linux, SSH logins and failures are the most common way in, and brute force leaves a clear trail.",
+      "searches": [
+        {
+          "label": "Failed logins",
+          "query": "artifact:linux_auth AND action:login_failure"
+        },
+        {
+          "label": "Successful logins",
+          "query": "artifact:linux_auth AND action:login_success"
+        },
+        {
+          "label": "SSH brute force (too many attempts)",
+          "query": "linux.event_action:max_auth_attempts"
+        }
+      ],
+      "views": [
+        {
+          "label": "Auth Logs",
+          "target": "artifacts",
+          "artifact_type": "linux_auth"
+        },
+        {
+          "label": "Lastlog",
+          "target": "artifacts",
+          "artifact_type": "linux_lastlog"
+        },
+        {
+          "label": "Linux Authentication",
+          "target": "linux-authentication"
+        }
+      ],
+      "sources": [
+        {
+          "name": "auth.log / secure",
+          "detail": "SSH, sudo and su"
+        },
+        {
+          "name": "wtmp / btmp",
+          "detail": "logins and reboots / failed logins, with exact times"
+        },
+        {
+          "name": "lastlog",
+          "detail": "last login of every account"
+        }
+      ],
+      "look_for": [
+        "Bursts of failures from one address followed by a success",
+        "Logins as root",
+        "Accounts that never log in suddenly doing so"
+      ]
+    },
+    {
+      "id": "linux-privilege",
+      "platform": "linux",
+      "category": "Privilege use",
+      "icon": "key",
+      "question": "What was run as root?",
+      "why": "sudo and su show which account became root and what it ran.",
+      "searches": [
+        {
+          "label": "sudo commands",
+          "query": "linux.event_action:sudo_command"
+        },
+        {
+          "label": "sudo commands run as root",
+          "query": "runas:root AND linux.event_action:sudo_command"
+        }
+      ],
+      "views": [
+        {
+          "label": "Auth Logs",
+          "target": "artifacts",
+          "artifact_type": "linux_auth"
+        },
+        {
+          "label": "Sudoers",
+          "target": "artifacts",
+          "artifact_type": "linux_sudoers"
+        }
+      ],
+      "sources": [
+        {
+          "name": "auth.log",
+          "detail": "sudo lines: user, target account, directory and command"
+        },
+        {
+          "name": "sudoers",
+          "detail": "who may run what as whom"
+        }
+      ],
+      "look_for": [
+        "Service accounts (www-data, mail) using sudo",
+        "sudo to a shell (sudo -i, sudo su -)"
+      ]
+    },
+    {
+      "id": "linux-persistence",
+      "platform": "linux",
+      "category": "Persistence",
+      "icon": "anchor",
+      "question": "How does it survive a reboot?",
+      "why": "Cron jobs, systemd units, preloaded libraries and SSH keys are the usual ways to keep access on Linux.",
+      "searches": [
+        {
+          "label": "Cron jobs",
+          "query": "artifact:linux_cron"
+        },
+        {
+          "label": "Flagged persistence (download-and-run, reverse shells, preloads, PAM)",
+          "query": "artifact:linux_persistence AND (indicator:download_and_run OR indicator:reverse_shell OR indicator:obfuscation OR indicator:preload_library OR indicator:pam_exec OR indicator:auth_always_permit OR indicator:shadowed_command_alias)"
+        }
+      ],
+      "views": [
+        {
+          "label": "Cron",
+          "target": "artifacts",
+          "artifact_type": "linux_cron"
+        },
+        {
+          "label": "Systemd Units",
+          "target": "artifacts",
+          "artifact_type": "linux_systemd"
+        },
+        {
+          "label": "Persistence Config",
+          "target": "artifacts",
+          "artifact_type": "linux_persistence"
+        },
+        {
+          "label": "SSH",
+          "target": "artifacts",
+          "artifact_type": "linux_ssh"
+        }
+      ],
+      "sources": [
+        {
+          "name": "cron",
+          "detail": "/etc/crontab, /etc/cron.*, /var/spool/cron"
+        },
+        {
+          "name": "systemd",
+          "detail": "unit files"
+        },
+        {
+          "name": "rc.local, ld.so.preload, PAM",
+          "detail": "boot scripts, preloaded libraries, authentication modules"
+        },
+        {
+          "name": "Shell start-up",
+          "detail": ".bashrc, /etc/profile.d"
+        },
+        {
+          "name": "SSH",
+          "detail": "authorized_keys"
+        }
+      ],
+      "look_for": [
+        "Jobs running from /tmp, /dev/shm or hidden folders",
+        "curl … | sh",
+        "Keys in authorized_keys nobody can explain"
+      ]
+    },
+    {
+      "id": "linux-commands",
+      "platform": "linux",
+      "category": "Execution",
+      "icon": "terminal",
+      "question": "What commands were typed?",
+      "why": "Shell history is often the most direct record of what an intruder did.",
+      "searches": [
+        {
+          "label": "Downloads with wget",
+          "query": "artifact:linux_shell_history AND command:*wget*"
+        },
+        {
+          "label": "curl, netcat, base64",
+          "query": "artifact:linux_shell_history AND (command:*curl* OR command:*nc* OR command:*base64*)"
+        }
+      ],
+      "views": [
+        {
+          "label": "Shell History",
+          "target": "artifacts",
+          "artifact_type": "linux_shell_history"
+        },
+        {
+          "label": "Command History",
+          "target": "command-history"
+        }
+      ],
+      "sources": [
+        {
+          "name": ".bash_history / .zsh_history",
+          "detail": "commands per user, usually without times"
+        },
+        {
+          "name": "auditd",
+          "detail": "execve records when the audit daemon runs"
+        }
+      ],
+      "look_for": [
+        "Downloads, permission changes (chmod +x), history clearing",
+        "Commands run from /tmp"
+      ]
+    },
+    {
+      "id": "linux-web",
+      "platform": "linux",
+      "category": "Initial access",
+      "icon": "server",
+      "question": "Was the web server attacked?",
+      "why": "Web applications are a frequent way in; decoded requests show payloads and reverse shells.",
+      "searches": [
+        {
+          "label": "Requests carrying base64 payloads",
+          "query": "artifact:linux_apache AND indicator:embedded_base64"
+        },
+        {
+          "label": "Code execution patterns",
+          "query": "indicator:base64_decode OR indicator:eval OR indicator:ip_port_reference"
+        }
+      ],
+      "views": [
+        {
+          "label": "Web Server Logs",
+          "target": "artifacts",
+          "artifact_type": "linux_apache"
+        }
+      ],
+      "sources": [
+        {
+          "name": "access.log / error.log",
+          "detail": "Apache and nginx; requests are decoded and flagged with what they contain"
+        }
+      ],
+      "look_for": [
+        "Requests to unusual scripts (web shells)",
+        "An address and port in a request (reverse shell)",
+        "Errors right before a new process or account"
+      ]
+    },
+    {
+      "id": "linux-packages",
+      "platform": "linux",
+      "category": "Execution",
+      "icon": "package",
+      "question": "What was installed?",
+      "why": "Installed packages show tools brought in by the intruder (scanners, compilers, netcat).",
+      "searches": [
+        {
+          "label": "Packages installed",
+          "query": "pkgaction:install"
+        },
+        {
+          "label": "Common attacker tools",
+          "query": "package:netcat* OR package:nmap* OR package:gcc*"
+        }
+      ],
+      "views": [
+        {
+          "label": "Packages",
+          "target": "artifacts",
+          "artifact_type": "linux_packages"
+        }
+      ],
+      "sources": [
+        {
+          "name": "dpkg.log, apt history.log",
+          "detail": "Debian/Ubuntu"
+        },
+        {
+          "name": "yum.log, dnf.log",
+          "detail": "Red Hat family"
+        }
+      ],
+      "look_for": [
+        "Tools installed during the incident window"
+      ]
+    },
+    {
+      "id": "linux-accounts",
+      "platform": "linux",
+      "category": "Accounts",
+      "icon": "users",
+      "question": "Which accounts exist?",
+      "why": "New or altered accounts are a common way to keep access.",
+      "searches": [
+        {
+          "label": "Users and groups",
+          "query": "artifact:linux_identity"
+        },
+        {
+          "label": "sudoers rules",
+          "query": "artifact:linux_sudoers"
+        }
+      ],
+      "views": [
+        {
+          "label": "Users & Groups",
+          "target": "artifacts",
+          "artifact_type": "linux_identity"
+        },
+        {
+          "label": "Sudoers",
+          "target": "artifacts",
+          "artifact_type": "linux_sudoers"
+        },
+        {
+          "label": "Host Information",
+          "target": "host-information"
+        }
+      ],
+      "sources": [
+        {
+          "name": "/etc/passwd, /etc/group",
+          "detail": "accounts and groups"
+        },
+        {
+          "name": "/etc/shadow",
+          "detail": "only whether a password is set; hashes are never stored"
+        }
+      ],
+      "look_for": [
+        "A second account with UID 0",
+        "Service accounts with a login shell",
+        "New members of sudo or wheel"
+      ]
+    },
+    {
+      "id": "linux-time",
+      "platform": "linux",
+      "category": "Time",
+      "icon": "clock",
+      "question": "Can the times be trusted?",
+      "why": "Syslog lines have no year and most logs have no time zone; Kairon converts them, and says how.",
+      "searches": [
+        {
+          "label": "Lines whose year or zone was inferred",
+          "query": "timequality:inferred_year_host_timezone OR timequality:inferred_year OR timequality:assumed_year_utc OR timequality:assumed_utc"
+        }
+      ],
+      "views": [
+        {
+          "label": "Timeline",
+          "target": "timeline"
+        }
+      ],
+      "sources": [
+        {
+          "name": "Time Quality column",
+          "detail": "how each line's time was obtained"
+        }
+      ],
+      "look_for": [
+        "Check a line's time quality before relying on its exact time"
+      ]
+    }
+  ]
+}

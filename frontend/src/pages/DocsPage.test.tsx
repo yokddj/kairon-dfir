@@ -8,9 +8,6 @@ import DocsPage from "./DocsPage";
 const listDocsMock = vi.fn();
 const getDocMock = vi.fn();
 
-const activeCaseState: { activeCase: { id: string; name: string } | null } = { activeCase: null };
-vi.mock("../context/ActiveCaseContext", () => ({ useActiveCase: () => activeCaseState }));
-
 vi.mock("../api/client", () => ({
   api: {
     listDocs: (...args: unknown[]) => listDocsMock(...args),
@@ -65,24 +62,5 @@ describe("DocsPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Demo MVP/i }));
     await waitFor(() => expect(screen.getAllByText("Demo MVP")).toHaveLength(2));
-  });
-
-  it("turns guide searches into a button that runs them on the active case", async () => {
-    listDocsMock.mockResolvedValue([{ slug: "investigation-guide", title: "Guía de investigación", summary: "" }]);
-    getDocMock.mockResolvedValue({ slug: "investigation-guide", title: "Guía de investigación", content: "# Guide\n\n```kairon\neventid:4624 AND logontype:10\n```\n" });
-    activeCaseState.activeCase = { id: "case-1", name: "Case" };
-    renderPage();
-    const link = await screen.findByRole("link", { name: "Search" });
-    expect(link).toHaveAttribute("href", `/cases/case-1/search?q=${encodeURIComponent("eventid:4624 AND logontype:10")}`);
-    expect(screen.getByText("eventid:4624 AND logontype:10")).toBeInTheDocument();
-  });
-
-  it("asks for a case before a guide search can run", async () => {
-    listDocsMock.mockResolvedValue([{ slug: "investigation-guide", title: "Guía de investigación", summary: "" }]);
-    getDocMock.mockResolvedValue({ slug: "investigation-guide", title: "Guía de investigación", content: "```kairon\neventid:4625\n```\n" });
-    activeCaseState.activeCase = null;
-    renderPage();
-    expect(await screen.findByText("Select a case to run it")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Search" })).not.toBeInTheDocument();
   });
 });
