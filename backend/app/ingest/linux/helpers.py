@@ -147,14 +147,31 @@ _KNOWN_EXTENSIONLESS_LOGS = frozenset({
 })
 
 
+# A folder of logs uploaded as it is (``logs/app.log``, ``collector/log/ns.log.3.gz``) has no
+# /var/log of its own: a directory named "log" or "logs" anywhere in the path counts as one, except
+# in a Windows layout, whose Logs folders are read by the Windows parsers.
+# The same access/error logs in a folder of logs uploaded as it is (logs/nginx/access.log.3.gz).
+_LOOSE_WEB_LOG_RE = re.compile(r"(^|/)(?:apache2?|httpd|nginx)/(?P<name>[^/]*(?:access|error)(?:[._-]log|\.log)[^/]*)$", re.IGNORECASE)
+_LOG_DIR_RE = re.compile(r"(^|/)logs?/", re.IGNORECASE)
+_WINDOWS_LAYOUT_RE = re.compile(
+    r"(^|/)(?:windows|winnt|program files[^/]*|programdata|users|documents and settings|system32|syswow64|appdata|\$recycle\.bin|\$extend)(/|$)|^[a-z]:?/",
+    re.IGNORECASE,
+)
+
+
+def _in_log_folder(path_str: str) -> bool:
+    return bool(_LOG_DIR_RE.search(path_str)) and not _WINDOWS_LAYOUT_RE.search(path_str)
+
+
 def _looks_like_generic_linux_log(path_str: str, name: str) -> bool:
     if _BIN_OR_SHARE_DIR_RE.search(path_str) or _BINARY_OR_UNSUPPORTED_RE.search(path_str):
         return False
-    if not _LOG_ROOTS_RE.search(path_str):
+    in_log_folder = _in_log_folder(path_str)
+    if not _LOG_ROOTS_RE.search(path_str) and not in_log_folder:
         return False
     if _GENERIC_LOG_NAME_RE.search(name):
         return True
-    if not _VAR_LOG_RE.search(path_str):
+    if not _VAR_LOG_RE.search(path_str) and not in_log_folder:
         return False
     if _GENERIC_TXT_NAME_RE.search(name):
         return True
@@ -196,7 +213,7 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
     persistence_type = persistence_kind(path_str)
     if persistence_type:
         return ("linux_persistence", persistence_type, "linux_persistence_raw")
-    apache_match = _APACHE_LOG_RE.search(path_str)
+    apache_match = _APACHE_LOG_RE.search(path_str) or (_LOOSE_WEB_LOG_RE.search(path_str) if _in_log_folder(path_str) else None)
     if apache_match:
         apache_name = apache_match.group("name")
         artifact_type = "apache_error" if "error" in apache_name else "apache_access"

@@ -820,17 +820,17 @@ class TestBsdShellAuditLog:
         assert row["command"] == "ls -la /var/log"
         assert row["timestamp"] is not None
 
-    def test_non_command_lines_in_the_same_file_are_skipped(self):
-        # newsyslog rotation notices and other non-audit lines share the
-        # file but aren't this artifact's actual content.
+    def test_non_command_lines_in_the_same_file_are_kept_without_a_command(self):
+        # newsyslog rotation notices and other lines share the file: they are not commands, but
+        # they are kept (with their time and text) so nothing the file holds is lost.
         from app.ingest.linux.shell_history import parse_bsd_shell_audit_log
         content = (
             "Sep 29 09:00:00 exampleHost newsyslog[1]: logfile turned over due to size>100k\n"
             'Sep 29 09:00:17 <local7.notice> exampleHost bash[20358]: root on (null) shell_command="whoami"\n'
         )
         results = parse_bsd_shell_audit_log(content, source_path="log/bash.log")
-        assert len(results) == 1
-        assert results[0]["command"] == "whoami"
+        assert [row.get("command") for row in results] == [None, "whoami"]
+        assert results[0]["message"] == "logfile turned over due to size>100k" and results[0]["timestamp"] is not None
 
     def test_normalize_file_indexes_commands_as_searchable_events(self, tmp_path):
         from app.ingest.normalizer import normalize_file

@@ -1295,5 +1295,7 @@ export function presentationProfileForItems(items: Record<string, unknown>[]): P
   }
   // A web access line's content already sits in the method, request and status columns, so the
   // message is offered but not shown by default there.
-  return withVisibility(withMessageColumn(profile, !MESSAGE_ALREADY_IN_COLUMNS.has(profile.id)), items);
+  // A shell audit log also holds lines that are not commands; their text is only in the message.
+  const someRowsHaveNoCommand = profile.id === "linux_shell_history" && items.some((item) => !isPresent(firstPresent(item, ["raw.command", "linux.command", "process.command_line"])));
+  return withVisibility(withMessageColumn(profile, !MESSAGE_ALREADY_IN_COLUMNS.has(profile.id) || someRowsHaveNoCommand), items);
 }
