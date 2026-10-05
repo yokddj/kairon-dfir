@@ -10,6 +10,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime
 import hashlib
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -3421,6 +3422,25 @@ def _unwrap_nested_archive(
     return current_dir, current_files, current_entries
 
 
+_GZIP_SINGLE_FILE_RE = re.compile(r"\.gz$", re.IGNORECASE)
+_TAR_GZIP_RE = re.compile(r"\.(?:tar\.gz|tgz)$", re.IGNORECASE)
+# Binary records (wtmp, btmp, lastlog, journals, TZif) are read uncompressed: their .gz copies are
+# still extracted first.
+_BINARY_LINUX_PARSERS = frozenset({"linux_lastlog_raw", "linux_journal_raw", "linux_timezone_raw"})
+_BINARY_LINUX_NAMES_RE = re.compile(r"(^|/)(?:[bw]tmp|utmp|lastlog|localtime)(?:[.-][^/]*)?$|\.journal~?(?:\.gz)?$", re.IGNORECASE)
+
+
+def _is_compressed_linux_log(rel_path: str) -> bool:
+    """A single gzip-compressed text log (not a tar) that its Linux parser reads as it is."""
+    from app.ingest.linux.helpers import looks_like_linux_artifact
+
+    name = Path(rel_path).name
+    if not _GZIP_SINGLE_FILE_RE.search(name) or _TAR_GZIP_RE.search(name) or _BINARY_LINUX_NAMES_RE.search(rel_path):
+        return False
+    found = looks_like_linux_artifact(rel_path)
+    return found is not None and found[2] not in _BINARY_LINUX_PARSERS
+
+
 def _classify_and_dispatch_extracted(
     *,
     db: Session,
@@ -3503,6 +3523,13 @@ def _classify_and_dispatch_extracted(
                 )
                 result_entries.append(entry)
                 result_extracted.append(rel_path)
+
+        elif result.category == EvidenceCategory.ARCHIVE and _is_compressed_linux_log(rel_path):
+            # A rotated log compressed on its own (sh.log.1.gz, auth.log.2.xz) is not a container:
+            # the Linux parsers read it compressed. Extracting it as well left the original in place,
+            # so every line was indexed twice and the copy lost the original path.
+            result_entries.append(entry)
+            result_extracted.append(rel_path)
 
         elif result.category == EvidenceCategory.ARCHIVE:
             if archive_depth >= max_depth:

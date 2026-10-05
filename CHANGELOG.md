@@ -44,6 +44,7 @@
 
 ### Fixed
 
+- Rotated logs compressed on their own (`sh.log.1.gz`, `auth.log.2.gz`) were indexed twice: they were unpacked as nested archives while the original stayed in place and was read too. A gzip text log that a Linux parser recognises is now read once, in place, keeping its original path; tar archives and binary records (wtmp, journals) are still unpacked.
 - A folder of logs uploaded as it is was mostly ignored: generic logs were only read under `var/log` and similar system paths. Logs in any folder named `log` or `logs` are read now (except in Windows layouts), with web-server logs there going to the web parser; and `sh.log`/`bash.log` keep every line, not only the commands in the expected format.
 - Collection evidence (Velociraptor and other ZIP/TAR collections) failed to ingest with "cannot access local variable 'disk_image_materialization'" since 2026-10-01: the platform detection read a value only the disk-image path set.
 - 37 of the 46 documents in the in-app documentation could not be opened: the catalog still pointed at their old locations after the docs were reorganised into folders. Paths are corrected, documents that no longer exist are removed, and a test fails if an entry points at a missing file.
