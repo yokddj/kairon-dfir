@@ -62,10 +62,10 @@ class TestDistributionFileDiscovery:
 
 class TestHostname:
     def test_static_hostname(self):
-        rows = parse_os_info("VulnOSv2\n", source_path="etc/hostname")
+        rows = parse_os_info("Linux-web01\n", source_path="etc/hostname")
         assert len(rows) == 1
         assert rows[0]["fact_type"] == "host.hostname"
-        assert rows[0]["normalized_value"] == "VulnOSv2"
+        assert rows[0]["normalized_value"] == "Linux-web01"
         assert rows[0]["confidence"] == "high"
 
     def test_fqdn_detected_when_dotted(self):
@@ -242,7 +242,7 @@ class TestArchitectureNormalization:
 
 class TestNormalization:
     def test_event_semantics_generic_over_fact_type(self):
-        rows = parse_os_info("VulnOSv2\n", source_path="etc/hostname")
+        rows = parse_os_info("Linux-web01\n", source_path="etc/hostname")
         doc = normalize_row("case-1", "ev-1", "art-1", rows[0], {
             "artifact_family": "linux_os_info", "artifact_type": "hostname",
             "parser": "linux_os_info_raw", "name": "hostname", "source_path": "etc/hostname",
@@ -251,16 +251,16 @@ class TestNormalization:
         assert doc["event"]["type"] == "host.hostname"
         assert doc["event"]["action"] == "host_identity_detected"
         assert doc["event"]["severity"] == "info"
-        assert doc["linux"]["fact_normalized_value"] == "VulnOSv2"
-        assert "VulnOSv2" in doc["search_text"]
+        assert doc["linux"]["fact_normalized_value"] == "Linux-web01"
+        assert "Linux-web01" in doc["search_text"]
 
     def test_host_document_hostname_populated(self):
-        rows = parse_os_info("VulnOSv2\n", source_path="etc/hostname")
+        rows = parse_os_info("Linux-web01\n", source_path="etc/hostname")
         doc = normalize_row("case-1", "ev-1", "art-1", rows[0], {
             "artifact_family": "linux_os_info", "artifact_type": "hostname",
             "parser": "linux_os_info_raw", "name": "hostname", "source_path": "etc/hostname",
         })
-        assert doc["host"]["hostname"] == "vulnosv2"
+        assert doc["host"]["hostname"] == "linux-web01"
 
 
 def _db():
@@ -356,18 +356,18 @@ class TestHostFactsAggregation:
         _evidence(db)
         create_host_fact_observations(
             db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None,
-            documents=_doc("VulnOSv2\n", "etc/hostname"),
+            documents=_doc("Linux-web01\n", "etc/hostname"),
         )
         create_host_fact_observations(
             db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART2_ID, host_id=None, observed_at=None,
-            documents=_doc("Static hostname: vulnosv2\n", "hostnamectl.txt"),
+            documents=_doc("Static hostname: linux-web01\n", "hostnamectl.txt"),
         )
         resolved = resolve_host_facts(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, fact_type="host.hostname")
         assert resolved[0]["status"] == "confirmed"
         assert resolved[0]["conflicting"] == []
         assert len(resolved[0]["supporting"]) == 2
         observed_values = {row["normalized_value"] for row in resolved[0]["observations"]}
-        assert observed_values == {"VulnOSv2", "vulnosv2"}
+        assert observed_values == {"Linux-web01", "linux-web01"}
 
     def test_fqdn_casing_variants_resolve_as_one_identity(self):
         db = _db()
@@ -405,7 +405,7 @@ class TestHostFactsAggregation:
         _evidence(db)
         create_host_fact_observations(
             db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None,
-            documents=_doc("VulnOSv2\n", "etc/hostname"),
+            documents=_doc("Linux-web01\n", "etc/hostname"),
         )
         create_host_fact_observations(
             db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART2_ID, host_id=None, observed_at=None,
@@ -421,7 +421,7 @@ class TestHostFactsAggregation:
         db = _db()
         _case(db)
         _evidence(db)
-        docs = _doc("VulnOSv2\n", "etc/hostname")
+        docs = _doc("Linux-web01\n", "etc/hostname")
         create_host_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None, documents=docs)
         create_host_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None, documents=docs)
         from app.models.host_fact import HostFact
@@ -444,7 +444,7 @@ class TestApiExtension:
         ]
         create_host_fact_observations(
             db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None,
-            documents=_doc("VulnOSv2\n", "etc/hostname") + _doc("5.0.7\n", "etc/debian_version") + timezone_docs,
+            documents=_doc("Linux-web01\n", "etc/hostname") + _doc("5.0.7\n", "etc/debian_version") + timezone_docs,
         )
         client = _client(db)
         response = client.get(f"/api/cases/{CASE_ID}/host-facts", params={"evidence_id": EVIDENCE_ID})

@@ -1,6 +1,6 @@
 """Tests for the disk-image filesystem walker's live-tree guarantees.
 
-Profiling a real ext4 image (Webserver.E01 / VulnOS) found the walker
+Profiling a real ext4 image (Webserver.E01 / Linuxweb) found the walker
 spending ~99.8% of materialization runtime inside directory traversal and
 producing an output where 97% of the files lived at paths that do not
 exist in the filesystem. The cause was a pair of missing rules in

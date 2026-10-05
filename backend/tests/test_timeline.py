@@ -71,7 +71,7 @@ class _FakeDb:
             self.bookmarks.remove(item)
 
 
-def _event_doc(event_id: str, *, ts: str, host: str = "movistar-pc", evidence_id: str = "ev-1", risk: int = 0, artifact_type: str = "process", event_type: str = "process_start", message: str = "event", category: str = "execution"):
+def _event_doc(event_id: str, *, ts: str, host: str = "host-alpha", evidence_id: str = "ev-1", risk: int = 0, artifact_type: str = "process", event_type: str = "process_start", message: str = "event", category: str = "execution"):
     return {
         "id": event_id,
         "kind": "event",
@@ -1011,7 +1011,7 @@ def _mft_event_doc(event_id: str, *, primary_ts: str, primary_precision: str, ma
         "event_type": "file_modified",
         "severity": "info",
         "risk_score": 0,
-        "host": "movistar-pc",
+        "host": "host-alpha",
         "user": None,
         "source_file": "MFTECmd.csv",
         "matched_fields": [],
@@ -1021,7 +1021,7 @@ def _mft_event_doc(event_id: str, *, primary_ts: str, primary_precision: str, ma
             "evidence_id": "ev-1",
             "@timestamp": primary_ts,
             "timestamp_precision": primary_precision,
-            "host": {"name": "movistar-pc"},
+            "host": {"name": "host-alpha"},
             "artifact": {"type": "mft"},
             "event": {"type": "file_modified", "category": "file"},
             "file": {"path": path},

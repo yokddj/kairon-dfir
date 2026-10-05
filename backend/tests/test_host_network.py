@@ -4,7 +4,7 @@ cross-source merge (see app.services.host_network).
 Every source-extraction test feeds the module a FakeOpenSearchClient whose
 canned responses mirror the exact real response shapes captured live
 against the ctf/ws01 (Windows Sysmon + memory netscan) and
-39eabacb.../VulnOSv2 (Linux dhclient) cases during development -- these
+39eabacb.../Linux-web01 (Linux dhclient) cases during development -- these
 are not invented shapes.
 """
 from __future__ import annotations
@@ -242,7 +242,7 @@ class TestLinuxDhclientSource:
     def test_bound_to_line_extracts_ip_and_aggregates_first_last_seen(self, monkeypatch):
         db = _db()
         _case(db)
-        _host(db, canonical_name="vulnosv2")
+        _host(db, canonical_name="linux-web01")
         fake = _FakeSearch({
             "dhclient": _dhclient_hits([
                 ("bound to 192.168.56.102 -- renewal in 471 seconds.", "2026-04-16T15:12:17+00:00"),
@@ -265,7 +265,7 @@ class TestLinuxDhclientSource:
         # the IP via search(), not an anchored match().
         db = _db()
         _case(db)
-        _host(db, canonical_name="vulnosv2")
+        _host(db, canonical_name="linux-web01")
         fake = _FakeSearch({
             "dhclient": _dhclient_hits([
                 ("Apr  3 16:03:37 dhclient: bound to 10.0.2.15 -- renewal in 39557 seconds.", "2026-04-03T18:15:15+00:00"),
@@ -278,7 +278,7 @@ class TestLinuxDhclientSource:
     def test_message_without_timestamp_is_skipped_not_guessed(self, monkeypatch):
         db = _db()
         _case(db)
-        _host(db, canonical_name="vulnosv2")
+        _host(db, canonical_name="linux-web01")
         fake = _FakeSearch({"dhclient": _dhclient_hits([("bound to 192.168.56.102 -- renewal in 471 seconds.", None)])})
         _patch_opensearch(monkeypatch, fake)
         result = get_host_network_observations(db, case_id=CASE_ID, host_id=HOST_ID)
@@ -290,7 +290,7 @@ class TestLinuxDhclientSource:
         # log line.
         db = _db()
         _case(db)
-        _host(db, canonical_name="vulnosv2")
+        _host(db, canonical_name="linux-web01")
         fake = _FakeSearch({"dhclient": _dhclient_hits([("DHCPACK from 192.168.56.1", "2026-04-16T15:12:17+00:00")])})
         _patch_opensearch(monkeypatch, fake)
         result = get_host_network_observations(db, case_id=CASE_ID, host_id=HOST_ID)

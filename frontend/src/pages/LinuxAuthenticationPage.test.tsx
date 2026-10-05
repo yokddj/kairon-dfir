@@ -44,10 +44,10 @@ const response = {
     lastlog_source_ip_count: 2,
     lastlog_supported: true,
   },
-  sessions: [{ id: "s1", username: "mail", source_ip: "192.168.210.131", source_port: 57708, service: "sshd", start: "2026-10-05T13:23:34Z", end: "2026-10-05T13:24:34Z", duration_seconds: 60, status: "complete", confidence: "reconstructed", evidence_sources: ["/var/log/auth.log"] }],
+  sessions: [{ id: "s1", username: "mail", source_ip: "198.51.100.77", source_port: 57708, service: "sshd", start: "2026-10-05T13:23:34Z", end: "2026-10-05T13:24:34Z", duration_seconds: 60, status: "complete", confidence: "reconstructed", evidence_sources: ["/var/log/auth.log"] }],
   failed_authentication: [{ id: "f1", event_time: "2026-02-06T15:16:26Z", event_type: "login_failure", authentication_result: "failure", service: "sshd", process: "sshd", username: "ulysses", attempted_username: "ulysses", source_ip: "192.168.56.1", source_port: 34431, destination_host: "victoria", terminal: "ssh", message: "Failed password for invalid user ulysses", source_file: "/var/log/auth.log", artifact_type: "auth_log", explicit_failure_count: 1, effective_failure_count: 1 }],
   brute_force: [{ id: "bf1", target_account: "ulysses", source_ip: "192.168.56.1", service: "sshd", first_seen: "2026-02-06T15:16:20Z", last_seen: "2026-02-06T15:21:10Z", explicit_failed_events: 32, pam_aggregate_failures: 7, effective_attempts: 32, distinct_usernames: ["ulysses"], distinct_source_ips: ["192.168.56.1"], followed_by_success: false, successful_username: null, time_to_success_seconds: null, status: "suspected" }],
-  last_login: [{ id: "l1", event_time: "2026-10-05T13:23:34Z", event_type: "login_success", authentication_result: "success", service: "login", process: "login", username: "mail", attempted_username: "mail", source_ip: "192.168.210.131", source_port: null, destination_host: "VulnOSv2", terminal: "pts/0", message: "lastlog", source_file: "/var/log/lastlog", artifact_type: "lastlog" }],
+  last_login: [{ id: "l1", event_time: "2026-10-05T13:23:34Z", event_type: "login_success", authentication_result: "success", service: "login", process: "login", username: "mail", attempted_username: "mail", source_ip: "198.51.100.77", source_port: null, destination_host: "Linux-web01", terminal: "pts/0", message: "lastlog", source_file: "/var/log/lastlog", artifact_type: "lastlog" }],
   events: [],
 };
 

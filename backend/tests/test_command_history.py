@@ -356,13 +356,13 @@ def test_linux_shell_history_maps_to_command_history_response_model() -> None:
 def test_linux_shell_history_filtering_and_pagination(monkeypatch) -> None:
     hits = [
         _linux_shell_hit("linux-doc-1", command="whoami", user="root", host="victoria", artifact_id="art-1"),
-        _linux_shell_hit("linux-doc-2", command="vim /etc/passwd", user="root", host="VulnOSv2", artifact_id="art-2", source_file="volume-1/linux/root/.bash_history"),
-        _linux_shell_hit("linux-doc-3", command="cat .psql_history", user="postgres", host="VulnOSv2", artifact_id="art-3", source_file="volume-1/linux/home/postgres/.bash_history"),
+        _linux_shell_hit("linux-doc-2", command="vim /etc/passwd", user="root", host="Linux-web01", artifact_id="art-2", source_file="volume-1/linux/root/.bash_history"),
+        _linux_shell_hit("linux-doc-3", command="cat .psql_history", user="postgres", host="Linux-web01", artifact_id="art-3", source_file="volume-1/linux/home/postgres/.bash_history"),
     ]
     monkeypatch.setattr(command_history, "get_events_index", lambda case_id: f"events-{case_id}")
     monkeypatch.setattr(command_history, "search_documents", lambda *_args, **_kwargs: {"hits": {"hits": hits}})
 
-    filtered = command_history.get_command_history("case-1", {"host": "vulnosv2", "user": "root", "q": "passwd", "family": "linux_shell_history", "source_category": "Disk", "page_size": 1})
+    filtered = command_history.get_command_history("case-1", {"host": "linux-web01", "user": "root", "q": "passwd", "family": "linux_shell_history", "source_category": "Disk", "page_size": 1})
 
     assert filtered["total"] == 1
     assert filtered["items"][0]["command"] == "vim /etc/passwd"

@@ -108,7 +108,7 @@ describe("EventTable network service-log profiles", () => {
     artifact: { type: "linux_apache", family: "linux_apache", parser: "linux_apache_raw", source_path: "volume-1/linux/var/log/apache2/access.log", original_source_path: "/var/log/apache2/access.log" },
     event: { type: "apache_access", action: "GET", outcome: "success", severity: "info", message: "GET /jabc/scripts/update.php?cmd=ls 200" },
     host: { name: "web01" },
-    network: { source_ip: "192.168.210.131" },
+    network: { source_ip: "198.51.100.77" },
     http: { request: { method: "GET" }, response: { status_code: 200 } },
     url: { path: "/jabc/scripts/update.php?cmd=ls" },
     user_agent: { original: "Mozilla/5.0" },
@@ -160,7 +160,7 @@ describe("EventTable network service-log profiles", () => {
     expect(screen.getByRole("columnheader", { name: /Request/i })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: /HTTP Status/i })).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: /Source File/i })).not.toBeInTheDocument();
-    expect(screen.getByText("192.168.210.131")).toBeInTheDocument();
+    expect(screen.getByText("198.51.100.77")).toBeInTheDocument();
     expect(screen.getByText("/jabc/scripts/update.php?cmd=ls")).toBeInTheDocument();
     expect(screen.queryByText("volume-1/linux/var/log/apache2/access.log")).not.toBeInTheDocument();
   });
@@ -206,7 +206,7 @@ describe("EventTable network service-log profiles", () => {
   it("separates semantic details from provenance and keeps raw JSON available", () => {
     render(<EventTable items={[apacheAccess]} view="network" />);
 
-    fireEvent.click(screen.getByText("192.168.210.131"));
+    fireEvent.click(screen.getByText("198.51.100.77"));
 
     expect(screen.getByText("Event")).toBeInTheDocument();
     expect(screen.getByText("Network")).toBeInTheDocument();
