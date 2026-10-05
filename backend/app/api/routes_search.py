@@ -359,10 +359,15 @@ TIMELINE_LOW_VALUE_TYPES = {"file_observed", "generic_record", "process_observed
 SIEM_HISTORY_KEY = "SIEM_QUERY_HISTORY"
 
 
+# The event types the Artifact Views "DNS" view shows (frontend: DNS_EVENT_TYPES in ArtifactExplorer).
+DNS_EVENT_TYPES = ("dns_query", "dns_query_failed", "dns_cache_entry", "dns_config", "sysmon_dns_query")
+
+
 def _empty_search_facets() -> dict:
     facets = {key: {} for key in FACET_FIELDS}
     for source_key, alias in FACET_ALIASES.items():
         facets[alias] = dict(facets.get(source_key) or {})
+    facets["derived"] = {"dns": 0}
     return facets
 
 
@@ -1332,6 +1337,15 @@ def search_facets(
             facets[key] = {}
     for source_key, alias in FACET_ALIASES.items():
         facets.setdefault(alias, dict(facets.get(source_key) or {}))
+    # DNS is a view across artifact types (matched by event.type), so the artifact.type facet
+    # cannot say whether the case has any; count it directly so the UI offers it only when it does.
+    dns_query: dict = {"bool": {"filter": [*scope_filters, {"terms": {"event.type": list(DNS_EVENT_TYPES)}}]}}
+    try:
+        dns_count = int(client.count(index=index, body={"query": dns_query}, params={"ignore_unavailable": "true"}).get("count") or 0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not count DNS events for the facets: %s", exc)
+        dns_count = 0
+    facets["derived"] = {"dns": dns_count}
     return _cache_put(_FACETS_CACHE, cache_key, _FACETS_CACHE_TTL, facets)
 
 
