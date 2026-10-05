@@ -1,14 +1,14 @@
 """The in-app documentation opens, and every search in the investigation guide is valid."""
 from __future__ import annotations
 
-import re
+import json
 
 import pytest
 
 from app.api.routes_system import DOCS_CATALOG, DOCS_ROOT
 from app.search.query_syntax import analyze_query_syntax
 
-GUIDE = DOCS_ROOT / "search-and-investigation" / "investigation-guide.md"
+GUIDE = DOCS_ROOT / "data" / "investigation-guide.json"
 
 
 def _query(text: str) -> str:
@@ -20,21 +20,29 @@ def test_every_catalogued_document_exists(entry):
     assert (DOCS_ROOT / entry["filename"]).is_file(), f"{entry['slug']} points at a missing {entry['filename']}"
 
 
-def test_the_guide_is_in_the_catalog():
-    assert any(entry["filename"] == "search-and-investigation/investigation-guide.md" for entry in DOCS_CATALOG)
-
-
-GUIDE_QUERIES = re.findall(r"```kairon\n(.*?)\n```", GUIDE.read_text(encoding="utf-8"), re.S)
+GUIDE_DATA = json.loads(GUIDE.read_text(encoding="utf-8"))
+GUIDE_QUERIES = [search["query"] for topic in GUIDE_DATA["topics"] for search in topic["searches"]]
+VIEW_TARGETS = {"artifacts", "process-graph", "host-information", "timeline", "command-history", "detections", "linux-authentication"}
 
 
 def test_the_guide_has_searches_for_windows_and_linux():
-    assert len(GUIDE_QUERIES) >= 30
-    assert any("eventid:" in query for query in GUIDE_QUERIES) and any("artifact:linux_" in query for query in GUIDE_QUERIES)
+    platforms = {topic["platform"] for topic in GUIDE_DATA["topics"]}
+    assert platforms == {"windows", "linux"} and len(GUIDE_QUERIES) >= 30
+    assert len({topic["id"] for topic in GUIDE_DATA["topics"]}) == len(GUIDE_DATA["topics"])
 
 
 @pytest.mark.parametrize("query", GUIDE_QUERIES)
 def test_every_search_in_the_guide_is_valid(query):
     _query(query)
+
+
+@pytest.mark.parametrize("topic", GUIDE_DATA["topics"], ids=[topic["id"] for topic in GUIDE_DATA["topics"]])
+def test_every_topic_is_complete_and_links_to_real_views(topic):
+    assert topic["question"] and topic["why"] and topic["searches"] and topic["sources"] and topic["look_for"]
+    for view in topic["views"]:
+        assert view["target"] in VIEW_TARGETS, view
+        if view["target"] == "artifacts":
+            assert view.get("artifact_type"), view  # resolved against the frontend artifact registry by its own test
 
 
 @pytest.mark.parametrize("query, field", [

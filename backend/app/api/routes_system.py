@@ -98,7 +98,6 @@ def _resolve_docs_root() -> Path:
 DOCS_ROOT = _resolve_docs_root()
 DOCS_CATALOG = [
     {"slug": "index", "title": "Índice", "summary": "Qué es la plataforma, flujo de trabajo y mapa de documentación.", "filename": "index.md"},
-    {"slug": "investigation-guide", "title": "Guía de investigación", "summary": "Qué buscar y dónde: ejecución, persistencia, logons, movimiento lateral, Linux… con búsquedas listas para lanzar.", "filename": "search-and-investigation/investigation-guide.md"},
     {"slug": "feature-map", "title": "Feature map", "summary": "Capacidades actuales, estado, rutas, backends, limitaciones y próximos pasos.", "filename": "feature_map.md"},
     {"slug": "parser-coverage", "title": "Parser coverage matrix", "summary": "Cobertura real por familia, formatos, campos normalizados, vistas y limitaciones.", "filename": "artifacts/parser-coverage.md"},
     {"slug": "evidence-platforms", "title": "Evidence platform selection", "summary": "Cómo se guardan provided/detected/effective platform y límites de Windows, Linux, macOS y Other.", "filename": "evidence/evidence-platforms.md"},

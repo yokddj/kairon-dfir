@@ -38,6 +38,7 @@ const Findings = lazy(() => import("./pages/Findings"));
 const Detections = lazy(() => import("./pages/Detections"));
 const SystemPage = lazy(() => import("./pages/SystemPage"));
 const DocsPage = lazy(() => import("./pages/DocsPage"));
+const InvestigationGuidePage = lazy(() => import("./pages/InvestigationGuidePage"));
 const ParserCoveragePage = lazy(() => import("./pages/ParserCoveragePage"));
 const MemoryEvidencePage = lazy(() => import("./pages/MemoryEvidencePage"));
 const WorkbenchOverviewPage = lazy(() => import("./pages/WorkbenchOverviewPage"));
@@ -208,6 +209,7 @@ export default function App() {
                         <Route path="/findings" element={<LegacyCaseRoute suffix="/findings" />} />
                         <Route path="/docs" element={<DocsPage />} />
                         <Route path="/docs/:slug" element={<DocsPage />} />
+                        <Route path="/guide" element={<InvestigationGuidePage />} />
                         <Route path="/parser-coverage" element={<ParserCoveragePage />} />
                         <Route path="/system" element={<SystemPage />} />
                         <Route path="/system/performance" element={<SystemPage />} />
