@@ -44,6 +44,7 @@
 
 ### Fixed
 
+- Collection evidence (Velociraptor and other ZIP/TAR collections) failed to ingest with "cannot access local variable 'disk_image_materialization'" since 2026-10-01: the platform detection read a value only the disk-image path set.
 - 37 of the 46 documents in the in-app documentation could not be opened: the catalog still pointed at their old locations after the docs were reorganised into folders. Paths are corrected, documents that no longer exist are removed, and a test fails if an entry points at a missing file.
 - Thin virtual disks (VMDK, VHD/VHDX, QCOW2, VDI) were refused unless the temp folder could hold their full virtual size, though the temporary RAW copy is written sparse and takes only the image's real data. Preflight and the conversion step now measure that data (`qemu-img map`) and block only when it does not fit, noting the worst case otherwise; in Docker deployments the advice explains how to free space or mount a larger disk at `/app/data/tmp`, since changing `BACKEND_TEMP_DIR` in `.env` does not move it to another disk.
 - Artifact Views offered the DNS view on every case, even with no DNS events; it is offered only when the case has some (the facets now count them), and kept while selected.
