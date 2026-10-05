@@ -91,7 +91,6 @@ jobs:
           KAIRON_PUBLIC_URL=http://localhost:5173
           KAIRON_AUTH_ENABLED=true
           KAIRON_SESSION_SECRET=release-ci-placeholder
-          KAIRON_CSRF_SECRET=release-ci-placeholder
           POSTGRES_PASSWORD=release-ci-placeholder
           OPENSEARCH_INITIAL_ADMIN_PASSWORD=release-ci-placeholder
           KAIRON_ENABLE_MEMORY=false

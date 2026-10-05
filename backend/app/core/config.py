@@ -51,7 +51,6 @@ class Settings(BaseSettings):
     bootstrap_admin_password: str = os.getenv("KAIRON_BOOTSTRAP_ADMIN_PASSWORD", "")
     bootstrap_admin_email: str = os.getenv("KAIRON_BOOTSTRAP_ADMIN_EMAIL", "")
     allowed_origins_env: str = os.getenv("KAIRON_ALLOWED_ORIGINS", "http://localhost:5173")
-    csrf_secret: str = os.getenv("KAIRON_CSRF_SECRET", "CHANGE_ME_CSRF_SECRET")
     # Seals AI provider API keys at rest (app.services.ai.crypto). Falls back
     # to session_secret_key when unset so a fresh deployment works out of the
     # box; rotating either secret invalidates the stored provider keys.
@@ -725,7 +724,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
         if os.getenv("KAIRON_PROFILE") == "release":
-            for field_name in ("session_secret_key", "csrf_secret"):
+            for field_name in ("session_secret_key",):
                 value = getattr(self, field_name, "")
                 if "CHANGE_ME" in str(value):
                     raise ValueError(
