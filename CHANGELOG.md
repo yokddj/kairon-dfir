@@ -43,6 +43,7 @@
 
 ### Fixed
 
+- Thin virtual disks (VMDK, VHD/VHDX, QCOW2, VDI) were refused unless the temp folder could hold their full virtual size, though the temporary RAW copy is written sparse and takes only the image's real data. Preflight and the conversion step now measure that data (`qemu-img map`) and block only when it does not fit, noting the worst case otherwise; in Docker deployments the advice explains how to free space or mount a larger disk at `/app/data/tmp`, since changing `BACKEND_TEMP_DIR` in `.env` does not move it to another disk.
 - Artifact Views offered the DNS view on every case, even with no DNS events; it is offered only when the case has some (the facets now count them), and kept while selected.
 - dpkg.log lines name the right package and versions (`status installed man-db 2.6.7` was read as package "installed"), and package name, version, action and status are indexed and searchable (`package:`, `pkgaction:`).
 - Linux log times are real UTC times. Lines without a zone were read as UTC and syslog-style lines without a year got the current year, so on a 2016 disk image every syslog and auth.log line landed in the ingestion year and hours off. The host's timezone (`/etc/timezone`, `/etc/localtime`) now converts local times, the year is the one in which the machine was running according to `wtmp` (or the file's modification time), and disk images keep file modification times on extraction. `timestamp_status` says what was applied.

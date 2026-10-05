@@ -91,7 +91,7 @@ class VmdkImageAdapter:
         limits = _validate_resource_limits(virtual_size=virtual_size, physical_size=physical)
         if not limits["valid"]:
             return {"format": self.key, "supported": False, **limits}
-        space_check = _check_space_before_convert(virtual_size, workspace)
+        space_check = _check_space_before_convert(virtual_size, workspace, path)
         if not space_check["sufficient"]:
             return {"format": self.key, "supported": False, **space_check}
         output_path = workspace / f"{evidence_id}-vmdk-export.raw"

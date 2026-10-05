@@ -95,14 +95,43 @@ def qemu_img_check(path: Path) -> dict[str, Any]:
     }
 
 
-def _check_space_before_convert(virtual_size: int, workspace_dir: Path) -> dict[str, Any]:
+def allocated_data_bytes(path: Path, *, timeout: int = 300) -> int | None:
+    """Bytes of real data in a virtual disk (``qemu-img map``), or None when they cannot be read.
+
+    ``qemu-img convert`` writes its RAW output sparse: zero and unallocated areas become holes, so
+    on disk the RAW copy takes about this much, not the disk's full virtual size. Reading the map
+    touches metadata only, so it is quick even for large images.
+    """
+    if not _qemu_img_exists():
+        return None
+    try:
+        completed = subprocess.run(["qemu-img", "map", "--output=json", str(path)], capture_output=True, text=True, shell=False, timeout=timeout)
+        if completed.returncode != 0:
+            return None
+        extents = json.loads(completed.stdout or "[]")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if not isinstance(extents, list):
+        return None
+    total = 0
+    for extent in extents:
+        if isinstance(extent, dict) and extent.get("data") and not extent.get("zero"):
+            total += int(extent.get("length") or 0)
+    return total
+
+
+def _check_space_before_convert(virtual_size: int, workspace_dir: Path, image_path: Path | None = None) -> dict[str, Any]:
     workspace_dir.mkdir(parents=True, exist_ok=True)
     try:
         stat = os.statvfs(str(workspace_dir))
         free = stat.f_frsize * stat.f_bavail
     except OSError:
         free = 0
-    estimated_needed = max(virtual_size, 256 * 1024 * 1024)
+    # The RAW copy is written sparse, so it needs room for the image's real data, not its virtual
+    # size; the virtual size is the fallback when the data cannot be measured.
+    data_bytes = allocated_data_bytes(image_path) if image_path is not None else None
+    basis = data_bytes if data_bytes is not None else virtual_size
+    estimated_needed = max(basis, 256 * 1024 * 1024)
     reserve = max(getattr(settings, "disk_image_min_free_space_reserve", 0), 256 * 1024 * 1024)
     if free < estimated_needed + reserve:
         return {
@@ -110,9 +139,11 @@ def _check_space_before_convert(virtual_size: int, workspace_dir: Path) -> dict[
             "free_bytes": free,
             "needed_bytes": estimated_needed,
             "reserve_bytes": reserve,
+            "virtual_size_bytes": virtual_size,
+            "data_bytes": data_bytes,
             "error": "insufficient_free_space",
         }
-    return {"sufficient": True, "free_bytes": free, "needed_bytes": estimated_needed}
+    return {"sufficient": True, "free_bytes": free, "needed_bytes": estimated_needed, "virtual_size_bytes": virtual_size, "data_bytes": data_bytes}
 
 
 def _validate_resource_limits(
