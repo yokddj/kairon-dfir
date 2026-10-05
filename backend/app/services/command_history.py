@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from dateutil import parser as date_parser
+from sqlalchemy.orm import Session
 
 from app.core.opensearch import get_events_index, search_documents
 from app.ingest.normalization.registry_modifications import correlate_registry_commands, detect_registry_command
@@ -79,11 +80,13 @@ BROWSER_LAUNCHERS = {"chrome.exe", "chrome", "msedge.exe", "msedge", "firefox.ex
 INSTALLER_LAUNCHERS = {"setup.exe", "installer.exe", "msiexec.exe", "msiexec"}
 
 
-def get_command_history(case_id: str, params: dict[str, Any]) -> dict[str, Any]:
+def get_command_history(case_id: str, params: dict[str, Any], db: Session | None = None) -> dict[str, Any]:
+    """Disk and memory command history. Pass ``db`` when the caller has a session, so
+    memory commands do not open a second connection."""
     page = max(1, _to_int(params.get("page"), 1) or 1)
     page_size = min(max(_to_int(params.get("page_size"), 100) or 100, 1), 500)
     if wants_memory_source(params):
-        return memory_command_history(None, case_id, {**params, "page": page, "page_size": page_size})
+        return memory_command_history(db, case_id, {**params, "page": page, "page_size": page_size})
     commands: list[dict[str, Any]] = []
     warnings: list[str] = []
     if not wants_memory_source(params):
@@ -99,7 +102,7 @@ def get_command_history(case_id: str, params: dict[str, Any]) -> dict[str, Any]:
         commands = correlate_registry_commands(commands, registry_events)
         commands = [_add_command_source_provenance(item) for item in commands]
     if not wants_non_memory_source(params):
-        memory_payload = memory_command_history(None, case_id, {**params, "page": 1, "page_size": 500})
+        memory_payload = memory_command_history(db, case_id, {**params, "page": 1, "page_size": 500})
         commands.extend(memory_payload.get("items") or [])
     # Filtering has to happen after the merge. Applying it to the disk-derived
     # half only meant memory commands ignored every filter the analyst set:

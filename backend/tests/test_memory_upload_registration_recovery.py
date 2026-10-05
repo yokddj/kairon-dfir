@@ -69,6 +69,7 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     from app.core.config import get_settings
     settings = get_settings()
     monkeypatch.setattr(settings, "backend_data_dir", root)
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     return root
 
 

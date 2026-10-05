@@ -10,6 +10,8 @@ in test_evidence_unified_upload.py and is not re-tested here.
 """
 from __future__ import annotations
 
+import os
+
 import asyncio
 import hashlib
 import io
@@ -58,6 +60,7 @@ def _case(db, *, case_id=CASE_ID):
 def _configure(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr(settings, "backend_max_upload_size", 64 * 1024 * 1024)
     monkeypatch.setattr(settings, "memory_upload_chunk_size_bytes", 16)
     monkeypatch.setattr(settings, "memory_upload_chunk_size_min_bytes", 16)

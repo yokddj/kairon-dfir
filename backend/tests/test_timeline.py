@@ -127,6 +127,7 @@ def test_timeline_filters_by_host_and_evidence(monkeypatch):
 
     monkeypatch.setattr(timeline_service, "search_events_v2", _fake_search)
     monkeypatch.setattr(timeline_service, "search_findings_v2", lambda *args, **kwargs: (0, [], [], []))
+    monkeypatch.setattr(timeline_service, "memory_timeline_items", lambda *_a, **_k: {"items": [], "warnings": [], "undated_count": 0})
 
     response = timeline_service.build_timeline_response(_FakeDb(), "case-1", {"host": "desktop-01", "evidence_id": "ev-2", "include_findings": False, "include_bookmarks": False})
 

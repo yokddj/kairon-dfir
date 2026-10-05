@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -341,7 +342,9 @@ def test_parallel_bulk_ingest_same_host_does_not_fail(tmp_path: Path, monkeypatc
         )
 
     assert all(report["success"] for report in reports)
+    # Host rows are created when the case's hosts are first read, not during ingest.
     with Session() as db:
+        assert [host["canonical_name"] for host in host_identity.get_case_hosts(db, CASE_ID)] == ["pc01"]
         assert db.query(CaseHost).filter(CaseHost.case_id == CASE_ID, CaseHost.canonical_name == "pc01").count() == 1
 
 
@@ -502,7 +505,13 @@ def test_apply_case_host_identity_preserves_observed_name_and_aliases(monkeypatc
         "host": {"name": "desktop-old01"},
         "observed_host": {"name": "desktop-old01"},
     }
-    hydrated = host_identity.apply_case_host_identity(db, CASE_ID, event)
+    # Ingest keeps the name the artifact recorded, so a merge can be undone
+    # without reindexing; the merge applies when events are displayed.
+    indexed = host_identity.apply_case_host_identity(db, CASE_ID, deepcopy(event))
+    assert indexed["host"]["name"] == "desktop-old01"
+    assert indexed["observed_host"]["name"] == "desktop-old01"
+
+    hydrated = host_identity.hydrate_case_host_display(db, CASE_ID, indexed)
 
     assert hydrated["host"]["name"] == "hosta"
     assert "desktop-old01" in hydrated["host"]["aliases"]

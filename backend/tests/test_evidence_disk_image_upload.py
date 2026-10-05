@@ -9,6 +9,8 @@ re-tested here since nothing about it is category-specific.
 """
 from __future__ import annotations
 
+import os
+
 import asyncio
 import hashlib
 from io import BytesIO
@@ -57,6 +59,7 @@ def _case(db, *, case_id=CASE_ID):
 def _configure(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr(settings, "disk_image_ingest_enabled", True)
     monkeypatch.setattr(settings, "backend_max_upload_size", 64 * 1024 * 1024)
     monkeypatch.setattr(settings, "memory_upload_chunk_size_bytes", 16)
@@ -203,12 +206,13 @@ def test_disk_image_upload_rejects_unsupported_format(tmp_path, monkeypatch):
     _configure(monkeypatch, tmp_path)
     db = _db()
     _case(db)
-    # No recognizable signature and no matching extension -> format
+    # No recognizable signature and no matching extension (.bin would
+    # count as a memory-dump extension) -> format
     # detection returns None -> "unknown_format", mirroring
     # routes_evidence.upload_disk_image's same rejection.
     payload = b"plain bytes, unrecognizable, no special extension"
     known_hash = hashlib.sha256(payload).hexdigest()
-    session, info = _create_disk_image_session(db, filename="mystery.bin", expected_size_bytes=len(payload))
+    session, info = _create_disk_image_session(db, filename="mystery.dat", expected_size_bytes=len(payload))
     _upload_all_chunks(db, info.memory_upload_id, payload, info.chunk_size_bytes)
 
     with pytest.raises(MemoryUploadSessionError) as exc_info:

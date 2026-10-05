@@ -311,13 +311,26 @@ def test_process_graph_attaches_sysmon_activity_edges() -> None:
             "process": {"entity_id": "{PROC}", "pid": 2222, "name": "powershell.exe"},
             "dns": {"question": {"name": "example-control.test"}, "query": "example-control.test"},
         },
+        {
+            # Sysmon 13 as the EVTX normalizer indexes it today.
+            "id": "evt-reg",
+            "event_id": "evt-reg",
+            "@timestamp": "2024-03-22T11:20:07Z",
+            "artifact": {"type": "registry_event", "parser": "sysmon_registry"},
+            "event": {"type": "registry_value_set", "message": "Sysmon registry value set: HKLM\\Software\\Run\\Updater"},
+            "host": {"name": "hosta"},
+            "process": {"entity_id": "{PROC}", "pid": 2222, "name": "powershell.exe"},
+            "registry": {"path": "HKLM\\Software\\Run\\Updater"},
+        },
     ]
 
     graph = _build_process_graph(events, "case-1", "ev-1", "evidence")
 
     assert any(node["id"] == "{PROC}" for node in graph["nodes"])
     assert any(node["id"] == "activity:evt-dns" and "dns_activity" in node["badges"] for node in graph["nodes"])
-    assert any(edge["source"] == "{PROC}" and edge["target"] == "activity:evt-dns" and edge["type"] == "activity" for edge in graph["edges"])
+    assert any(edge["source"] == "{PROC}" and edge["target"] == "activity:evt-dns" and edge["type"] == "dns_activity" for edge in graph["edges"])
+    assert any(node["id"] == "activity:evt-reg" and "registry_activity" in node["badges"] for node in graph["nodes"])
+    assert any(edge["source"] == "{PROC}" and edge["target"] == "activity:evt-reg" and edge["type"] == "registry_activity" for edge in graph["edges"])
 
 
 def test_sysmon_file_dns_and_registry_fields_normalize() -> None:
@@ -357,7 +370,8 @@ def test_sysmon_file_dns_and_registry_fields_normalize() -> None:
     assert dns_doc["event"]["type"] == "sysmon_dns_query"
     assert dns_doc["dns"]["question"]["name"] == "example.test"
     assert dns_doc["dns"]["answers"] == ["203.0.113.5", "203.0.113.6"]
-    assert reg_doc["event"]["type"] == "sysmon_registry_value_set"
+    assert reg_doc["event"]["type"] == "registry_value_set"
+    assert reg_doc["artifact"]["type"] == "registry_event"
     assert reg_doc["registry"]["path"].endswith("\\Updater")
     assert reg_doc["registry"]["data"] == "C:\\Temp\\updater.exe"
 

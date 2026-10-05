@@ -335,141 +335,13 @@ def test_probe_does_not_fabricate_identifier_when_volatility_returns_none(db_ses
 # 5. run-all bloqueado antes de crear batch
 # ---------------------------------------------------------------------------
 
-
-def test_run_all_blocked_with_structured_error_when_symbols_missing(db_session) -> None:
-    _case(db_session)
-    _evidence(db_session, WINXP_EVIDENCE_ID, filename="xp-laptop.img")
-    # Recorded requirement but NO cached symbol.
-    _requirement(
-        db_session,
-        evidence_id=WINXP_EVIDENCE_ID,
-        pdb_name="ntkrnlpa.pdb",
-        guid="12345678" * 4,
-        age=3,
-        arch="x86",
-    )
-    # Pre-seed a preparation in the acquisition_failed state so the
-    # preflight hits the failed branch (not the in-progress branch).
-    from app.models.memory import MemorySymbolPreparation
-    preparation = MemorySymbolPreparation(
-        case_id=CASE_ID,
-        evidence_id=WINXP_EVIDENCE_ID,
-        state="acquisition_failed",
-        state_reason="cache_miss",
-        requirement_id=db_session.query(MemorySymbolRequirement).filter(MemorySymbolRequirement.evidence_id == WINXP_EVIDENCE_ID).first().id,
-        attempts=1,
-    )
-    db_session.add(preparation)
-    db_session.commit()
-    before = (
-        db_session.query(MemoryScanRun)
-        .filter(MemoryScanRun.evidence_id == WINXP_EVIDENCE_ID)
-        .count()
-    )
-    with pytest.raises(memory_batch.MemoryBatchError) as excinfo:
-        memory_batch.create_run_all_batch(
-            db_session,
-            case_id=CASE_ID,
-            evidence_id=WINXP_EVIDENCE_ID,
-            mode="missing_or_failed",
-            authorization_acknowledged=True,
-            enqueue_fn=lambda run_id: f"task-{run_id}",
-        )
-    # The new automatic pipeline returns either the legacy error
-    # code or MEMORY_SYMBOL_PREPARATION_IN_PROGRESS.
-    assert excinfo.value.code in {
-        EC_SYMBOLS_REQUIRED,
-        "MEMORY_SYMBOL_PREPARATION_IN_PROGRESS",
-    }
-    assert excinfo.value.status_code == 409
-    assert "evidence_id" in excinfo.value.extra
-    assert db_session.query(MemoryAnalysisBatch).count() == 0
-    # No scan run was created.
-    after = (
-        db_session.query(MemoryScanRun)
-        .filter(MemoryScanRun.evidence_id == WINXP_EVIDENCE_ID)
-        .count()
-    )
-    assert after == before
-
-
 # ---------------------------------------------------------------------------
 # 6. no MemoryScanRun cuando symbols missing
 # ---------------------------------------------------------------------------
 
-
-def test_no_scan_run_is_created_when_run_all_blocked_by_missing_symbols(db_session) -> None:
-    _case(db_session)
-    _evidence(db_session, WINXP_EVIDENCE_ID, filename="xp-laptop.img")
-    _requirement(
-        db_session,
-        evidence_id=WINXP_EVIDENCE_ID,
-        pdb_name="ntkrnlpa.pdb",
-        guid="12345678" * 4,
-        age=3,
-        arch="x86",
-    )
-    initial_runs = db_session.query(MemoryScanRun).count()
-    initial_batches = db_session.query(MemoryAnalysisBatch).count()
-    with pytest.raises(memory_batch.MemoryBatchError):
-        memory_batch.create_run_all_batch(
-            db_session,
-            case_id=CASE_ID,
-            evidence_id=WINXP_EVIDENCE_ID,
-            mode="missing_or_failed",
-            authorization_acknowledged=True,
-            enqueue_fn=lambda run_id: f"task-{run_id}",
-        )
-    assert db_session.query(MemoryScanRun).count() == initial_runs
-    assert db_session.query(MemoryAnalysisBatch).count() == initial_batches
-
-
 # ---------------------------------------------------------------------------
 # 7. error MEMORY_SYMBOLS_REQUIRED
 # ---------------------------------------------------------------------------
-
-
-def test_run_all_returns_memory_symbols_required_error_code(db_session) -> None:
-    _case(db_session)
-    _evidence(db_session, WINXP_EVIDENCE_ID)
-    _requirement(
-        db_session,
-        evidence_id=WINXP_EVIDENCE_ID,
-        pdb_name="ntkrnlpa.pdb",
-        guid="12345678" * 4,
-        age=3,
-        arch="x86",
-    )
-    # Pre-seed a preparation row in the failed state so the
-    # preflight hits the blocked/failed branch.
-    from app.models.memory import MemorySymbolPreparation
-    preparation = MemorySymbolPreparation(
-        case_id=CASE_ID,
-        evidence_id=WINXP_EVIDENCE_ID,
-        state="acquisition_failed",
-        state_reason="cache_miss",
-        requirement_id=db_session.query(MemorySymbolRequirement).filter(MemorySymbolRequirement.evidence_id == WINXP_EVIDENCE_ID).first().id,
-        attempts=1,
-    )
-    db_session.add(preparation)
-    db_session.commit()
-    with pytest.raises(memory_batch.MemoryBatchError) as excinfo:
-        memory_batch.create_run_all_batch(
-            db_session,
-            case_id=CASE_ID,
-            evidence_id=WINXP_EVIDENCE_ID,
-            mode="missing_or_failed",
-            authorization_acknowledged=True,
-            enqueue_fn=lambda run_id: f"task-{run_id}",
-        )
-    # The new automatic pipeline returns either the legacy error
-    # code (when a requirement row exists with a non-preparing
-    # state) or the new MEMORY_SYMBOL_PREPARATION_IN_PROGRESS code.
-    assert excinfo.value.code in {
-        "MEMORY_SYMBOLS_REQUIRED",
-        "MEMORY_SYMBOL_PREPARATION_IN_PROGRESS",
-    }
-
 
 # ---------------------------------------------------------------------------
 # 8. acquisition usa server-side identifier
@@ -701,8 +573,10 @@ def test_failed_acquisition_preserves_missing_state(db_session) -> None:
         evidence_id=WINXP_EVIDENCE_ID,
     )
     assert state.state == STATE_MISSING
-    assert state.can_analyze_metadata is False
-    assert state.can_run_all is False
+    # Symbol state is advisory since analysis runs Volatility directly: a failed
+    # acquisition is reported but does not block analysis.
+    assert state.can_analyze_metadata is True
+    assert state.can_run_all is True
 
 
 # ---------------------------------------------------------------------------
@@ -763,14 +637,16 @@ def test_batch_stops_when_metadata_only_fails_with_symbols_unavailable(db_sessio
     )
     assert result["first_run"] is not None
     assert result["first_run"].profile == "metadata_only"
-    # A single MemoryAnalysisBatch + first MemoryScanRun are created.
+    # One batch; every selected profile gets its run when the batch is created,
+    # metadata_only first.
     assert db_session.query(MemoryAnalysisBatch).count() == 1
     assert (
         db_session.query(MemoryScanRun)
         .filter(MemoryScanRun.evidence_id == WINXP_EVIDENCE_ID)
         .count()
-        == 1
+        == len(result["batch"].requested_profiles)
     )
+    assert result["batch"].requested_profiles[0] == "metadata_only"
 
 
 # ---------------------------------------------------------------------------

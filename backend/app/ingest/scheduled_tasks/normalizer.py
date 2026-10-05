@@ -97,12 +97,27 @@ def normalize_task_action(command: str | None, arguments: str | None, working_di
     }
 
 
+_SERVICE_ACCOUNTS = {"system", "nt authority\\system", "s-1-5-18", "local service", "nt authority\\local service", "s-1-5-19", "network service", "nt authority\\network service", "s-1-5-20"}
+
+
 def _is_system_scope(run_as: str | None, task_path: str | None, source_file: str | None) -> bool:
     lowered = str(run_as or "").strip().lower()
-    if lowered in {"system", "nt authority\\system", "s-1-5-18", "local service", "nt authority\\local service", "network service", "nt authority\\network service"}:
+    if lowered in _SERVICE_ACCOUNTS:
         return True
     blob = f"{task_path or ''} {source_file or ''}".lower()
     return "\\windows\\system32\\tasks\\" in blob or blob.startswith("c:\\windows\\system32\\tasks\\")
+
+
+def _task_scope(*, run_as: str | None, run_as_sid: str | None, user: str | None, command: str | None, task_path: str | None, source_file: str | None) -> str | None:
+    """Who the task runs as. The principal decides; the task's location is only a
+    fallback, because every task is stored under System32\\Tasks."""
+    if str(run_as or "").strip().lower() in _SERVICE_ACCOUNTS or str(run_as_sid or "").strip().lower() in _SERVICE_ACCOUNTS:
+        return "system"
+    if run_as_sid == "S-1-5-4":
+        return "interactive_user"
+    if user or extract_user_from_path(command) or run_as:
+        return "user"
+    return "system" if _is_system_scope(None, task_path, source_file) else None
 
 
 def _task_has_startup_trigger(triggers: list[dict]) -> bool:
@@ -376,7 +391,7 @@ def normalize_scheduled_task_row(document: dict, row: dict, artifact_meta: dict)
             "command": action["command_line"] or action["command"],
             "path": action["command"],
             "enabled": enabled,
-            "scope": "system" if _is_system_scope(run_as_value, task_path, source_file) else "interactive_user" if run_as_sid == "S-1-5-4" else "user" if (resolved_user or extract_user_from_path(action["command"]) or run_as_value) else None,
+            "scope": _task_scope(run_as=run_as_value, run_as_sid=run_as_sid, user=resolved_user, command=action["command"], task_path=task_path, source_file=source_file),
             "user": resolved_user or run_as_value,
             "sid": run_as_sid,
             "confidence": "high" if enabled is True and action["command"] else "medium",

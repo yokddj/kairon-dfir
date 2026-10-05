@@ -142,7 +142,7 @@ def test_large_delete_requires_confirmation_and_keeps_findings() -> None:
             mode="matching",
             case_id=CASE_ID,
             filters={"case_id": CASE_ID},
-            confirm="DELETE DETECTIONS",
+            confirm="DELETE 2 DETECTIONS",
         ),
         db,
     )

@@ -299,6 +299,7 @@ def test_preview_reports_filter_counts_and_includes_marked_events_and_detections
     db = _FakeDb(case=case, findings=[finding], bookmarks=[bookmark], reports=[report], detections=[detection, dismissed], markings=[marking])
     monkeypatch.setattr(report_service, "_build_case_context", lambda db, case_id: {"case": {"id": case_id, "name": "Validation sample"}, "hosts": [{"host": "HOSTA", "events_count": 71033, "findings_count": 1, "high_risk_count": 1}], "evidences": [{"id": "ev-1", "name": "HOSTA.7z", "status": "completed", "storage_mode": "uploaded", "is_external": False, "events_indexed": 71033, "parser_errors": 0, "detected_host": "HOSTA"}], "summary": {"events_indexed": 71033, "findings_total": 1, "findings_high": 1, "parser_errors": 0, "warnings": []}})
     monkeypatch.setattr(report_service, "fetch_event_by_id", lambda *args, **kwargs: _event_payload(host="HOSTA", evidence_id="ev-1"))
+    monkeypatch.setattr(report_service, "get_command_history", lambda *_a, **_k: {"total": 0, "items": []})
 
     preview = report_service.build_case_report_preview(db, "case-1", "report-1")
     section_ids = [section["id"] for section in preview["sections"]]
@@ -371,7 +372,7 @@ def test_preview_and_markdown_include_command_history_and_execution_story(monkey
     monkeypatch.setattr(
         report_service,
         "get_command_history",
-        lambda case_id, params: {
+        lambda case_id, params, **_kwargs: {
             "total": 1,
             "items": [command_item],
             "facets": {"shell": {"powershell": 1}, "family": {"powershell": 1}, "launcher": {"powershell.exe": 1}, "source_type": {"sysmon_1": 1}},

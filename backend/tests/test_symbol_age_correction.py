@@ -28,6 +28,7 @@ from app.models.memory import (
 )
 from app.services.memory.symbol_fetcher import (
     MSF7_SIGNATURE,
+    SymbolFetchError,
     SymbolIdentity,
     read_pdb_identity,
     validate_pdb,
@@ -82,16 +83,16 @@ def _setup_case(db):
     return case.id, evidence.id, run.id
 
 
-def test_validate_pdb_accepts_age_mismatch_when_guid_matches(tmp_path: Path) -> None:
+def test_validate_pdb_rejects_age_mismatch_when_guid_matches(tmp_path: Path) -> None:
+    # Strict since 46815cc: the kernel's RSDS age is authoritative, a re-published
+    # PDB with another age is reported, never accepted silently.
     guid = "9DC3FC69B1CA4B34707EBC57FD1D6126"
     identity = SymbolIdentity("ntkrnlmp.pdb", guid, age=1, architecture="x64")
     pdb = tmp_path / "ntkrnlmp.pdb"
-    _synthetic_pdb(pdb, guid=guid, age=5)  # file has a different (higher) age
-    result = validate_pdb(pdb, identity)
-    assert result["guid"].upper() == guid
-    assert result["expected_age"] == 1
-    assert result["actual_age"] == 5
-    assert result["age_warning"] is True
+    _synthetic_pdb(pdb, guid=guid, age=5)
+    with pytest.raises(SymbolFetchError) as exc:
+        validate_pdb(pdb, identity)
+    assert exc.value.code == "SYMBOL_PDB_IDENTITY_MISMATCH"
 
 
 def test_validate_pdb_accepts_exact_match(tmp_path: Path) -> None:
@@ -100,7 +101,8 @@ def test_validate_pdb_accepts_exact_match(tmp_path: Path) -> None:
     pdb = tmp_path / "ntkrnlmp.pdb"
     _synthetic_pdb(pdb, guid=guid, age=5)
     result = validate_pdb(pdb, identity)
-    assert result["age_warning"] is False
+    assert result["guid"] == guid
+    assert result["age"] == result["expected_age"] == 5
 
 
 def test_validate_pdb_rejects_guid_mismatch(tmp_path: Path) -> None:

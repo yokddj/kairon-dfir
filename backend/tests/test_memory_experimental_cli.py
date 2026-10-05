@@ -62,6 +62,10 @@ class TestExperimentalCli:
     def test_register_experimental_candidate_happy_path(
         self, db_session, cli_test_env, monkeypatch
     ):
+        from app.core.config import get_settings
+
+        # Settings are cached before this module's env default can apply.
+        monkeypatch.setattr(get_settings(), "memory_symbol_experimental_mismatch_enabled", True)
         from app.models.case import Case
         from app.models.evidence import Evidence, EvidenceType
         from app.models.memory import (

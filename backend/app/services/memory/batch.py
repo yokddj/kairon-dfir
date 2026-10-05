@@ -435,8 +435,9 @@ def advance_batch(
 ) -> MemoryAnalysisBatch | None:
     """Called by the worker after a run reaches a terminal state.
 
-    Updates the batch state, advances the pointer and (optionally)
-    enqueues the next profile.  The function is idempotent: a second
+    Updates the batch state and advances the pointer.  Every profile run
+    is enqueued when the batch is created, so nothing is enqueued here;
+    ``enqueue_fn`` is kept for callers.  The function is idempotent: a second
     call with the same run has no effect.  The runtime-safety
     fields (``version``, ``last_advanced_run_id``) protect against
     duplicate callbacks from the worker.

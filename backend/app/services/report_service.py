@@ -1694,7 +1694,7 @@ def _build_command_history_report_context(db: Session, case: Case, case_id: str,
     only_suspicious = bool(filters.get("command_only_suspicious", True))
     if only_suspicious and not command_marking_status:
         params["only_suspicious"] = True
-    result = get_command_history(case_id, params)
+    result = get_command_history(case_id, params, db=db)
     all_commands = list(result.get("items") or [])
     marking_map = _command_marking_map(db, case_id, filters)
     selected: list[dict[str, Any]] = []

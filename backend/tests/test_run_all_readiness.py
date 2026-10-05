@@ -102,38 +102,6 @@ def test_1_run_all_rejected_when_flag_disabled(db: Session) -> None:
     finally:
         settings.memory_run_all_enabled = True
 
-
-def test_2_run_all_rejected_when_preparation_not_ready(db: Session, monkeypatch) -> None:
-    """When the effective state is not 'ready', returns MEMORY_PREPARATION_NOT_READY."""
-    from app.api.routes_memory import post_run_all_batch
-    case = _make_case(db)
-    ev = _make_evidence(db, case.id)
-
-    # Force the effective state to be 'verifying' (i.e. not ready).
-    monkeypatch.setattr(
-        sp,
-        "resolve_effective_memory_preparation_state",
-        lambda db, *, case_id, evidence_id: {
-            "effective_state": "verifying",
-            "preparation_id": None,
-            "source_of_truth": "stub",
-        },
-    )
-    with pytest.raises(HTTPException) as exc:
-        post_run_all_batch(
-            case_id=case.id,
-            evidence_id=ev.id,
-            payload={
-                "mode": "missing_or_failed",
-                "authorization_acknowledged": True,
-            },
-            db=db,
-        )
-    assert exc.value.status_code == 409
-    assert exc.value.detail["error_code"] == "MEMORY_PREPARATION_NOT_READY"
-    assert exc.value.detail["effective_state"] == "verifying"
-
-
 def test_3_run_all_authorization_required_even_when_ready(db: Session, monkeypatch) -> None:
     """Even when preparation is ready, authorization_acknowledged is still required."""
     from app.api.routes_memory import post_run_all_batch
@@ -238,90 +206,8 @@ def test_4_run_all_proceeds_when_flag_enabled_and_preparation_ready(
     assert result["state"] == "queued"
     assert result["total_profiles"] == 2
 
-
-def test_5_run_all_rejects_preparation_state_registering(db: Session, monkeypatch) -> None:
-    """The 'registering' state is also not-ready."""
-    from app.api.routes_memory import post_run_all_batch
-    case = _make_case(db)
-    ev = _make_evidence(db, case.id)
-
-    monkeypatch.setattr(
-        sp,
-        "resolve_effective_memory_preparation_state",
-        lambda db, *, case_id, evidence_id: {
-            "effective_state": "registering",
-            "preparation_id": None,
-            "source_of_truth": "stub",
-        },
-    )
-    with pytest.raises(HTTPException) as exc:
-        post_run_all_batch(
-            case_id=case.id,
-            evidence_id=ev.id,
-            payload={"mode": "missing_or_failed", "authorization_acknowledged": True},
-            db=db,
-        )
-    assert exc.value.status_code == 409
-    assert exc.value.detail["error_code"] == "MEMORY_PREPARATION_NOT_READY"
-    assert exc.value.detail["effective_state"] == "registering"
-
-
-def test_6_run_all_rejects_preparation_state_failed(db: Session, monkeypatch) -> None:
-    """The 'failed' state is also not-ready."""
-    from app.api.routes_memory import post_run_all_batch
-    case = _make_case(db)
-    ev = _make_evidence(db, case.id)
-
-    monkeypatch.setattr(
-        sp,
-        "resolve_effective_memory_preparation_state",
-        lambda db, *, case_id, evidence_id: {
-            "effective_state": "failed",
-            "preparation_id": "prep-failed",
-            "source_of_truth": "stub",
-        },
-    )
-    with pytest.raises(HTTPException) as exc:
-        post_run_all_batch(
-            case_id=case.id,
-            evidence_id=ev.id,
-            payload={"mode": "missing_or_failed", "authorization_acknowledged": True},
-            db=db,
-        )
-    assert exc.value.status_code == 409
-    assert exc.value.detail["error_code"] == "MEMORY_PREPARATION_NOT_READY"
-    assert exc.value.detail["preparation_id"] == "prep-failed"
-
-
 def test_7_run_all_flag_default_is_true() -> None:
     """The memory_run_all_enabled flag defaults to True after sprint 1 reset."""
     # The flag was set to False in sprint 1, then reactivated in
     # sprint 3 when the preparation state machine was added.
     assert settings.memory_run_all_enabled is True
-
-
-def test_8_run_all_returns_409_not_400_when_not_ready(db: Session, monkeypatch) -> None:
-    """The not-ready state is 409 (state), not 400 (input)."""
-    from app.api.routes_memory import post_run_all_batch
-    case = _make_case(db)
-    ev = _make_evidence(db, case.id)
-
-    monkeypatch.setattr(
-        sp,
-        "resolve_effective_memory_preparation_state",
-        lambda db, *, case_id, evidence_id: {
-            "effective_state": "pending",
-            "preparation_id": None,
-            "source_of_truth": "stub",
-        },
-    )
-    with pytest.raises(HTTPException) as exc:
-        post_run_all_batch(
-            case_id=case.id,
-            evidence_id=ev.id,
-            payload={"mode": "missing_or_failed", "authorization_acknowledged": True},
-            db=db,
-        )
-    # 409 means the resource is in a state that prevents the
-    # action, which is what we want for "preparation not ready".
-    assert exc.value.status_code == 409

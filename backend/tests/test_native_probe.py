@@ -20,6 +20,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
@@ -370,7 +371,7 @@ class TestNativeProbeReadiness:
         assert readiness.native_compatibility_reason == "VOLATILITY_NATIVE_SYMBOL_COMPATIBLE"
         assert readiness.exact_match is False
 
-    def test_incompatible_probe_keeps_blocked(self, db_session, monkeypatch):
+    def test_incompatible_probe_is_not_native_compatible(self, db_session, monkeypatch):
         db, tmp = db_session
         monkeypatch.setenv("MEMORY_NATIVE_PROBE_ENABLED", "true")
         from app.core.config import get_settings
@@ -396,10 +397,12 @@ class TestNativeProbeReadiness:
         from app.services.memory.symbol_preparation import compute_memory_readiness
 
         readiness = compute_memory_readiness(db, evidence=ev)
-        assert readiness.can_analyze_metadata is False
+        # Readiness is advisory (Volatility resolves symbols itself), but an
+        # incompatible probe must never be reported as native compatible.
+        assert readiness.can_analyze_metadata is True
         assert readiness.native_compatible is False
 
-    def test_name_mismatch_remains_blocked(self, db_session, monkeypatch):
+    def test_probe_for_another_requirement_does_not_count(self, db_session, monkeypatch):
         db, tmp = db_session
         monkeypatch.setenv("MEMORY_NATIVE_PROBE_ENABLED", "true")
         from app.core.config import get_settings
@@ -427,8 +430,8 @@ class TestNativeProbeReadiness:
         from app.services.memory.symbol_preparation import compute_memory_readiness
 
         readiness = compute_memory_readiness(db, evidence=ev)
-        # Should be blocked because the probe was for req, not req2
-        assert readiness.can_analyze_metadata is False
+        # The compatible probe was for req, not req2, so it must not count.
+        assert readiness.native_compatible is False
 
     def test_requirement_age_unchanged(self, db_session, monkeypatch):
         db, tmp = db_session
@@ -481,8 +484,12 @@ class TestNativeProbeCLI:
         _preparation(db, ev, state="blocked_symbols", requirement_id=req.id)
         db.commit()
 
+        from app.cli import memory_symbols
         from app.cli.memory_symbols import cmd_native_probe
         import argparse
+
+        # The CLI binds SessionLocal at import time; point it at this test's database.
+        monkeypatch.setattr(memory_symbols, "SessionLocal", sessionmaker(bind=db.get_bind(), future=True))
 
         args = argparse.Namespace(
             case_id=case.id,
@@ -787,13 +794,14 @@ class TestStockParity:
         assert "windows.malfind.Malfind" not in NATIVE_PROBE_ALLOWED_PLUGINS
         assert "windows.cmdline.CmdLine" not in NATIVE_PROBE_ALLOWED_PLUGINS
 
-    def test_evidence_path_falls_back_to_stored_path(self, db_session, monkeypatch):
+    def test_evidence_outside_managed_storage_is_refused(self, db_session, monkeypatch):
+        # The probe only opens evidence inside the managed evidence store; a
+        # stored_path pointing anywhere else is never used as a fallback.
         monkeypatch.setenv("MEMORY_NATIVE_PROBE_ENABLED", "true")
 
         db, tmp = db_session
         case = _case(db)
         ev = _evidence(db, case.id)
-        # Create staging directory so path.exists() passes
         staging = tmp / "staging"
         staging.mkdir(parents=True, exist_ok=True)
         (staging / "test.raw").write_text("fake mem dump")
@@ -802,10 +810,11 @@ class TestStockParity:
         db.add(ev)
         db.commit()
 
-        from app.services.memory.native_probe import _canonical_evidence_path
-        path = _canonical_evidence_path(db, ev.id)
-        assert path is not None
-        assert "staging" in str(path)
+        from app.services.memory.native_probe import NativeProbeError, _canonical_evidence_path
+
+        with pytest.raises(NativeProbeError) as exc:
+            _canonical_evidence_path(db, ev.id)
+        assert exc.value.code == "NATIVE_PROBE_EVIDENCE_FILE_MISSING"
 
 
 # ---------------------------------------------------------------------------

@@ -1711,7 +1711,7 @@ def test_memory_scan_rejects_non_memory_evidence(db_session, monkeypatch: pytest
 def test_memory_scan_external_execution_disabled_rejects_without_run(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     _case(db_session)
     evidence = _evidence(db_session)
-    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=False))
+    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=False, memory_execution_mode="external_command"))
 
     with pytest.raises(Exception) as exc_info:
         routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(), case_id=evidence.case_id, db=db_session)

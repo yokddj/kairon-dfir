@@ -323,6 +323,20 @@ def _node_matches_event_path(node: dict, event: dict) -> bool:
     return bool(node_name and event_process_name and node_name == event_process_name)
 
 
+# Sysmon 12/13/14 are indexed with the generic registry names (the same ones Security
+# 4657 gets); the sysmon_* names are what older indexes hold.
+REGISTRY_ACTIVITY_EVENT_TYPES = frozenset(
+    {
+        "registry_key_created_or_deleted",
+        "registry_value_set",
+        "registry_key_or_value_renamed",
+        "sysmon_registry_key_event",
+        "sysmon_registry_value_set",
+        "sysmon_registry_key_renamed",
+    }
+)
+
+
 def _activity_node_payload(event: dict) -> dict | None:
     event_type = str(_nested_get(event, "event.type") or "")
     event_id = str(event.get("id") or event.get("event_id") or "")
@@ -337,7 +351,7 @@ def _activity_node_payload(event: dict) -> dict | None:
     elif event_type in {"sysmon_file_created", "sysmon_file_create_stream_hash", "sysmon_file_deleted"}:
         label = str(_nested_get(event, "file.path") or _nested_get(event, "target.filename") or "File activity")
         badge = "file_activity"
-    elif event_type in {"sysmon_registry_key_event", "sysmon_registry_value_set", "sysmon_registry_key_renamed"}:
+    elif event_type in REGISTRY_ACTIVITY_EVENT_TYPES:
         label = str(_nested_get(event, "registry.path") or _nested_get(event, "registry.key_path") or "Registry activity")
         badge = "registry_activity"
     else:
@@ -371,7 +385,7 @@ def _activity_edge_type(event: dict) -> str:
         return "dns_activity"
     if event_type in {"sysmon_file_created", "sysmon_file_create_stream_hash", "sysmon_file_deleted"}:
         return "file_activity"
-    if event_type in {"sysmon_registry_key_event", "sysmon_registry_value_set", "sysmon_registry_key_renamed"}:
+    if event_type in REGISTRY_ACTIVITY_EVENT_TYPES:
         return "registry_activity"
     if event_type in {"sysmon_image_loaded"}:
         return "image_load"
@@ -1201,9 +1215,7 @@ def _process_activity_filter() -> dict:
                             "sysmon_file_created",
                             "sysmon_file_create_stream_hash",
                             "sysmon_file_deleted",
-                            "sysmon_registry_key_event",
-                            "sysmon_registry_value_set",
-                            "sysmon_registry_key_renamed",
+                            *sorted(REGISTRY_ACTIVITY_EVENT_TYPES),
                             "sysmon_dns_query",
                             "sysmon_image_loaded",
                             "sysmon_process_access",

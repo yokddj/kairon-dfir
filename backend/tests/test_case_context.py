@@ -1,55 +1,53 @@
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
-from app.api import routes_cases, routes_findings
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.api import routes_cases, routes_hunting
+from app.core.database import Base
 from app.models.artifact import Artifact
 from app.models.case import Case
+from app.models.case_host import CaseHost
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
 from app.models.finding import Finding, FindingSeverity, FindingStatus
+from app.services import host_identity
 
 
-class FakeQuery:
-    def __init__(self, items):
-        self.items = list(items)
-
-    def filter(self, *_args, **_kwargs):
-        return self
-
-    def order_by(self, *_args, **_kwargs):
-        return self
-
-    def all(self):
-        return list(self.items)
+CASE_ID = "00000000-0000-4000-8000-000000000001"
+EVIDENCE_ID = "00000000-0000-4000-8000-000000000002"
+ARTIFACT_ID = "00000000-0000-4000-8000-000000000003"
+FINDING_1 = "00000000-0000-4000-8000-000000000004"
+FINDING_2 = "00000000-0000-4000-8000-000000000005"
+HOST_IDS = {1: "00000000-0000-4000-8000-000000000006", 2: "00000000-0000-4000-8000-000000000007"}
 
 
-class FakeDb:
-    def __init__(self, *, case: Case, evidences: list[Evidence], artifacts: list[Artifact], findings: list[Finding]):
-        self.case = case
-        self.evidences = evidences
-        self.artifacts = artifacts
-        self.findings = findings
-
-    def get(self, model, identifier):
-        if model is Case and identifier == self.case.id:
-            return self.case
-        return None
-
-    def query(self, model):
-        if model is Evidence:
-            return FakeQuery(self.evidences)
-        if model is Artifact:
-            return FakeQuery(self.artifacts)
-        if model is Finding:
-            return FakeQuery(self.findings)
-        return FakeQuery([])
+@pytest.fixture
+def db():
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
+    session = sessionmaker(bind=engine)()
+    # Host attribution is cached per case id for 30 s; every test reuses CASE_ID.
+    host_identity._host_attribution_cache.clear()
+    routes_cases._SUMMARY_CACHE.clear()
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
 
 
-def test_build_case_context_returns_hosts_and_evidence_summary(monkeypatch):
-    case = Case(id="case-1", name="Hostalpha", status="open", created_at=datetime(2026, 5, 15, tzinfo=UTC), updated_at=datetime(2026, 5, 15, tzinfo=UTC))
+def _store(db, *rows):
+    db.add_all(rows)
+    db.commit()
+
+
+def test_build_case_context_returns_hosts_and_evidence_summary(monkeypatch, db):
+    case = Case(id=CASE_ID, name="Hostalpha", status="open", created_at=datetime(2026, 5, 15, tzinfo=UTC), updated_at=datetime(2026, 5, 15, tzinfo=UTC))
     evidences = [
         Evidence(
-            id="ev-1",
-            case_id="case-1",
+            id=EVIDENCE_ID,
+            case_id=CASE_ID,
             original_filename="collection.zip",
             stored_path="/tmp/collection.zip",
             original_path="/tmp/collection.zip",
@@ -69,10 +67,10 @@ def test_build_case_context_returns_hosts_and_evidence_summary(monkeypatch):
         )
     ]
     artifacts = [
-        Artifact(id="art-1", case_id="case-1", evidence_id="ev-1", name="Proc", artifact_type="process", source_path="/tmp/proc.jsonl", parser="jsonl", record_count=42, status="completed"),
+        Artifact(id=ARTIFACT_ID, case_id=CASE_ID, evidence_id=EVIDENCE_ID, name="Proc", artifact_type="process", source_path="/tmp/proc.jsonl", parser="jsonl", record_count=42, status="completed"),
     ]
     findings = [
-        Finding(id="f-1", case_id="case-1", title="Office spawned PowerShell", severity=FindingSeverity.high, status=FindingStatus.new, evidence_id="ev-1", related_hosts=["desktop-01"]),
+        Finding(id=FINDING_1, case_id=CASE_ID, title="Office spawned PowerShell", severity=FindingSeverity.high, status=FindingStatus.new, evidence_id=EVIDENCE_ID, related_hosts=["desktop-01"]),
     ]
     monkeypatch.setattr(
         routes_cases,
@@ -86,22 +84,24 @@ def test_build_case_context_returns_hosts_and_evidence_summary(monkeypatch):
     monkeypatch.setattr(routes_cases, "count_detections", lambda db, case_id: 0)
     monkeypatch.setattr(routes_cases, "count_findings", lambda db, case_id: 1)
 
-    context = routes_cases._build_case_context(FakeDb(case=case, evidences=evidences, artifacts=artifacts, findings=findings), "case-1")
+    _store(db, case, *evidences, *artifacts, *findings)
+    context = routes_cases._build_case_context(db, CASE_ID)
 
-    assert context["case"].id == "case-1"
+    assert context["case"]["id"] == CASE_ID
     assert context["summary"]["events_indexed"] == 42
-    assert context["hosts"][0]["host"] == "desktop-01"
+    assert [host["canonical_name"] for host in context["hosts"]] == ["desktop-01"]
     assert context["hosts"][0]["findings_count"] == 1
+    assert context["evidences"][0]["detected_host"] == "desktop-01"
     assert context["evidences"][0]["storage_mode"] == "uploaded"
     assert context["evidences"][0]["events_indexed"] == 42
 
 
-def test_build_case_context_handles_unknown_host_without_filename_contamination(monkeypatch):
-    case = Case(id="case-1", name="Noise", status="open", created_at=datetime(2026, 5, 15, tzinfo=UTC), updated_at=datetime(2026, 5, 15, tzinfo=UTC))
+def test_build_case_context_handles_unknown_host_without_filename_contamination(monkeypatch, db):
+    case = Case(id=CASE_ID, name="Noise", status="open", created_at=datetime(2026, 5, 15, tzinfo=UTC), updated_at=datetime(2026, 5, 15, tzinfo=UTC))
     evidences = [
         Evidence(
-            id="ev-1",
-            case_id="case-1",
+            id=EVIDENCE_ID,
+            case_id=CASE_ID,
             original_filename="scheduled_task_regression.xml",
             stored_path="/tmp/scheduled_task_regression.xml",
             original_path="/tmp/scheduled_task_regression.xml",
@@ -124,27 +124,23 @@ def test_build_case_context_handles_unknown_host_without_filename_contamination(
     monkeypatch.setattr(routes_cases, "count_detections", lambda db, case_id: 0)
     monkeypatch.setattr(routes_cases, "count_findings", lambda db, case_id: 0)
 
-    context = routes_cases._build_case_context(FakeDb(case=case, evidences=evidences, artifacts=[], findings=[]), "case-1")
+    _store(db, case, *evidences)
+    context = routes_cases._build_case_context(db, CASE_ID)
 
-    assert context["hosts"][0]["host"] == "unknown"
-    assert context["hosts"][0]["host"] != "scheduled_task_regression.xml"
+    assert context["hosts"] == []
+    assert context["evidences"][0]["detected_host"] is None
+    assert "scheduled_task_regression.xml" not in str(context["hosts"]) + str(context["host_candidates"])
 
 
-def test_list_findings_can_filter_by_host():
-    finding_items = [
-        Finding(id="f-1", case_id="case-1", title="Host one", severity=FindingSeverity.high, status=FindingStatus.new, related_hosts=["desktop-01"]),
-        Finding(id="f-2", case_id="case-1", title="Host two", severity=FindingSeverity.medium, status=FindingStatus.reviewed, related_hosts=["desktop-02"]),
+def test_list_findings_can_filter_by_host(db):
+    case = Case(id=CASE_ID, name="Hosts", status="open")
+    hosts = [CaseHost(id=HOST_IDS[n], case_id=CASE_ID, canonical_name=f"desktop-0{n}", display_name=f"desktop-0{n}") for n in (1, 2)]
+    findings = [
+        Finding(id=FINDING_1, case_id=CASE_ID, title="Host one", severity=FindingSeverity.high, status=FindingStatus.new, related_hosts=["desktop-01"], linked_host_id=HOST_IDS[1]),
+        Finding(id=FINDING_2, case_id=CASE_ID, title="Host two", severity=FindingSeverity.medium, status=FindingStatus.reviewed, related_hosts=["desktop-02"], linked_host_id=HOST_IDS[2]),
     ]
+    _store(db, case, *hosts, *findings)
 
-    class FindingDb:
-        def get(self, model, identifier):
-            if model is Case and identifier == "case-1":
-                return SimpleNamespace(id="case-1")
-            return None
+    results = routes_hunting.hunting_list_findings(CASE_ID, status_filter=None, linked_host_id=HOST_IDS[2], page=1, page_size=100, db=db)
 
-        def query(self, model):
-            return FakeQuery(finding_items)
-
-    results = routes_findings.list_findings("case-1", host="desktop-02", db=FindingDb())
-
-    assert [item.id for item in results] == ["f-2"]
+    assert [item["id"] for item in results["items"]] == [FINDING_2]
