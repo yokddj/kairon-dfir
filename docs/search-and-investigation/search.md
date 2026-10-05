@@ -131,15 +131,74 @@ Default Search hides advanced variants to avoid duplicate-looking results. Use:
 
 when comparing or explicitly investigating advanced parser output.
 
-## Supported field syntax
+## Field syntax
 
-Search supports a safe allowlisted subset:
+Search accepts an allowlisted subset of a query language. It is not full KQL or Lucene; anything it does not understand returns a clear error with examples instead of a wrong result.
 
-- `artifact.type:mft`
-- `process.name:powershell.exe`
-- `file.name:"invoice.docm"`
-- `risk_score>=70`
-- `has:file.path`
-- `NOT artifact.type:mft`
+| Syntax | Example |
+| --- | --- |
+| field and value | `process.name:powershell.exe`, `file.name:"invoice.docm"` |
+| several terms (AND is implicit) | `eventid:4624 logontype:10` |
+| `OR` and parentheses | `(eventid:4624 OR eventid:4625) user:admin` |
+| `NOT` | `NOT artifact.type:mft` |
+| numeric comparison | `risk_score>=70` |
+| field present | `has:file.path` |
+| wildcard | `provider:*Sysmon*`, `package:openssh*` |
 
-It is not full KQL or full Lucene. Invalid syntax should return a clear error.
+A leading wildcard (`*value`) is accepted only on fields where it is useful (paths, command lines, channels, providers, service and task names, file names); elsewhere use a prefix (`value*`). There are limits on the number of `OR` and wildcard clauses so one query cannot overload the index.
+
+### Shortcuts
+
+Short names that expand to the full field(s):
+
+| Shortcut | Searches | Example |
+| --- | --- | --- |
+| `host:` `user:` | host name, user name (Windows and Linux) | `user:root` |
+| `process:` `command:` `exe:` | process name, command line, executable path | `process:sshd` |
+| `file:` `path:` `hash:` | file path/name, any path, SHA-256/SHA-1/MD5 | `hash:<sha256>` |
+| `ip:` `port:` `proto:` | source/destination address, port, protocol | `ip:203.0.113.9` |
+| `domain:` `url:` | DNS, URL and e-mail domains; full URL | `url:*example.test*` |
+| `type:` `artifact:` `parser:` `source:` | event type, artifact type, parser, detection source | `type:logon_failed` |
+| `risk:` `severity:` `status:` | risk score, severity, status | `risk>=70` |
+| `rule:` | rule name, title or id | `rule:mimikatz` |
+
+Windows event logs:
+
+| Shortcut | Field | Example |
+| --- | --- | --- |
+| `eventid:` | event ID | `eventid:4688` |
+| `channel:` | log channel | `channel:Security` |
+| `provider:` | event provider | `provider:*Sysmon*` |
+| `logontype:` | logon type (2 interactive, 3 network, 10 remote desktop…) | `logontype:10` |
+| `service:` | service name (7045, 4697) | `service:*remote*` |
+| `task:` | scheduled task name (4698-4702) | `task:*Update*` |
+
+Event IDs are reused by different logs (4104 is PowerShell, but also other providers): add `channel:` or `provider:` when an ID is ambiguous.
+
+Linux:
+
+| Shortcut | Field | Example |
+| --- | --- | --- |
+| `action:` | event action (login, sudo, ban…) | `jail:sshd action:fail2ban_ban` |
+| `runas:` | target user of sudo/su | `runas:root` |
+| `package:` `pkgaction:` | package name, install/remove/upgrade | `package:openssh* pkgaction:install` |
+| `indicator:` | suspicious-pattern flags on commands, web requests and containers (`reverse_shell`, `embedded_base64`, `ip_port_reference`, `privileged_container`, `secret_access`…) | `indicator:reverse_shell` |
+| `timequality:` | how the timestamp was resolved (see [Linux support](../linux/linux-support.md)) | `timequality:inferred_year` |
+| `verdict:` `jail:` | firewall verdict, fail2ban jail | `verdict:block` |
+| `webserver:` `xff:` | web server, X-Forwarded-For | `webserver:nginx` |
+| `library:` `pam:` | preloaded library, PAM module | `pam:pam_exec.so` |
+| `audit:` `auditkey:` `sysmon:` | auditd type and key, Sysmon for Linux event ID | `auditkey:passwd_changes` |
+| `dbengine:` `database:` `dbcommand:` `sql:` `dbstatus:` `dberror:` | database logs | `sql:*DROP*` |
+| `vpn:` `vpnstatus:` `vpnip:` `vpnconn:` | VPN logs | `vpn:openvpn` |
+| `sender:` `recipient:` `queue:` `mailstatus:` `mailservice:` `relay:` | mail logs | `mailstatus:bounced` |
+| `container:` `image:` `pod:` `stream:` | container logs | `container:web` |
+| `verb:` `resource:` `subresource:` `namespace:` `k8sobject:` `decision:` | Kubernetes audit | `verb:create resource:secrets` |
+| `logformat:` | text log format detected | `logformat:syslog` |
+
+Any `linux.*` field can also be searched by its full name.
+
+The **Investigation Guide** page in the app (sidebar, under Docs) has ready-made searches per question (persistence, logons, lateral movement, sudo…) that run on the active case.
+
+## Result window
+
+Search pages through the first 10,000 results of a query, which is the index's result window. The total is still counted exactly; when a page would go past 10,000 the pager says so instead of failing. Narrow the query (time range, host, artifact) to reach the rest, or sort the other way to see the oldest results first.

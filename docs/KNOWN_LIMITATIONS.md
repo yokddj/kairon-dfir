@@ -10,6 +10,8 @@ This document describes current known limitations. It is intentionally explicit 
 - PECmd is available, but raw Prefetch parsing with PECmd is disabled on Linux when Windows decompression support is required. The internal Prefetch backend remains active.
 - EZ Tools for LNK, Jumplist, Amcache and Shimcache are advanced rebuild backends, not default activation for every case.
 
+- Retrying a problematic artifact that was partly indexed can index its first records again. Kairon offers the retry for a raw EVTX file that stopped partway (from the job report), and event ids are not stable across runs, so the events indexed before the stop appear twice. Prefer reprocessing the whole evidence when duplicates matter; artifacts with nothing indexed are not affected.
+
 ## Search / Timeline
 
 - Search is the primary exploration workspace. Search Timeline is a filtered view of matching events over time.
@@ -25,5 +27,5 @@ This document describes current known limitations. It is intentionally explicit 
 
 - Kairon DFIR should run behind VPN, private network or authenticated reverse proxy.
 - The app does not provide a complete public-facing security boundary by itself.
-- Backups require PostgreSQL and application data at minimum. OpenSearch snapshots are recommended for larger deployments.
+- Backups cover the database, configuration and (full backups) the application data; the search indexes are not backed up and are rebuilt by reprocessing evidence. OpenSearch snapshots are recommended for larger deployments. See [Backup and Restore](deployment/backup-restore.md).
 

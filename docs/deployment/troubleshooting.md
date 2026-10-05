@@ -113,6 +113,27 @@ curl -X PUT http://127.0.0.1:9200/_all/_settings \
 
 Do not lower OpenSearch watermarks as a routine fix. Free disk instead.
 
+## Disk Images: Temporary Storage
+
+VMDK, VHD/VHDX, QCOW2 and VDI images are converted to a temporary RAW copy before they are read. The copy is written sparse, so it takes about the image's real data, not its full virtual size: a 500 GB virtual disk with 40 GB in use needs about 40 GB (plus 15% margin) in the temp directory. The preflight check before processing measures this:
+
+- **Temporary storage is tight** (recommendation): the real data fits, but the full virtual size would not. Processing works on normal Linux/macOS filesystems, which support sparse files.
+- **Temporary storage too low** (blocking): not even the real data fits. Free space or move the temp directory.
+
+The temp directory is `/app/data/tmp` inside the backend and worker containers, which is `./data/tmp` on the host: the same disk as the rest of Kairon's data. Changing `BACKEND_TEMP_DIR` in `.env` does not move it to another disk. To use a larger disk, mount a host folder there with a `docker-compose.override.yml` next to `docker-compose.yml`:
+
+```yaml
+services:
+  backend:
+    volumes:
+      - /path/on/the/large/disk/kairon-tmp:/app/data/tmp
+  worker:
+    volumes:
+      - /path/on/the/large/disk/kairon-tmp:/app/data/tmp
+```
+
+then `docker compose up -d`. Without Docker, set `BACKEND_TEMP_DIR` to a folder on the larger disk and restart the backend and worker.
+
 ## Parser Tooling Missing
 
 Some parsers require optional tooling:

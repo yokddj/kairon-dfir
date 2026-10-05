@@ -72,8 +72,6 @@ report "hardcoded /root/... path outside test fixtures and reviewed defaults" \
   -- . "${FIXTURE_EXCLUDES[@]}" \
   ':!deploy.sh' \
   ':!scripts/deploy_remote.sh' \
-  ':!scripts/backup.sh' \
-  ':!scripts/restore.sh' \
   ':!docs/deployment/deployment-remote.md' \
   ':!docker/memory-worker/Dockerfile' \
   ':!docker/symbol-fetcher/Dockerfile' \

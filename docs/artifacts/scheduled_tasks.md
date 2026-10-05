@@ -38,6 +38,19 @@ The app explicitly distinguishes:
 - task possibly used as persistence
 - task with correlated execution
 
+## Who the task runs as (`persistence.scope`)
+
+Decided by the task's principal, in this order:
+
+- `system`: runs as SYSTEM, LOCAL SERVICE or NETWORK SERVICE (by name or SID).
+- `interactive_user`: runs as whoever is logged on (`GroupId` `S-1-5-4`, INTERACTIVE).
+- `user`: runs as a specific account (`UserId`, or a user profile path in the command).
+- `system` again only when the task names no principal at all and lives in the system task store.
+
+Every task file is stored under `C:\Windows\System32\Tasks`, so the location says nothing about who runs it. Before 2026-10-05 the location was checked first and every task came out as `system`; reprocess the evidence to correct `persistence.scope` on tasks indexed earlier.
+
+A disabled task that has a command still appears in the timeline: its registration date is real, and a task can be disabled after it has been used. It is tagged `disabled`.
+
 ## What Enabled / Hidden mean
 
 - `Enabled=true`: the task is enabled to run

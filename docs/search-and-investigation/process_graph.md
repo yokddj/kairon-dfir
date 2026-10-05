@@ -54,6 +54,18 @@ Activity edges are grouped/collapsed by default:
 
 The advanced graph exposes controls for node caps, activity caps, edge types and diagnostics.
 
+## Where activity comes from
+
+Activity is attached to a process by its GUID (or PID, host and time):
+
+- network: Sysmon 3
+- DNS: Sysmon 22
+- files: Sysmon 11, 15, 23, 26
+- registry: Sysmon 12, 13, 14, and Security 4657 when object-access auditing is on
+- image loads, process access and remote threads: Sysmon 7, 10, 8
+
+A process needs its start event (Sysmon 1 or Security 4688) in the evidence to have a node; activity of processes that were already running when logging began (for example services started at boot) is searchable but has nothing to attach to. Before 2026-10-05 registry activity never attached to processes; no reprocessing is needed, the graph reads the existing events.
+
 ## Limitations
 
 - Parent links depend on available Sysmon/Security/process fields.
