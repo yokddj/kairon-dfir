@@ -17,7 +17,7 @@ The code is on GitHub; what a backup protects is your data: the database (cases,
 
 Each backup goes to `./backups/<UTC timestamp>/` (set `DFIR_BACKUP_ROOT` to change it):
 
-- `postgres.sql`: logical dump of the database
+- `postgres.sql`: PostgreSQL logical dump of the database
 - `env.backup`: copy of `.env`, readable only by its owner (it holds secrets; keep backups on the Kairon host or encrypted media)
 - `app-data.tgz`: `./data` without `data/tmp` and local mounts (`--run` only)
 - `opensearch-indices.json`: list of the search indexes
@@ -31,9 +31,13 @@ If a file changes while `./data` is archived (a log being written), the backup s
 
 - Docker images (rebuilt from the code).
 - Evidence mounted read-only from outside (`/mnt/evidence`, `/data/evidence`, `/cases`): it never leaves its source.
-- The OpenSearch indexes. The search data is derived from the evidence: if it is lost, reprocess the evidence. For large installations, configure an OpenSearch snapshot repository and snapshot the `dfir-events-*` indexes before upgrades.
+- The OpenSearch indexes. The search data is derived from the evidence: if it is lost, reprocess the evidence.
 
-## Restore
+## OpenSearch Snapshots
+
+For large installations, where reprocessing everything would take long, configure an OpenSearch snapshot repository and snapshot the `dfir-events-*` indexes before upgrades; restore them with OpenSearch's own snapshot API after the database.
+
+## Restore Order
 
 ```bash
 ./scripts/restore.sh backups/<timestamp>
