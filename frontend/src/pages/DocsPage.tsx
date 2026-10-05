@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import { api, type DocEntry } from "../api/client";
+import { useActiveCase } from "../context/ActiveCaseContext";
 
 const docSlugByHref: Record<string, string> = {
   "index.md": "index",
@@ -29,6 +30,7 @@ const docSlugByHref: Record<string, string> = {
   "performance.md": "performance",
   "findings_correlation.md": "findings-correlation",
   "search.md": "search",
+  "investigation-guide.md": "investigation-guide",
   "timeline_reports.md": "timeline-reports",
   "process_graph.md": "process-graph",
   "rules_sigma_yara.md": "rules-sigma-yara",
@@ -52,6 +54,26 @@ const docSlugByHref: Record<string, string> = {
   "deployment/beta-vs-demo-mode.md": "beta-vs-demo-mode",
 };
 
+/** A search from the investigation guide, with a button that runs it on the active case. */
+function KaironQuery({ query }: { query: string }) {
+  const { activeCase } = useActiveCase();
+  return (
+    <span className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-abyss/80 p-4">
+      <code className="min-w-0 flex-1 overflow-x-auto font-mono text-sm text-ink">{query}</code>
+      {activeCase ? (
+        <Link
+          to={`/cases/${activeCase.id}/search?q=${encodeURIComponent(query)}`}
+          className="shrink-0 rounded-xl border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs text-accent hover:bg-accent/20"
+        >
+          Search
+        </Link>
+      ) : (
+        <span className="shrink-0 text-xs text-muted">Select a case to run it</span>
+      )}
+    </span>
+  );
+}
+
 function MarkdownContent({ content, onNavigateDoc }: { content: string; onNavigateDoc: (slug: string) => void }) {
   return (
     <ReactMarkdown
@@ -65,8 +87,10 @@ function MarkdownContent({ content, onNavigateDoc }: { content: string; onNaviga
         ol: ({ children }) => <ol className="mt-3 list-decimal space-y-2 pl-6 text-muted">{children}</ol>,
         li: ({ children }) => <li>{children}</li>,
         blockquote: ({ children }) => <blockquote className="mt-4 rounded-2xl border border-line bg-abyss/50 px-4 py-3 text-sm text-muted">{children}</blockquote>,
-        code: ({ inline, children }: any) =>
-          inline ? (
+        code: ({ inline, className, children }: any) =>
+          !inline && String(className || "").includes("language-kairon") ? (
+            <KaironQuery query={String(children).replace(/\n$/, "")} />
+          ) : inline ? (
             <code className="rounded bg-abyss/80 px-1.5 py-0.5 font-mono text-[0.9em] text-accent">{children}</code>
           ) : (
             <code className="block overflow-x-auto rounded-2xl border border-line bg-abyss/80 p-4 font-mono text-sm text-ink">{children}</code>

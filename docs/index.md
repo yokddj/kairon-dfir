@@ -67,6 +67,7 @@ This documentation describes the real state of the platform. Partial capabilitie
 
 ## Linux
 
+- [search-and-investigation/investigation-guide.md](search-and-investigation/investigation-guide.md): what to look for and where (execution, persistence, logons, lateral movement, Linux…), with ready-to-run searches.
 - [linux/linux-support.md](linux/linux-support.md): full Linux support — collection formats, auto-discovery, every parsed family (logs, journal, web servers, databases, mail, VPN, containers, Kubernetes, persistence, configuration), Sigma on Linux logs, and limitations.
 
 ## Memory

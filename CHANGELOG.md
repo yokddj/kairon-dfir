@@ -12,6 +12,7 @@
 
 ### Added
 
+- An investigation guide in the in-app documentation: for common questions (what ran, persistence, logons, lateral movement, PowerShell, USB, deleted files, Linux logins, sudo, cron, web attacks…) it says where the system records the answer, which view shows it, and searches that run on the active case with one click. Windows event fields are searchable: `eventid:`, `logontype:`, `channel:`, `provider:`, `service:`, `task:`.
 - An optional, case-scoped AI assistant with read-only lookups over the case's data; off until an administrator configures a model provider (`docs/operations/ai-assistant.md`).
 - Linux: the binary systemd journal, a generic reader for other text logs (always showing the message), nginx next to Apache, firewall and fail2ban logs, persistence hooks (ld.so.preload, rc.local, PAM, shell start-up files, at jobs), Sysmon for Linux, Kubernetes audit, Docker and Kubernetes container logs and configuration, Postfix/Dovecot mail, MySQL/MariaDB/PostgreSQL, and OpenVPN/strongSwan. Syslog and journal priorities set the severity.
 - Linux events are searchable by their own fields (`linux.*`, and shortcuts such as `ip:`, `process:`, `jail:`, `container:`, `sql:`, `vpn:`), and Artifact Views has a table layout per Linux log family with a message column and click-to-filter cells.
@@ -43,6 +44,7 @@
 
 ### Fixed
 
+- 37 of the 46 documents in the in-app documentation could not be opened: the catalog still pointed at their old locations after the docs were reorganised into folders. Paths are corrected, documents that no longer exist are removed, and a test fails if an entry points at a missing file.
 - Thin virtual disks (VMDK, VHD/VHDX, QCOW2, VDI) were refused unless the temp folder could hold their full virtual size, though the temporary RAW copy is written sparse and takes only the image's real data. Preflight and the conversion step now measure that data (`qemu-img map`) and block only when it does not fit, noting the worst case otherwise; in Docker deployments the advice explains how to free space or mount a larger disk at `/app/data/tmp`, since changing `BACKEND_TEMP_DIR` in `.env` does not move it to another disk.
 - Artifact Views offered the DNS view on every case, even with no DNS events; it is offered only when the case has some (the facets now count them), and kept while selected.
 - dpkg.log lines name the right package and versions (`status installed man-db 2.6.7` was read as package "installed"), and package name, version, action and status are indexed and searchable (`package:`, `pkgaction:`).
