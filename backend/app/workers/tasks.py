@@ -4998,6 +4998,9 @@ def ingest_evidence(evidence_id: str) -> None:
                     break
             return drained
 
+        # Set by the disk-image branch only; collections (Velociraptor or other ZIP/TAR) leave it None,
+        # and the platform detection below reads it for every kind of evidence.
+        disk_image_materialization = None
         if is_selected_velociraptor:
             selected_candidates_source = _selected_velociraptor_candidates(evidence) or []
             supported_selected_candidates = [candidate for candidate in selected_candidates_source if candidate.get("supported")]
@@ -5259,7 +5262,7 @@ def ingest_evidence(evidence_id: str) -> None:
             artifacts = []
 
         extracted_files = [entry["path"] for entry in archive_entries if entry.get("status") == "extracted"]
-        disk_source_map = dict(((disk_image_materialization.source_map if 'disk_image_materialization' in locals() and disk_image_materialization else {}) or {}))
+        disk_source_map = dict(((disk_image_materialization.source_map if disk_image_materialization else {}) or {}))
         if is_selected_velociraptor:
             manifest["stats"]["selected_files_total"] = selective_stats.get("selected_files_total", 0)
             manifest["stats"]["selected_files_extracted"] = selective_stats.get("selected_files_extracted", 0)
