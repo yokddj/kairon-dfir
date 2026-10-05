@@ -519,7 +519,7 @@ describe("ArtifactExplorer", () => {
       "artifact.name": {},
     });
 
-    renderPage("/cases/case-1/artifact-search?host_id=host-linux01&host=vulnosv2");
+    renderPage("/cases/case-1/artifact-search?host_id=host-linux01&host=linux-web01");
 
     expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
     const artifactSelector = await screen.findByLabelText("Artifact view");

@@ -15,7 +15,7 @@ def _doc(message, ts, pid=1):
 
 def test_reconstructs_complete_ssh_session(monkeypatch):
     docs = [
-        _doc("Accepted password for mail from 192.168.210.131 port 57708 ssh2", "2026-10-05T13:23:34+00:00", 3156),
+        _doc("Accepted password for mail from 198.51.100.77 port 57708 ssh2", "2026-10-05T13:23:34+00:00", 3156),
         _doc("pam_unix(sshd:session): session opened for user mail by (uid=0)", "2026-10-05T13:23:34+00:00", 3156),
         _doc("pam_unix(sshd:session): session closed for user mail", "2026-10-05T13:24:11+00:00", 3156),
     ]

@@ -193,7 +193,7 @@ def _marking(identifier: str, *, host: str = "desktop-01", evidence_id: str = "e
 
 
 def test_create_draft_auto_selects_high_findings_and_key_events(monkeypatch: pytest.MonkeyPatch) -> None:
-    case = Case(id="case-1", name="Movistar", status="open")
+    case = Case(id="case-1", name="Hostalpha", status="open")
     findings = [
       _finding("finding-1", title="Office spawned PowerShell", severity=FindingSeverity.high, status=FindingStatus.confirmed),
       _finding("finding-2", title="Low noise", severity=FindingSeverity.low, status=FindingStatus.new, risk=10),
@@ -213,7 +213,7 @@ def test_default_filters_exclude_unreviewed_findings_from_reports(monkeypatch: p
     # A report built with no explicit filters (the "New report" default) must reflect
     # only what an analyst has actually confirmed -- not whatever the correlation
     # engine produced unreviewed ("new"), and not the retired "reviewed" status.
-    case = Case(id="case-1", name="Movistar", status="open")
+    case = Case(id="case-1", name="Hostalpha", status="open")
     findings = [
         _finding("finding-1", title="Office spawned PowerShell", severity=FindingSeverity.high, status=FindingStatus.confirmed),
         _finding("finding-2", title="Unreviewed correlation hit", severity=FindingSeverity.high, status=FindingStatus.new),
@@ -237,13 +237,13 @@ def test_create_draft_uses_generic_title_when_case_name_missing() -> None:
 
 
 def test_preview_contains_core_sections_and_respects_disabled_sections(monkeypatch: pytest.MonkeyPatch) -> None:
-    case = Case(id="case-1", name="Movistar", status="open", timezone="UTC")
+    case = Case(id="case-1", name="Hostalpha", status="open", timezone="UTC")
     finding = _finding("finding-1", title="Office spawned PowerShell", severity=FindingSeverity.high, status=FindingStatus.confirmed)
     bookmark = _bookmark("bookmark-1", event_id="evt-1")
     report = CaseReport(
         id="report-1",
         case_id="case-1",
-        title="Kairon DFIR Investigation Report - Movistar",
+        title="Kairon DFIR Investigation Report - Hostalpha",
         template="standard_investigation",
         sections_enabled={**report_service.DEFAULT_SECTIONS_ENABLED, "appendix": False},
         analyst_notes={"executive_summary": "Analyst summary", "recommendations": "", "limitations": ""},
@@ -253,7 +253,7 @@ def test_preview_contains_core_sections_and_respects_disabled_sections(monkeypat
         selected_process_chain_ids=["finding-1"],
     )
     db = _FakeDb(case=case, findings=[finding], bookmarks=[bookmark], reports=[report])
-    monkeypatch.setattr(report_service, "_build_case_context", lambda db, case_id: {"case": {"id": case_id, "name": "Movistar"}, "hosts": [{"host": "desktop-01", "events_count": 15, "findings_count": 1, "high_risk_count": 1}], "evidences": [{"id": "ev-1", "name": "Collection.zip", "status": "completed", "storage_mode": "uploaded", "is_external": False, "events_indexed": 15, "parser_errors": 0, "detected_host": "desktop-01"}], "summary": {"events_indexed": 15, "findings_total": 1, "findings_high": 1, "parser_errors": 0, "warnings": []}})
+    monkeypatch.setattr(report_service, "_build_case_context", lambda db, case_id: {"case": {"id": case_id, "name": "Hostalpha"}, "hosts": [{"host": "desktop-01", "events_count": 15, "findings_count": 1, "high_risk_count": 1}], "evidences": [{"id": "ev-1", "name": "Collection.zip", "status": "completed", "storage_mode": "uploaded", "is_external": False, "events_indexed": 15, "parser_errors": 0, "detected_host": "desktop-01"}], "summary": {"events_indexed": 15, "findings_total": 1, "findings_high": 1, "parser_errors": 0, "warnings": []}})
     monkeypatch.setattr(report_service, "fetch_event_by_id", lambda *args, **kwargs: _event_payload())
 
     preview = report_service.build_case_report_preview(db, "case-1", "report-1")
@@ -397,7 +397,7 @@ def test_preview_and_markdown_include_command_history_and_execution_story(monkey
 
 
 def test_markdown_export_redacts_secrets_and_deduplicates_iocs(monkeypatch: pytest.MonkeyPatch) -> None:
-    case = Case(id="case-1", name="Movistar", status="open", timezone="UTC")
+    case = Case(id="case-1", name="Hostalpha", status="open", timezone="UTC")
     finding = _finding(
         "finding-1",
         title="Suspicious PowerShell",
@@ -411,7 +411,7 @@ def test_markdown_export_redacts_secrets_and_deduplicates_iocs(monkeypatch: pyte
     report = CaseReport(
         id="report-1",
         case_id="case-1",
-        title="Kairon DFIR Investigation Report - Movistar",
+        title="Kairon DFIR Investigation Report - Hostalpha",
         template="standard_investigation",
         sections_enabled=report_service.DEFAULT_SECTIONS_ENABLED,
         analyst_notes=report_service.DEFAULT_ANALYST_NOTES,
@@ -421,7 +421,7 @@ def test_markdown_export_redacts_secrets_and_deduplicates_iocs(monkeypatch: pyte
         selected_process_chain_ids=["finding-1"],
     )
     db = _FakeDb(case=case, findings=[finding], bookmarks=[bookmark], reports=[report])
-    monkeypatch.setattr(report_service, "_build_case_context", lambda db, case_id: {"case": {"id": case_id, "name": "Movistar"}, "hosts": [], "evidences": [], "summary": {"events_indexed": 15, "findings_total": 1, "findings_high": 1, "parser_errors": 0, "warnings": []}})
+    monkeypatch.setattr(report_service, "_build_case_context", lambda db, case_id: {"case": {"id": case_id, "name": "Hostalpha"}, "hosts": [], "evidences": [], "summary": {"events_indexed": 15, "findings_total": 1, "findings_high": 1, "parser_errors": 0, "warnings": []}})
     monkeypatch.setattr(report_service, "fetch_event_by_id", lambda *args, **kwargs: _event_payload())
 
     content, filename, media_type = report_service.export_case_report(db, "case-1", "report-1", format="markdown")
@@ -435,11 +435,11 @@ def test_markdown_export_redacts_secrets_and_deduplicates_iocs(monkeypatch: pyte
 
 
 def test_report_hosts_section_excludes_rejected_host_values(monkeypatch: pytest.MonkeyPatch) -> None:
-    case = Case(id="case-1", name="Movistar", status="open", timezone="UTC")
+    case = Case(id="case-1", name="Hostalpha", status="open", timezone="UTC")
     report = CaseReport(
         id="report-1",
         case_id="case-1",
-        title="Kairon DFIR Investigation Report - Movistar",
+        title="Kairon DFIR Investigation Report - Hostalpha",
         template="standard_investigation",
         sections_enabled=report_service.DEFAULT_SECTIONS_ENABLED,
         analyst_notes=report_service.DEFAULT_ANALYST_NOTES,
@@ -453,11 +453,11 @@ def test_report_hosts_section_excludes_rejected_host_values(monkeypatch: pytest.
         report_service,
         "_build_case_context",
         lambda db, case_id: {
-            "case": {"id": case_id, "name": "Movistar"},
-            "hosts": [{"host": "movistar-pc", "events_count": 15, "findings_count": 1, "high_risk_count": 1, "is_primary": True}],
-            "host_candidates": [{"value": "desktop-b52vgbl", "confidence": "high", "source": "evtx_computer"}],
+            "case": {"id": case_id, "name": "Hostalpha"},
+            "hosts": [{"host": "host-alpha", "events_count": 15, "findings_count": 1, "high_risk_count": 1, "is_primary": True}],
+            "host_candidates": [{"value": "desktop-host02", "confidence": "high", "source": "evtx_computer"}],
             "rejected_host_candidates": [{"value": "applockerfltr", "reason": "driver_or_filter_name"}],
-            "evidences": [{"id": "ev-1", "name": "Collection.zip", "status": "completed", "storage_mode": "uploaded", "is_external": False, "events_indexed": 15, "parser_errors": 0, "detected_host": "movistar-pc"}],
+            "evidences": [{"id": "ev-1", "name": "Collection.zip", "status": "completed", "storage_mode": "uploaded", "is_external": False, "events_indexed": 15, "parser_errors": 0, "detected_host": "host-alpha"}],
             "summary": {"events_indexed": 15, "findings_total": 1, "findings_high": 1, "parser_errors": 0, "warnings": []},
         },
     )
@@ -465,13 +465,13 @@ def test_report_hosts_section_excludes_rejected_host_values(monkeypatch: pytest.
     preview = report_service.build_case_report_preview(db, "case-1", "report-1")
     hosts_section = next(section for section in preview["sections"] if section["id"] == "hosts")
 
-    assert "movistar-pc" in hosts_section["markdown"]
-    assert "desktop-b52vgbl" in hosts_section["markdown"]
+    assert "host-alpha" in hosts_section["markdown"]
+    assert "desktop-host02" in hosts_section["markdown"]
     assert "applockerfltr" not in hosts_section["markdown"]
 
 
 def test_host_and_evidence_filters_apply(monkeypatch: pytest.MonkeyPatch) -> None:
-    case = Case(id="case-1", name="Movistar", status="open", timezone="UTC")
+    case = Case(id="case-1", name="Hostalpha", status="open", timezone="UTC")
     findings = [
         _finding("finding-1", title="Desktop finding", severity=FindingSeverity.high, status=FindingStatus.confirmed, evidence_id="ev-1", hosts=["desktop-01"]),
         _finding("finding-2", title="Laptop finding", severity=FindingSeverity.high, status=FindingStatus.confirmed, evidence_id="ev-2", hosts=["laptop-01"]),
@@ -491,13 +491,13 @@ def test_host_and_evidence_filters_apply(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_pdf_export_returns_clear_not_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    case = Case(id="case-1", name="Movistar / PDF", status="open", timezone="UTC")
+    case = Case(id="case-1", name="Hostalpha / PDF", status="open", timezone="UTC")
     finding = _finding("finding-1", title="Office spawned PowerShell", severity=FindingSeverity.high, status=FindingStatus.confirmed)
     bookmark = _bookmark("bookmark-1", event_id="evt-1")
     report = CaseReport(
         id="report-1",
         case_id="case-1",
-        title="Kairon DFIR Investigation Report: Movistar / PDF",
+        title="Kairon DFIR Investigation Report: Hostalpha / PDF",
         template="standard_investigation",
         sections_enabled=report_service.DEFAULT_SECTIONS_ENABLED,
         analyst_notes={
@@ -515,13 +515,13 @@ def test_pdf_export_returns_clear_not_available(monkeypatch: pytest.MonkeyPatch)
         report_service,
         "_build_case_context",
         lambda db, case_id: {
-            "case": {"id": case_id, "name": "Movistar"},
-            "hosts": [{"host": "movistar-pc", "events_count": 97_712, "findings_count": 1, "high_risk_count": 1}],
-            "evidences": [{"id": "ev-1", "name": "Collection.zip", "status": "completed", "storage_mode": "uploaded", "is_external": False, "events_indexed": 97_712, "parser_errors": 0, "detected_host": "movistar-pc"}],
+            "case": {"id": case_id, "name": "Hostalpha"},
+            "hosts": [{"host": "host-alpha", "events_count": 97_712, "findings_count": 1, "high_risk_count": 1}],
+            "evidences": [{"id": "ev-1", "name": "Collection.zip", "status": "completed", "storage_mode": "uploaded", "is_external": False, "events_indexed": 97_712, "parser_errors": 0, "detected_host": "host-alpha"}],
             "summary": {"events_indexed": 97_712, "findings_total": 1, "findings_high": 1, "parser_errors": 0, "warnings": []},
         },
     )
-    monkeypatch.setattr(report_service, "fetch_event_by_id", lambda *args, **kwargs: _event_payload(host="movistar-pc"))
+    monkeypatch.setattr(report_service, "fetch_event_by_id", lambda *args, **kwargs: _event_payload(host="host-alpha"))
 
     content, filename, media_type = report_service.export_case_report(db, "case-1", "report-1", format="pdf")
     text = content.decode("latin-1", errors="ignore")
@@ -530,7 +530,7 @@ def test_pdf_export_returns_clear_not_available(monkeypatch: pytest.MonkeyPatch)
     assert content.startswith(b"%PDF")
     assert len(content) > 3000
     assert filename.endswith(".pdf")
-    assert filename == "kairon-dfir-investigation-report-movistar-pdf.pdf"
+    assert filename == "kairon-dfir-investigation-report-hostalpha-pdf.pdf"
     assert media_type == "application/pdf"
     assert "Executive Summary" in text
     assert "Scope" in text
@@ -618,11 +618,11 @@ def test_pdf_export_long_path_does_not_fail(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_pdf_export_renderer_unavailable_returns_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    case = Case(id="case-1", name="Movistar", status="open")
+    case = Case(id="case-1", name="Hostalpha", status="open")
     report = CaseReport(id="report-1", case_id="case-1", title="Report", template="standard_investigation")
     db = _FakeDb(case=case, reports=[report])
     monkeypatch.setattr(report_service, "_render_pdf_document", lambda *args, **kwargs: (_ for _ in ()).throw(report_service.PdfRendererUnavailableError("renderer missing")))
-    monkeypatch.setattr(report_service, "_build_case_context", lambda *args, **kwargs: {"case": {"id": "case-1", "name": "Movistar"}, "hosts": [], "evidences": [], "summary": {"events_indexed": 0, "findings_total": 0, "findings_high": 0, "parser_errors": 0, "warnings": []}})
+    monkeypatch.setattr(report_service, "_build_case_context", lambda *args, **kwargs: {"case": {"id": "case-1", "name": "Hostalpha"}, "hosts": [], "evidences": [], "summary": {"events_indexed": 0, "findings_total": 0, "findings_high": 0, "parser_errors": 0, "warnings": []}})
 
     with pytest.raises(HTTPException) as exc:
         report_service.export_case_report(db, "case-1", "report-1", format="pdf")

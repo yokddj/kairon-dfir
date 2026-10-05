@@ -486,7 +486,7 @@ describe("EvidenceIngestionWizard", () => {
 
   it("presents a successfully-parsed LVM container and its logical volumes as a discovery, not a warning (LVM V1 UX alignment)", async () => {
     // Modeled directly on the real CyberDefenders Webserver.E01 result:
-    // partition 7 is the LVM Physical Volume (VulnOSv2-vg), containing a
+    // partition 7 is the LVM Physical Volume (Linux-web01-vg), containing a
     // readable "root" logical volume and an unreadable "swap_1" one.
     createEvidenceUploadSessionMock.mockResolvedValueOnce(sessionResponse({
       preflight: readyReport({
@@ -496,7 +496,7 @@ describe("EvidenceIngestionWizard", () => {
           container: "EWF disk image",
           contained_object: "1 OS installation(s) across 4 volume(s)",
           platform: "linux",
-          hostname: "VulnOSv2",
+          hostname: "Linux-web01",
           distro: "Ubuntu 14.04.4 LTS",
           volumes: 4,
           partitions: 2,

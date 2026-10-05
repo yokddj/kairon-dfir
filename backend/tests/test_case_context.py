@@ -45,7 +45,7 @@ class FakeDb:
 
 
 def test_build_case_context_returns_hosts_and_evidence_summary(monkeypatch):
-    case = Case(id="case-1", name="Movistar", status="open", created_at=datetime(2026, 5, 15, tzinfo=UTC), updated_at=datetime(2026, 5, 15, tzinfo=UTC))
+    case = Case(id="case-1", name="Hostalpha", status="open", created_at=datetime(2026, 5, 15, tzinfo=UTC), updated_at=datetime(2026, 5, 15, tzinfo=UTC))
     evidences = [
         Evidence(
             id="ev-1",

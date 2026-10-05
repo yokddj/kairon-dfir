@@ -79,7 +79,7 @@ def _finding(name: str) -> Finding:
 
 
 def _case() -> Case:
-    return Case(id="case-1", name="Movistar", status="open")
+    return Case(id="case-1", name="Hostalpha", status="open")
 
 
 def test_build_case_context_lists_everything_when_within_limits():

@@ -3477,18 +3477,18 @@ def test_mftecmd_fixture_integration() -> None:
 
 def test_evtx_7045_is_persistence_not_logon(tmp_path: Path) -> None:
     path = tmp_path / "System-EvtxECmd.csv"
-    path.write_text("EventID,Channel,Provider,ServiceName,ImagePath,Computer\n7045,System,Service Control Manager,MalSvc,C:\\ProgramData\\svc.exe,MOVISTAR-PC\n", encoding="utf-8")
+    path.write_text("EventID,Channel,Provider,ServiceName,ImagePath,Computer\n7045,System,Service Control Manager,MalSvc,C:\\ProgramData\\svc.exe,HOST-ALPHA\n", encoding="utf-8")
     doc = normalize_file("case-1", "ev-1", "art-1", path, {"artifact_type": "evtx", "name": path.name, "source_path": path.name, "parser": "zimmerman"})[0]
     assert doc["event"]["category"] == "persistence"
     assert doc["event"]["type"] == "service_created"
-    assert doc["host"]["name"] == "movistar-pc"
+    assert doc["host"]["name"] == "host-alpha"
 
 
 def test_evtx_powershell_does_not_use_rendered_message_as_user(tmp_path: Path) -> None:
     path = tmp_path / "PowerShell-EvtxECmd.csv"
     path.write_text(
         "EventID,Channel,Provider,ScriptBlockText,RenderedMessage,UserId,Computer\n"
-        '4104,Microsoft-Windows-PowerShell/Operational,Microsoft-Windows-PowerShell,"IEX (New-Object Net.WebClient).DownloadString()","Script block text: User=whoami, network, blah","S-1-5-18",MOVISTAR-PC\n',
+        '4104,Microsoft-Windows-PowerShell/Operational,Microsoft-Windows-PowerShell,"IEX (New-Object Net.WebClient).DownloadString()","Script block text: User=whoami, network, blah","S-1-5-18",HOST-ALPHA\n',
         encoding="utf-8",
     )
     doc = normalize_file("case-1", "ev-1", "art-1", path, {"artifact_type": "evtx", "name": path.name, "source_path": path.name, "parser": "zimmerman"})[0]
@@ -3736,7 +3736,7 @@ def test_build_process_tree_bundle_keeps_summary_coherent_with_filtered_graph(mo
             "@timestamp": "2026-05-15T10:00:00Z",
             "artifact": {"type": "process", "parser": "sysmon_evtx"},
             "event": {"type": "process_start"},
-            "host": {"name": "movistar-pc"},
+            "host": {"name": "host-alpha"},
             "process": {"entity_id": "A", "pid": 100, "name": "winword.exe", "path": "C:\\Program Files\\Microsoft Office\\WINWORD.EXE"},
         },
         {
@@ -3745,7 +3745,7 @@ def test_build_process_tree_bundle_keeps_summary_coherent_with_filtered_graph(mo
             "@timestamp": "2026-05-15T10:01:00Z",
             "artifact": {"type": "process", "parser": "sysmon_evtx"},
             "event": {"type": "process_start"},
-            "host": {"name": "movistar-pc"},
+            "host": {"name": "host-alpha"},
             "process": {
                 "entity_id": "B",
                 "parent_entity_id": "A",
@@ -3762,7 +3762,7 @@ def test_build_process_tree_bundle_keeps_summary_coherent_with_filtered_graph(mo
             "@timestamp": "2026-05-15T10:02:00Z",
             "artifact": {"type": "process", "parser": "sysmon_evtx"},
             "event": {"type": "process_start"},
-            "host": {"name": "movistar-pc"},
+            "host": {"name": "host-alpha"},
             "process": {"entity_id": "C", "parent_entity_id": "B", "parent_name": "powershell.exe", "pid": 300, "name": "cmd.exe", "path": "C:\\Windows\\System32\\cmd.exe"},
         },
     ]
@@ -3771,8 +3771,8 @@ def test_build_process_tree_bundle_keeps_summary_coherent_with_filtered_graph(mo
     evidence = Evidence(
         id="ev-1",
         case_id="case-1",
-        original_filename="movistar.zip",
-        stored_path="/tmp/movistar.zip",
+        original_filename="hostalpha.zip",
+        stored_path="/tmp/hostalpha.zip",
         evidence_type=EvidenceType.unknown,
         sha256="abc",
         size_bytes=1,
@@ -3780,7 +3780,7 @@ def test_build_process_tree_bundle_keeps_summary_coherent_with_filtered_graph(mo
         metadata_json={},
         error_log={},
     )
-    bundle = build_process_tree_bundle(case, [evidence], scope="case", host="movistar-pc")
+    bundle = build_process_tree_bundle(case, [evidence], scope="case", host="host-alpha")
     graph = bundle["graph"]
     assert graph["summary"]["nodes_count"] == len(graph["nodes"]) == 3
     assert graph["summary"]["edges_count"] == len(graph["edges"]) == 2
@@ -4006,7 +4006,7 @@ def test_evtx_4688_suspicious_powershell(tmp_path: Path) -> None:
     path = tmp_path / "Security-EvtxECmd.csv"
     path.write_text(
         "EventID,Channel,Provider,NewProcessName,ProcessCommandLine,SubjectUserName,Computer\n"
-        '4688,Security,Microsoft-Windows-Security-Auditing,C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe,"powershell.exe -enc SQBFAFgA",alex,MOVISTAR-PC\n',
+        '4688,Security,Microsoft-Windows-Security-Auditing,C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe,"powershell.exe -enc SQBFAFgA",alex,HOST-ALPHA\n',
         encoding="utf-8",
     )
     doc = normalize_file("case-1", "ev-1", "art-1", path, {"artifact_type": "evtx", "name": path.name, "source_path": path.name, "parser": "zimmerman"})[0]
@@ -4023,7 +4023,7 @@ def test_evtx_4104_script_block_preserves_payload_and_xml(tmp_path: Path) -> Non
         "<Data Name='ScriptBlockId'>abc</Data></EventData></Event>"
     )
     path.write_text(
-        f"EventID,Channel,Provider,PayloadData1,Xml,Computer\n4104,Microsoft-Windows-PowerShell/Operational,Microsoft-Windows-PowerShell,block-part-1,\"{xml}\",MOVISTAR-PC\n",
+        f"EventID,Channel,Provider,PayloadData1,Xml,Computer\n4104,Microsoft-Windows-PowerShell/Operational,Microsoft-Windows-PowerShell,block-part-1,\"{xml}\",HOST-ALPHA\n",
         encoding="utf-8",
     )
     doc = normalize_file("case-1", "ev-1", "art-1", path, {"artifact_type": "evtx", "name": path.name, "source_path": path.name, "parser": "zimmerman"})[0]
@@ -4130,7 +4130,7 @@ def test_evtx_payload_json_4624_local_logon_is_extracted(tmp_path: Path) -> None
         "EventData": {
             "Data": [
                 {"@Name": "SubjectUserSid", "#text": "S-1-5-18"},
-                {"@Name": "SubjectUserName", "#text": "MOVISTAR-PC$"},
+                {"@Name": "SubjectUserName", "#text": "HOST-ALPHA$"},
                 {"@Name": "SubjectDomainName", "#text": "WORKGROUP"},
                 {"@Name": "SubjectLogonId", "#text": "0x3E7"},
                 {"@Name": "TargetUserSid", "#text": "S-1-5-18"},
@@ -5033,7 +5033,7 @@ def test_execution_artifacts_semi_auto_sections(monkeypatch) -> None:
         "event_id": "evt-browser-a",
         "evidence_id": "ev-browser",
         "@timestamp": "2026-05-03T10:00:00+00:00",
-        "host": {"name": "movistar-pc"},
+        "host": {"name": "host-alpha"},
         "user": {"name": "alex"},
         "event": {"type": "file_downloaded", "severity": "medium", "message": "Browser download: invoice.pdf.exe from 198.51.100.10"},
         "browser": {"name": "Chrome", "profile": "Default", "artifact_type": "download", "url": "http://198.51.100.10/invoice.pdf.exe", "domain": "198.51.100.10"},
@@ -5054,7 +5054,7 @@ def test_execution_artifacts_semi_auto_sections(monkeypatch) -> None:
         "event_id": "evt-prefetch-a",
         "evidence_id": "ev-prefetch",
         "@timestamp": "2026-05-03T10:05:00+00:00",
-        "host": {"name": "movistar-pc"},
+        "host": {"name": "host-alpha"},
         "user": {"name": "alex"},
         "event": {"type": "program_execution", "severity": "medium", "message": "Program execution"},
         "process": {"name": "invoice.pdf.exe", "path": "C:\\Users\\alex\\Downloads\\invoice.pdf.exe", "command_line": "C:\\Users\\alex\\Downloads\\invoice.pdf.exe"},
@@ -5097,7 +5097,7 @@ def test_lnk_local_path_beats_shell_target_and_updates_summary(tmp_path: Path) -
     path = tmp_path / "LECmd_Output.csv"
     path.write_text(
         "SourceFile,TargetIDAbsolutePath,LocalPath,RelativePath,FileAttributes,DriveType,VolumeSerialNumber,MachineID,SourceModified\n"
-        "C:\\Users\\dfir\\Desktop\\Collection-movistar-pc-2026-05-03T11_30_24Z\\uploads\\auto\\C%3A\\Users\\alex\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\DFIRLab-training dataset-20260503-132748.lnk,Desktop\\\\\\\\,C:\\Users\\alex\\Desktop\\DFIRLabEvidence\\DFIRLab-training dataset-20260503-132748,..\\..\\..\\..\\..\\Desktop\\DFIRLabEvidence\\DFIRLab-training dataset-20260503-132748,FileAttributeDirectory,Fixed storage media (Hard drive),30764BF4,movistar-pc,2026-05-03T12:05:00Z\n",
+        "C:\\Users\\dfir\\Desktop\\Collection-host-alpha-2026-05-03T11_30_24Z\\uploads\\auto\\C%3A\\Users\\alex\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\DFIRLab-training dataset-20260503-132748.lnk,Desktop\\\\\\\\,C:\\Users\\alex\\Desktop\\DFIRLabEvidence\\DFIRLab-training dataset-20260503-132748,..\\..\\..\\..\\..\\Desktop\\DFIRLabEvidence\\DFIRLab-training dataset-20260503-132748,FileAttributeDirectory,Fixed storage media (Hard drive),30764BF4,host-alpha,2026-05-03T12:05:00Z\n",
         encoding="utf-8",
     )
     doc = normalize_file("case-1", "ev-1", "art-1", path, {"artifact_type": "lnk", "name": path.name, "source_path": path.name, "parser": "zimmerman"})[0]
@@ -5112,7 +5112,7 @@ def test_lnk_local_path_beats_shell_target_and_updates_summary(tmp_path: Path) -
     assert "DFIRLab-training dataset-20260503-132748" in doc["search_text"]
     assert "DFIRLabEvidence" in doc["search_text"]
     assert "30764BF4" in doc["search_text"]
-    assert "movistar-pc" in doc["search_text"]
+    assert "host-alpha" in doc["search_text"]
     assert doc["event"]["type"] == "folder_opened"
     assert "folder_access" in doc["tags"]
     assert "lnk" in doc["tags"]
@@ -5355,7 +5355,7 @@ def test_semi_auto_includes_jumplist_recent_and_correlated_sections() -> None:
         "evidence_id": "ev-1",
         "artifact_id": "art-jl",
         "@timestamp": "2026-05-03T10:00:00+00:00",
-        "host": {"name": "MOVISTAR-PC"},
+        "host": {"name": "HOST-ALPHA"},
         "user": {"name": "alex"},
         "artifact": {"type": "jumplist"},
         "event": {"type": "file_opened", "message": "JumpList item observed: C:\\Users\\alex\\Downloads\\invoice.pdf.exe", "severity": "medium"},
@@ -5381,7 +5381,7 @@ def test_semi_auto_includes_jumplist_recent_and_correlated_sections() -> None:
         "evidence_id": "ev-1",
         "artifact_id": "art-br",
         "@timestamp": "2026-05-03T09:50:00+00:00",
-        "host": {"name": "MOVISTAR-PC"},
+        "host": {"name": "HOST-ALPHA"},
         "user": {"name": "alex"},
         "artifact": {"type": "browser"},
         "event": {"type": "file_downloaded", "message": "Downloaded file", "severity": "medium"},
@@ -5400,7 +5400,7 @@ def test_semi_auto_includes_jumplist_recent_and_correlated_sections() -> None:
         "evidence_id": "ev-1",
         "artifact_id": "art-rb",
         "@timestamp": "2026-05-03T11:00:00+00:00",
-        "host": {"name": "MOVISTAR-PC"},
+        "host": {"name": "HOST-ALPHA"},
         "user": {"name": "alex"},
         "artifact": {"type": "recycle_bin"},
         "event": {"type": "file_recycled", "message": "File moved to Recycle Bin", "severity": "medium"},
@@ -5417,7 +5417,7 @@ def test_semi_auto_includes_jumplist_recent_and_correlated_sections() -> None:
         "evidence_id": "ev-1",
         "artifact_id": "art-sb",
         "@timestamp": "2026-05-03T09:45:00+00:00",
-        "host": {"name": "MOVISTAR-PC"},
+        "host": {"name": "HOST-ALPHA"},
         "user": {"name": "alex"},
         "artifact": {"type": "shellbags"},
         "event": {"type": "shellbag_folder_access", "message": "Shellbag folder observed: C:\\Users\\alex\\Downloads", "severity": "info"},
@@ -6864,7 +6864,7 @@ def test_semi_auto_includes_prefetch_and_correlates_with_evtx() -> None:
         "evidence_id": "ev-1",
         "artifact_id": "art-pref",
         "@timestamp": "2026-05-03T10:00:00+00:00",
-        "host": {"name": "MOVISTAR-PC"},
+        "host": {"name": "HOST-ALPHA"},
         "user": {"name": None},
         "event": {"type": "program_execution", "message": "Prefetch execution evidence: POWERSHELL.EXE", "severity": "medium"},
         "process": {"name": "powershell.exe", "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "command_line": None, "parent_name": None},
@@ -6881,7 +6881,7 @@ def test_semi_auto_includes_prefetch_and_correlates_with_evtx() -> None:
         "evidence_id": "ev-1",
         "artifact_id": "art-evtx",
         "@timestamp": "2026-05-03T10:04:00+00:00",
-        "host": {"name": "MOVISTAR-PC"},
+        "host": {"name": "HOST-ALPHA"},
         "user": {"name": "alex"},
         "event": {"type": "process_creation", "message": "Process created: powershell.exe", "severity": "medium"},
         "process": {"name": "powershell.exe", "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "command_line": "powershell.exe -enc aQ==", "parent_name": "cmd.exe"},
@@ -6916,11 +6916,11 @@ def test_semi_auto_includes_lnk_sections_and_correlates() -> None:
         "evidence_id": "ev-1",
         "artifact_id": "art-lnk",
         "@timestamp": "2026-05-03T10:00:00+00:00",
-        "host": {"name": "MOVISTAR-PC"},
+        "host": {"name": "HOST-ALPHA"},
         "user": {"name": "alex"},
         "event": {"type": "program_or_script_opened", "message": "LNK target accessed: C:\\Users\\alex\\Downloads\\runme.ps1", "severity": "medium"},
         "file": {"path": "C:\\Users\\alex\\Downloads\\runme.ps1", "extension": ".ps1", "name": "runme.ps1"},
-        "lnk": {"source_file": "C:\\Users\\alex\\Desktop\\runme.lnk", "arguments": "powershell -enc aQ==", "working_directory": "C:\\Users\\alex\\Downloads", "machine_id": "MOVISTAR-PC"},
+        "lnk": {"source_file": "C:\\Users\\alex\\Desktop\\runme.lnk", "arguments": "powershell -enc aQ==", "working_directory": "C:\\Users\\alex\\Downloads", "machine_id": "HOST-ALPHA"},
         "volume": {"drive_type": "Fixed", "serial": None},
         "network": {"path": None},
         "process": {"name": None, "path": None, "command_line": None},
@@ -6936,7 +6936,7 @@ def test_semi_auto_includes_lnk_sections_and_correlates() -> None:
         "evidence_id": "ev-1",
         "artifact_id": "art-evtx",
         "@timestamp": "2026-05-03T10:05:00+00:00",
-        "host": {"name": "MOVISTAR-PC"},
+        "host": {"name": "HOST-ALPHA"},
         "user": {"name": "alex"},
         "event": {"type": "process_creation", "message": "Process created: powershell.exe", "severity": "medium"},
         "process": {"name": "powershell.exe", "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "command_line": "powershell.exe -File C:\\Users\\alex\\Downloads\\runme.ps1", "parent_name": "explorer.exe"},
@@ -6953,11 +6953,11 @@ def test_semi_auto_includes_lnk_sections_and_correlates() -> None:
         "evidence_id": "ev-1",
         "artifact_id": "art-lnk",
         "@timestamp": "2026-05-03T11:00:00+00:00",
-        "host": {"name": "MOVISTAR-PC"},
+        "host": {"name": "HOST-ALPHA"},
         "user": {"name": "alex"},
         "event": {"type": "document_opened", "message": "LNK target accessed: \\\\SERVER\\Share\\doc.docx", "severity": "low"},
         "file": {"path": "\\\\SERVER\\Share\\doc.docx", "extension": ".docx", "name": "doc.docx"},
-        "lnk": {"source_file": "C:\\Users\\alex\\Desktop\\share.lnk", "machine_id": "MOVISTAR-PC"},
+        "lnk": {"source_file": "C:\\Users\\alex\\Desktop\\share.lnk", "machine_id": "HOST-ALPHA"},
         "volume": {"drive_type": "Removable", "serial": "ABCD"},
         "network": {"path": "\\\\SERVER\\Share\\doc.docx"},
         "process": {"name": None, "path": None, "command_line": None},
@@ -6992,7 +6992,7 @@ def test_semi_auto_includes_jumplist_sections_and_application_usage() -> None:
         "evidence_id": "ev-1",
         "artifact_id": "art-jl",
         "@timestamp": "2026-05-03T10:00:00+00:00",
-        "host": {"name": "MOVISTAR-PC"},
+        "host": {"name": "HOST-ALPHA"},
         "user": {"name": "alex"},
         "artifact": {"type": "jumplist"},
         "event": {"type": "program_or_script_opened", "message": "JumpList target accessed: C:\\Users\\alex\\Downloads\\runme.ps1", "severity": "medium"},
@@ -7003,7 +7003,7 @@ def test_semi_auto_includes_jumplist_sections_and_application_usage() -> None:
             "app_id": "powershell.exe",
             "arguments": "powershell -enc aQ==",
             "interaction_count": 3,
-            "machine_id": "MOVISTAR-PC",
+            "machine_id": "HOST-ALPHA",
             "effective_path": "C:\\Users\\alex\\Downloads\\runme.ps1",
             "effective_path_source": "local_path",
         },
@@ -7022,12 +7022,12 @@ def test_semi_auto_includes_jumplist_sections_and_application_usage() -> None:
         "evidence_id": "ev-1",
         "artifact_id": "art-lnk",
         "@timestamp": "2026-05-03T10:05:00+00:00",
-        "host": {"name": "MOVISTAR-PC"},
+        "host": {"name": "HOST-ALPHA"},
         "user": {"name": "alex"},
         "artifact": {"type": "lnk"},
         "event": {"type": "program_or_script_opened", "message": "LNK target accessed: C:\\Users\\alex\\Downloads\\runme.ps1", "severity": "medium"},
         "file": {"path": "C:\\Users\\alex\\Downloads\\runme.ps1", "extension": ".ps1", "name": "runme.ps1"},
-        "lnk": {"source_file": "C:\\Users\\alex\\Desktop\\runme.lnk", "arguments": "powershell -enc aQ==", "working_directory": "C:\\Users\\alex\\Downloads", "machine_id": "MOVISTAR-PC"},
+        "lnk": {"source_file": "C:\\Users\\alex\\Desktop\\runme.lnk", "arguments": "powershell -enc aQ==", "working_directory": "C:\\Users\\alex\\Downloads", "machine_id": "HOST-ALPHA"},
         "volume": {"drive_type": "Fixed", "serial": None},
         "network": {"path": None},
         "process": {"name": None, "path": None, "command_line": None},
@@ -7089,7 +7089,7 @@ def test_semi_auto_includes_filesystem_sections() -> None:
         "artifact_id": "art-usn",
         "@timestamp": "2026-05-03T15:00:00+00:00",
         "artifact": {"type": "usn"},
-        "host": {"name": "MOVISTAR-PC"},
+        "host": {"name": "HOST-ALPHA"},
         "user": {"name": "alex"},
         "event": {"category": "filesystem", "type": "file_created", "message": "USN file created: C:\\Users\\alex\\Downloads\\payload.exe", "severity": "medium"},
         "file": {"path": "C:\\Users\\alex\\Downloads\\payload.exe", "name": "payload.exe", "extension": ".exe", "parent_path": "C:\\Users\\alex\\Downloads", "size": None},
@@ -7107,7 +7107,7 @@ def test_semi_auto_includes_filesystem_sections() -> None:
         "artifact_id": "art-mft",
         "@timestamp": "2026-05-03T15:05:00+00:00",
         "artifact": {"type": "mft"},
-        "host": {"name": "MOVISTAR-PC"},
+        "host": {"name": "HOST-ALPHA"},
         "user": {"name": "alex"},
         "event": {"category": "file", "type": "file_deleted", "message": "Deleted MFT entry observed: C:\\Users\\Public\\evil.ps1", "severity": "medium"},
         "file": {"path": "C:\\Users\\Public\\evil.ps1", "name": "evil.ps1", "extension": ".ps1", "deleted": True, "in_use": False, "parent_path": "C:\\Users\\Public"},
@@ -7227,7 +7227,7 @@ def test_semi_auto_rdp_includes_logon_type_10(monkeypatch) -> None:
         "artifact_id": "art-1",
         "@timestamp": "2026-03-28T11:00:00+00:00",
         "source_file": "EvtxECmd_Output.csv",
-        "host": {"name": "movistar-pc"},
+        "host": {"name": "host-alpha"},
         "user": {"name": "alex"},
         "source": {"ip": "192.168.1.50"},
         "event": {"type": "logon_success", "severity": "info", "message": "Successful logon"},
@@ -7249,12 +7249,12 @@ def test_semi_auto_rdp_includes_logon_type_10(monkeypatch) -> None:
 
 
 def test_host_detection_collection_name(tmp_path: Path) -> None:
-    root = tmp_path / "Collection-movistar-pc-2026-05-03T11_30_24Z"
+    root = tmp_path / "Collection-host-alpha-2026-05-03T11_30_24Z"
     root.mkdir()
-    assert detect_host_from_velociraptor_collection(root / "results") == "movistar-pc"
-    assert not is_probable_hostname("Collection-movistar-pc-2026-05-03T11_30_24Z.zip")
+    assert detect_host_from_velociraptor_collection(root / "results") == "host-alpha"
+    assert not is_probable_hostname("Collection-host-alpha-2026-05-03T11_30_24Z.zip")
     assert not is_probable_hostname("/tmp/file.csv")
-    assert normalize_hostname("MOVISTAR-PC") == "movistar-pc"
+    assert normalize_hostname("HOST-ALPHA") == "host-alpha"
 
 
 def test_host_detection_rejects_filename_contamination_candidates() -> None:
@@ -8990,7 +8990,7 @@ def test_semi_auto_analysis_generates_expected_sections(monkeypatch) -> None:
             "event_id": "evt-1",
             "evidence_id": "ev-1",
             "@timestamp": "2026-05-03T10:00:00+00:00",
-            "host": {"name": "movistar-pc"},
+            "host": {"name": "host-alpha"},
             "user": {"name": "alex"},
             "event": {"type": "process_creation", "severity": "medium", "message": "Process created"},
             "process": {
@@ -9007,7 +9007,7 @@ def test_semi_auto_analysis_generates_expected_sections(monkeypatch) -> None:
             "event_id": "evt-2",
             "evidence_id": "ev-1",
             "@timestamp": "2026-05-03T10:01:00+00:00",
-            "host": {"name": "movistar-pc"},
+            "host": {"name": "host-alpha"},
             "user": {"name": "alex"},
             "event": {"type": "logon_success", "severity": "info", "message": "Successful logon"},
             "windows": {"logon_type": "10", "event_data": {"WorkstationName": "HOSTA"}},
@@ -9019,7 +9019,7 @@ def test_semi_auto_analysis_generates_expected_sections(monkeypatch) -> None:
             "event_id": "evt-3",
             "evidence_id": "ev-1",
             "@timestamp": "2026-05-03T10:02:00+00:00",
-            "host": {"name": "movistar-pc"},
+            "host": {"name": "host-alpha"},
             "user": {"name": "SYSTEM"},
             "event": {"type": "service_created", "severity": "high", "message": "Service created"},
             "service": {"name": "MalSvc", "image_path": "C:\\ProgramData\\svc.exe", "account": "LocalSystem", "start_type": "Auto"},
@@ -9063,7 +9063,7 @@ def test_semi_auto_analysis_includes_browser_downloads_and_execution(monkeypatch
             "event_id": "evt-browser-1",
             "evidence_id": "ev-browser",
             "@timestamp": "2026-05-03T10:00:00+00:00",
-            "host": {"name": "movistar-pc"},
+            "host": {"name": "host-alpha"},
             "user": {"name": "alex"},
             "event": {"type": "file_downloaded", "severity": "medium", "message": "Browser download: setup.exe from example.com"},
             "browser": {"name": "Chrome", "profile": "Default", "artifact_type": "download", "url": "https://downloads.example.com/setup.exe", "domain": "downloads.example.com"},
@@ -9077,7 +9077,7 @@ def test_semi_auto_analysis_includes_browser_downloads_and_execution(monkeypatch
             "event_id": "evt-mft-1",
             "evidence_id": "ev-mft",
             "@timestamp": "2026-05-03T10:02:00+00:00",
-            "host": {"name": "movistar-pc"},
+            "host": {"name": "host-alpha"},
             "user": {"name": "alex"},
             "event": {"type": "file_created", "severity": "info", "message": "USN file created: C:\\Users\\alex\\Downloads\\setup.exe"},
             "file": {"path": "C:\\Users\\alex\\Downloads\\setup.exe", "name": "setup.exe", "extension": ".exe"},
@@ -9090,7 +9090,7 @@ def test_semi_auto_analysis_includes_browser_downloads_and_execution(monkeypatch
             "event_id": "evt-prefetch-1",
             "evidence_id": "ev-prefetch",
             "@timestamp": "2026-05-03T10:05:00+00:00",
-            "host": {"name": "movistar-pc"},
+            "host": {"name": "host-alpha"},
             "user": {"name": "alex"},
             "event": {"type": "program_execution", "severity": "medium", "message": "Program execution"},
             "process": {"name": "setup.exe", "path": "C:\\Users\\alex\\Downloads\\setup.exe", "command_line": "C:\\Users\\alex\\Downloads\\setup.exe"},

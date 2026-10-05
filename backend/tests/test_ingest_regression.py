@@ -9,7 +9,7 @@ def test_capture_reingest_baseline_uses_previous_manifest_stats() -> None:
         id="ev-1",
         case_id="case-1",
         updated_at=datetime(2026, 5, 18, tzinfo=UTC),
-        detected_host="movistar-pc",
+        detected_host="host-alpha",
     )
     existing_metadata = {
         "selected_candidates": 877,
