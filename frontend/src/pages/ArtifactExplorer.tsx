@@ -738,12 +738,16 @@ export default function ArtifactExplorer() {
   });
   const artifactTypeOptions = Object.keys(facetsQuery.data?.["artifact.type"] ?? {});
   const artifactTypeSelectOptions = useMemo(() => {
-    const derivedExtras = (startupPersistencePresenceQuery.data?.total ?? 0) > 0 ? ["startup_persistence", "dns"] : ["dns"];
+    // Derived views have no artifact.type of their own: each is offered only when the case has data
+    // for it (or it is the view already selected, so the selector never loses its current value).
+    const derivedExtras: string[] = [];
+    if ((startupPersistencePresenceQuery.data?.total ?? 0) > 0 || artifactTypeFilter === "startup_persistence") derivedExtras.push("startup_persistence");
+    if ((facetsQuery.data?.derived?.dns ?? 0) > 0 || artifactTypeFilter === "dns") derivedExtras.push("dns");
     return artifactOptions(
       artifactTypeOptions.filter((option) => !INTERNAL_ARTIFACT_TYPES_HIDDEN_FROM_MAIN.has(option)),
       derivedExtras,
     );
-  }, [artifactTypeOptions, startupPersistencePresenceQuery.data?.total]);
+  }, [artifactTypeOptions, startupPersistencePresenceQuery.data?.total, facetsQuery.data?.derived?.dns, artifactTypeFilter]);
   const artifactNameOptions = Object.keys(facetsQuery.data?.["artifact.name"] ?? {});
   const linuxShortcutOptions = useMemo(() => {
     const present = new Set(artifactTypeOptions);

@@ -557,7 +557,7 @@ describe("ArtifactExplorer", () => {
     await waitFor(() => expect(within(artifactSelector).getAllByRole("option").length).toBeGreaterThan(1));
   });
 
-  it("host with no data at all: 'All artifact types' and 'DNS' are the only valid options", async () => {
+  it("host with no data at all: 'All artifact types' is the only option", async () => {
     searchFacetsMock.mockResolvedValueOnce({ "artifact.type": {}, "artifact.name": {} });
     getStartupPersistenceMock.mockResolvedValueOnce({
       case_id: "case-1",
@@ -576,11 +576,10 @@ describe("ArtifactExplorer", () => {
     expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
     const artifactSelector = await screen.findByLabelText("Artifact view");
     await waitFor(() => expect(getStartupPersistenceMock).toHaveBeenCalled());
-    // DNS is always selectable (it's matched by event.type, not a facet --
-    // see DNS_EVENT_TYPES), so it's present even with zero indexed data.
-    expect(within(artifactSelector).getAllByRole("option")).toHaveLength(2);
+    // DNS is matched by event.type, so it is offered only when the facets count DNS events.
+    expect(within(artifactSelector).getAllByRole("option")).toHaveLength(1);
     expect(within(artifactSelector).getByRole("option", { name: "All artifact types" })).toBeInTheDocument();
-    expect(within(artifactSelector).getByRole("option", { name: "DNS" })).toBeInTheDocument();
+    expect(within(artifactSelector).queryByRole("option", { name: "DNS" })).not.toBeInTheDocument();
   });
 
   it("renders user activity tabs for RECmd artifacts", async () => {
@@ -639,9 +638,24 @@ describe("ArtifactExplorer", () => {
     expect(lastCall.filters.event_type).toEqual(["dns_query", "dns_query_failed", "dns_cache_entry", "dns_config", "sysmon_dns_query"]);
   });
 
-  it("offers DNS as a selectable artifact view even with no other data present", async () => {
-    searchFacetsMock.mockResolvedValueOnce({ "artifact.type": {}, "artifact.name": {} });
+  it("offers DNS only when the case has DNS events, whatever their artifact type", async () => {
+    searchFacetsMock.mockResolvedValueOnce({ "artifact.type": {}, "artifact.name": {}, derived: { dns: 12 } });
     renderPage("/cases/case-1/artifact-search");
+    const artifactSelector = await screen.findByLabelText("Artifact view");
+    await waitFor(() => expect(within(artifactSelector).getByRole("option", { name: "DNS" })).toBeInTheDocument());
+  });
+
+  it("does not offer DNS when the case has no DNS events", async () => {
+    searchFacetsMock.mockResolvedValueOnce({ "artifact.type": { linux_auth: 5 }, "artifact.name": {}, derived: { dns: 0 } });
+    renderPage("/cases/case-1/artifact-search");
+    const artifactSelector = await screen.findByLabelText("Artifact view");
+    await waitFor(() => expect(within(artifactSelector).getByRole("option", { name: "Auth Logs" })).toBeInTheDocument());
+    expect(within(artifactSelector).queryByRole("option", { name: "DNS" })).not.toBeInTheDocument();
+  });
+
+  it("keeps DNS in the selector while it is the selected view", async () => {
+    searchFacetsMock.mockResolvedValueOnce({ "artifact.type": {}, "artifact.name": {}, derived: { dns: 0 } });
+    renderPage("/cases/case-1/artifact-search?artifact_type=dns");
     const artifactSelector = await screen.findByLabelText("Artifact view");
     expect(within(artifactSelector).getByRole("option", { name: "DNS" })).toBeInTheDocument();
   });
