@@ -41,6 +41,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import DataError, IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.config import get_settings
 from app.core.database import Base, UUIDMixin
 from app.models.case import Case, CaseStatus
 from app.models.evidence import (
@@ -335,8 +336,9 @@ def test_7_advance_batch_progresses_to_next_profile(db: Session, monkeypatch) ->
     batch_mod.advance_batch(db, run=run, enqueue_fn=enq)
     db.refresh(batch)
     assert batch.last_advanced_run_id == run.id
-    # The next run was enqueued.
-    enq.assert_called_once()
+    # Every profile run is enqueued when the batch is created; advancing only
+    # moves the pointer.
+    enq.assert_not_called()
     # The batch is still running, now on the second profile.
     assert batch.current_profile == "processes_extended"
     assert batch.status == "running"
@@ -652,8 +654,9 @@ def test_17_run_id_and_last_advanced_run_id_are_equivalent_strings(db: Session) 
 # ---------------------------------------------------------------------------
 
 
-def test_18_plan_runtime_validation_only_picks_two_profiles(db: Session) -> None:
+def test_18_plan_runtime_validation_only_picks_two_profiles(db: Session, monkeypatch) -> None:
     """The ``runtime_validation`` plan only picks the first two profiles."""
+    monkeypatch.setattr(get_settings(), "memory_process_profile_enabled", True)
     case = _make_case(db)
     ev = _make_evidence(db, case.id)
     plan = batch_mod.plan_run_all(
@@ -667,6 +670,7 @@ def test_18_plan_runtime_validation_only_picks_two_profiles(db: Session) -> None
 
 def test_19_create_run_all_batch_runtime_validation_creates_batch(db: Session, monkeypatch) -> None:
     """``runtime_validation`` mode creates a batch with no heavy profiles."""
+    monkeypatch.setattr(get_settings(), "memory_process_profile_enabled", True)
     case = _make_case(db)
     ev = _make_evidence(db, case.id)
 
@@ -723,5 +727,6 @@ def test_19_create_run_all_batch_runtime_validation_creates_batch(db: Session, m
     ):
         assert heavy not in batch.requested_profiles
     assert batch.last_advanced_run_id is None
-    # First run was enqueued.
-    enq.assert_called_once()
+    # Both selected profiles are enqueued up front, once each.
+    assert enq.call_count == 2
+    assert len({call.args[0] for call in enq.call_args_list}) == 2

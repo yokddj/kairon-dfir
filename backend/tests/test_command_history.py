@@ -274,6 +274,7 @@ def test_filters_host_alias_risk_and_source_type() -> None:
 
 
 def test_get_command_history_uses_search_documents(monkeypatch) -> None:
+    monkeypatch.setattr(command_history, "memory_command_history", lambda *_a, **_k: {"items": []})
     monkeypatch.setattr(command_history, "get_events_index", lambda case_id: f"events-{case_id}")
     monkeypatch.setattr(
         command_history,
@@ -451,6 +452,7 @@ def _hit(doc_id: str, *, ts: str, command: str, pid: int) -> dict:
 
 
 def test_command_history_timestamp_sort_asc_desc_and_source_doc_id(monkeypatch) -> None:
+    monkeypatch.setattr(command_history, "memory_command_history", lambda *_a, **_k: {"items": []})
     hits = [
         _hit("event-new", ts="2024-03-22T12:30:00Z", command="powershell.exe -File C:\\new.ps1", pid=2000),
         _hit("event-old", ts="2024-03-22T12:00:00Z", command="powershell.exe -File C:\\old.ps1", pid=1000),
@@ -580,6 +582,7 @@ def test_command_history_pushes_host_filter_into_the_query(monkeypatch) -> None:
 
 
 def test_command_history_filters_preserve_sort_count(monkeypatch) -> None:
+    monkeypatch.setattr(command_history, "memory_command_history", lambda *_a, **_k: {"items": []})
     hits = [
         _hit("event-new", ts="2024-03-22T12:30:00Z", command="powershell.exe -File C:\\new.ps1", pid=2000),
         _hit("event-old", ts="2024-03-22T12:00:00Z", command="cmd.exe /c whoami", pid=1000),

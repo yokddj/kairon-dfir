@@ -15,6 +15,8 @@ covered exhaustively by test_evidence_unified_upload.py).
 """
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -53,6 +55,7 @@ def _case(db, *, case_id=CASE_ID):
 def _configure(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr(settings, "memory_upload_enabled", True)
     monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
     monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)

@@ -18,6 +18,26 @@ def pytest_configure():
     os.environ.setdefault("KAIRON_AUTH_ENABLED", "false")
 
 
+@pytest.fixture(autouse=True)
+def _restore_cached_settings():
+    """Some tests rebuild settings from the environment with get_settings.cache_clear().
+    Modules (and other tests) that read get_settings() earlier keep the old instance, so
+    later tests patched one object while the code read another. Put the original back."""
+    from app.core import config
+
+    original = config.get_settings()
+    yield
+    if config.get_settings() is original:
+        return
+    config.get_settings.cache_clear()
+    settings_class = config.Settings
+    config.Settings = lambda: original
+    try:
+        config.get_settings()
+    finally:
+        config.Settings = settings_class
+
+
 def _load_known_failures() -> set[str]:
     path = Path(__file__).with_name("known_failures.txt")
     if not path.exists():

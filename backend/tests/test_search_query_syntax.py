@@ -79,6 +79,8 @@ def test_advanced_field_query_builds_term_filter(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(search_service, "get_opensearch_client", lambda: client)
     monkeypatch.setattr(search_service, "index_exists", lambda client, index: True)
     monkeypatch.setattr(search_service, "get_events_index", lambda case_id: "dfir-events-case-1")
+    monkeypatch.setattr(search_service, "resolve_canonical_host", lambda *_a, **_k: None)
+    monkeypatch.setattr(search_service, "marking_map_for_events", lambda *_a, **_k: {})
 
     total, rows, warnings, _ = search_service.search_events_v2("case-1", search_service.build_search_v2_params(q="artifact.type:ntfs", page_size=10))
 

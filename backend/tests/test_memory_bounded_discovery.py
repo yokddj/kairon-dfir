@@ -659,7 +659,7 @@ def test_15_no_symbol_download(monkeypatch) -> None:
             raise AssertionError(
                 f"symbol-fetcher must not be touched by bounded discovery (tried: {name})"
             )
-    sys.modules["app.services.memory.symbol_fetcher"] = _BlockFetcher()
+    monkeypatch.setitem(sys.modules, "app.services.memory.symbol_fetcher", _BlockFetcher())
     payload = {
         "pdb_name": "ntkrnlmp.pdb",
         "pdb_guid": "9DC3FC69B1CA4B34707EBC57FD1D6126",

@@ -1494,7 +1494,12 @@ def _detect_raw_candidate(entry: ContainerEntry, entry_map: dict[str, ContainerE
             if "ntfs" in artifact_type
             else "other"
         )
-        return _raw_candidate(entry, category=category, artifact_type=artifact_type, reason=f"Detected raw artifact. Planned parser: {planned_parser}.", container_path=container_path, container_type=container_type)
+        reason = (
+            "Detected raw SRUM database. Use the scoped SRUM action to parse with SrumECmd."
+            if artifact_type == "srum_raw"
+            else f"Detected raw artifact. Planned parser: {planned_parser}."
+        )
+        return _raw_candidate(entry, category=category, artifact_type=artifact_type, reason=reason, container_path=container_path, container_type=container_type)
 
     if lower_name.endswith(("automaticdestinations-ms", "customdestinations-ms")):
         return _raw_candidate(entry, category="jumplist", artifact_type="jumplist_raw", reason="Detected Jump List raw file. Use JLECmd/EZ output for now.", container_path=container_path, container_type=container_type)
@@ -1504,8 +1509,6 @@ def _detect_raw_candidate(entry: ContainerEntry, entry_map: dict[str, ContainerE
         return _raw_candidate(entry, category="filesystem", artifact_type="ntfs_raw", reason="Detected NTFS raw file. Use scoped MFT/USN indexing when needed.", container_path=container_path, container_type=container_type)
     if any(token in lower_relative for token in ["appcompatcache", "shimcache", "recentfilecache"]):
         return _raw_candidate(entry, category="execution_artifact", artifact_type="shimcache_registry_hive", reason="Detected raw ShimCache/AppCompat artifact. Raw parser not implemented yet. Use AppCompatCacheParser/RECmd parsed CSV for now.", container_path=container_path, container_type=container_type)
-    if "windows\\system32\\sru\\" in normalized_lower and lower_name == "srudb.dat":
-        return _raw_candidate(entry, category="network_activity", artifact_type="srum_database", reason="Detected raw SRUM database. Use the scoped SRUM action to parse with SrumECmd.", container_path=container_path, container_type=container_type)
     if "windows\\system32\\sru\\" in normalized_lower and lower_name == "sru.chk":
         return VelociraptorEvidenceCandidate(
             id=_candidate_id("network_activity", entry.path),

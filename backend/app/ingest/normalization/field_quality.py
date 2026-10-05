@@ -53,7 +53,9 @@ def normalize_event_fields(document: dict[str, Any]) -> dict[str, Any]:
     user = document.setdefault("user", {})
     if isinstance(user, dict):
         cleaned_user = clean_user(user.get("name"), raw_fields=document)
-        if cleaned_user.value:
+        # clean_user answers "-" when there is no usable user; store that as no user,
+        # not as an account literally named "-".
+        if cleaned_user.value and cleaned_user.value != "-":
             if user.get("name") != cleaned_user.value:
                 warnings.append(f"user_{cleaned_user.quality}")
             user["name"] = cleaned_user.value

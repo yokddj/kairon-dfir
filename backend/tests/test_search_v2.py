@@ -752,6 +752,7 @@ def test_search_all_scope_page_two_fetches_enough_events_for_offset(monkeypatch:
     monkeypatch.setattr(search_service, "get_opensearch_client", lambda: _FakeClient())
     monkeypatch.setattr(search_service, "index_exists", lambda client, index: True)
     monkeypatch.setattr(search_service, "get_events_index", lambda case_id: "dfir-events-case-1")
+    monkeypatch.setattr(search_service, "memory_search_results", lambda *_a, **_k: {"results": [], "warnings": []})
 
     result = search_service.search_case_v2(
         _FakeDb(),
@@ -920,7 +921,7 @@ def test_search_facets_supports_evidence_scope_with_counts(monkeypatch: pytest.M
     monkeypatch.setattr(routes_search, "_cache_get", lambda *args, **kwargs: None)
     monkeypatch.setattr(routes_search, "_cache_put", lambda _cache, _key, _ttl, value: value)
 
-    facets = routes_search.search_facets(case_id="case-1", evidence_id="ev-1")
+    facets = routes_search.search_facets(case_id="case-1", evidence_id="ev-1", host_id=None, host_scope=None, db=None)
 
     assert facets["artifact.type"]["browser"] == 53
     first_body = captured["calls"][0]["body"]

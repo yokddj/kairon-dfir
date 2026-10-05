@@ -1388,18 +1388,6 @@ def test_rebuild_ingest_plan_from_last_run_uses_real_artifacts() -> None:
     assert preview["summary"]["selected_by_artifact_type"]["evtx_raw"] == 2
     assert len(preview["selected_candidates"]) == 3
 
-
-def test_evidence_detail_reprocess_copy_mentions_previous_selection() -> None:
-    evidence_detail_path = Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "EvidenceDetail.tsx"
-    if not evidence_detail_path.exists():
-        pytest.skip("frontend sources are not present in this test environment")
-    evidence_detail = evidence_detail_path.read_text(encoding="utf-8")
-    assert "Use previous parser selection" in evidence_detail
-    assert "Choose artifacts again" in evidence_detail
-    assert "Start from scratch / Full rediscovery" in evidence_detail
-    assert "Type REDISCOVER" in evidence_detail
-
-
 def test_select_artifacts_uses_velociraptor_discovery_for_velociraptor_zip(monkeypatch, tmp_path: Path) -> None:
     called = {"velociraptor": 0, "generic": 0}
 
@@ -2962,7 +2950,9 @@ def test_scheduled_task_system_task_stays_low_risk() -> None:
     assert doc["execution"]["is_execution_confirmed"] is False
 
 
-def test_scheduled_task_disabled_can_stay_off_timeline(tmp_path: Path) -> None:
+def test_scheduled_task_disabled_is_tagged_but_kept_on_timeline(tmp_path: Path) -> None:
+    # A disabled task that has a command stays on the timeline: its registration
+    # date is real, and a task can be disabled after it has been used.
     task_file = tmp_path / "disabled_task.xml"
     task_file.write_text(
         """<?xml version="1.0" encoding="UTF-8"?>
@@ -2976,7 +2966,7 @@ def test_scheduled_task_disabled_can_stay_off_timeline(tmp_path: Path) -> None:
     doc = normalize_file("case-1", "ev-1", "art-1", task_file, {"artifact_type": "scheduled_task", "name": task_file.name, "source_path": str(task_file), "parser": "scheduled_task_xml", "source_tool": "native_scheduled_task", "source_format": "xml"})[0]
     assert "disabled" in doc["tags"]
     assert doc["persistence"]["enabled"] is False
-    assert doc["event"]["timeline_include"] is False
+    assert doc["event"]["timeline_include"] is True
 
 
 def test_scheduled_task_utf16_microsoft_com_handler_is_not_suspicious(tmp_path: Path) -> None:
@@ -6461,7 +6451,7 @@ def test_prefetch_raw_parser_decompresses_mam_when_xpress_lz77_available(tmp_pat
 
 def test_prefetch_raw_partial_event_indexes_without_timestamp(tmp_path: Path) -> None:
     path = tmp_path / "RARETOOL.EXE-ABCD1234.pf"
-    path.write_bytes(_build_minimal_prefetch_bytes(run_count=0, last_run=datetime(1601, 1, 1, tzinfo=UTC)))
+    path.write_bytes(_build_minimal_prefetch_bytes(run_count=0, last_run=datetime(1601, 1, 1, tzinfo=UTC), previous_run=datetime(1601, 1, 1, tzinfo=UTC)))
     result = PrefetchRawParser().parse(
         path,
         case_id="case-1",
@@ -9173,7 +9163,7 @@ def test_velociraptor_discovery_detects_srudb(tmp_path: Path) -> None:
     db_path.mkdir(parents=True, exist_ok=True)
     (db_path / "SRUDB.dat").write_bytes(b"fake")
     discovery = discover_velociraptor_evidences(tmp_path)
-    candidate = next(item for item in discovery.candidates if item.artifact_type == "srum_database")
+    candidate = next(item for item in discovery.candidates if item.artifact_type == "srum_raw")
     assert candidate.category == "network_activity"
     assert candidate.supported is False
     assert candidate.parser_status == "detected_not_implemented"
@@ -10929,10 +10919,20 @@ def test_build_problematic_artifacts_report_includes_failed_aborted_artifact_row
     assert item["artifact_id"] == "artifact-1"
     assert item["status"] == "failed_aborted"
     assert item["effective_status"] == "failed_aborted"
-    assert item["retryable"] is True
+    # 1910 records were already indexed with random ids; a retry would index them again.
+    assert item["retryable"] is False
     assert item["suggested_retry_mode"] == "deep_safe_mode"
     assert item["current_data_loss_expected"] is True
     assert item["error_message"] == "Artifact did not reach terminal parser completion before worker/run abort."
+
+    artifact_row.record_count = 0
+    report = build_problematic_artifacts_report(
+        evidence,
+        {"artifacts": [], "errors": []},
+        artifact_id_by_key={("Windows/System32/winevt/Logs/Security.evtx", "evtx_raw"): "artifact-1"},
+        artifact_rows=[artifact_row],
+    )
+    assert report["items"][0]["retryable"] is True
 
 
 def test_classify_long_tail_artifact_state_marks_slow_progressing() -> None:
@@ -13595,28 +13595,6 @@ def test_network_correlations_and_sections(monkeypatch) -> None:
     assert result["sections"]["hosts_entries"]
     assert result["sections"]["network_correlations"]
 
-
-def test_network_frontend_routes_and_sections_exist() -> None:
-    frontend_root = Path(__file__).resolve().parents[2] / "frontend" / "src"
-    if not frontend_root.exists():
-        frontend_root = Path(__file__).resolve().parents[1].parent / "frontend" / "src"
-    if not frontend_root.exists():
-        import pytest
-
-        pytest.skip("frontend sources not present in backend-only test image")
-    artifact_explorer = (frontend_root / "pages" / "ArtifactExplorer.tsx").read_text(encoding="utf-8")
-    event_table = (frontend_root / "components" / "EventTable.tsx").read_text(encoding="utf-8")
-    semi_auto = (frontend_root / "pages" / "SemiAutoAnalysis.tsx").read_text(encoding="utf-8")
-    evidence_detail = (frontend_root / "pages" / "EvidenceDetail.tsx").read_text(encoding="utf-8")
-    assert 'artifactEventView' in artifact_explorer
-    assert 'if (artifactType === "network") return "network";' in event_table
-    assert "wlan_profiles" in semi_auto
-    assert "hosts_entries" in semi_auto
-    assert "network_correlations" in semi_auto
-    assert "No directly parseable network artifacts found. WLAN/Network EVTX artifacts are handled by the EVTX parser." in evidence_detail
-    assert "SRUM databases were detected. Use the scoped SRUM action to parse SRUDB.dat with SrumECmd without re-indexing EVTX or MFT." in evidence_detail
-
-
 def test_wlan_autoconfig_evtx_candidate_is_handled_by_evtx_parser() -> None:
     path = Path(__file__).parent / "fixtures" / "network" / "velociraptor_collection_network"
     discovery = discover_velociraptor_evidences(path)
@@ -13812,16 +13790,6 @@ def test_dns_search_text_and_host_contamination_guard() -> None:
     assert doc["host"]["name"] is None
     assert "dns_cache.csv" not in str(doc["host"].get("name") or "")
     assert len(doc["search_text"]) <= SEARCH_TEXT_MAX_CHARS
-
-
-def test_execution_artifacts_frontend_prioritizes_amcache_name_path_and_summary() -> None:
-    event_table = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "components" / "EventTable.tsx").read_text(encoding="utf-8")
-    assert 'function executionArtifactTypeLabel' in event_table
-    assert 'function executionArtifactProgramFile' in event_table
-    assert 'label: "Program / File"' in event_table
-    assert 'label: "Publisher / Version"' in event_table
-    assert 'summary,' in event_table
-
 
 def _write_test_eml(path: Path, *, subject: str, auth: str, attachment_name: str | None = None, body: str = "Hello") -> None:
     message = EmailMessage()

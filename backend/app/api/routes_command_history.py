@@ -81,4 +81,5 @@ def case_command_history(
             "sort_by": sort_by,
             "sort_order": sort_order,
         },
+        db=db,
     )

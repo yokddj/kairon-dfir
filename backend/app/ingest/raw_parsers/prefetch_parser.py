@@ -245,12 +245,13 @@ def _infer_timestamp_fields(version: int, info_offset: int, data: bytes) -> tupl
 
 def parse_prefetch_bytes(data: bytes, *, source_name: str = "") -> tuple[dict, list[str]]:
     warnings: list[str] = []
-    if len(data) < 84:
-        raise ValueError("Prefetch file too small")
     magic = _read_magic(data)
     if magic == "MAM":
         data = _decompress_mam_prefetch(data)
         magic = _read_magic(data)
+    # 84 bytes is the uncompressed SCCA header; a MAM container can be smaller.
+    if len(data) < 84:
+        raise ValueError("Prefetch file too small")
     version = _u32(data, 0)
     signature = data[4:8].decode("ascii", errors="ignore")
     file_size = _u32(data, 12)

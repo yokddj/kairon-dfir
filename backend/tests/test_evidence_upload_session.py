@@ -14,6 +14,8 @@ confirmed.
 """
 from __future__ import annotations
 
+import os
+
 import asyncio
 import hashlib
 from io import BytesIO
@@ -660,6 +662,7 @@ def test_get_active_session_rejects_wrong_case_or_terminal_status(tmp_path, monk
 def test_promote_reuses_staged_bytes_without_retransmission_or_rehash(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     enqueued: list[str] = []
     monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: enqueued.append(evidence_id) or "job-1")
     monkeypatch.setattr("app.core.storage.settings", settings)
@@ -695,6 +698,7 @@ def test_promote_defaults_to_raw_intent_and_full_forensic_ingest_mode(tmp_path, 
     byte-for-byte the same registration as before they existed."""
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: "job-1")
     monkeypatch.setattr("app.core.storage.settings", settings)
     db = _db()
@@ -716,6 +720,7 @@ def test_promote_defaults_to_raw_intent_and_full_forensic_ingest_mode(tmp_path, 
 def test_promote_honors_explicit_evidence_intent_ingest_mode_and_evtx_profile(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: "job-1")
     monkeypatch.setattr("app.core.storage.settings", settings)
     db = _db()
@@ -748,6 +753,7 @@ def test_promote_disk_image_category_routes_to_disk_image_upload(tmp_path, monke
     _require_tools("parted", "mkfs.vfat", "dd")
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: "job-1")
     db = _db()
     _case(db)
@@ -774,6 +780,7 @@ def test_promote_disk_image_category_routes_to_disk_image_upload(tmp_path, monke
 def test_promote_memory_session_uses_memory_upload_lifecycle_not_generic_ingest(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr(settings, "memory_upload_enabled", True)
     monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
     monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
@@ -833,6 +840,7 @@ def test_promote_memory_session_uses_memory_upload_lifecycle_not_generic_ingest(
 def test_memory_wizard_and_legacy_upload_register_equivalent_canonical_evidence(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr(settings, "memory_upload_enabled", True)
     monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
     monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
@@ -913,6 +921,7 @@ def test_memory_wizard_and_legacy_upload_register_equivalent_canonical_evidence(
 def test_legacy_memory_upload_without_explicit_host_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr(settings, "memory_upload_enabled", True)
     monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
     monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
@@ -940,6 +949,7 @@ def test_legacy_memory_upload_without_explicit_host_is_rejected(tmp_path, monkey
 def test_promote_memory_session_requires_authorization_acknowledgement(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr(settings, "memory_upload_enabled", True)
     monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
     monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
@@ -974,6 +984,7 @@ def test_promote_memory_session_requires_authorization_acknowledgement(tmp_path,
 def test_promote_memory_session_requires_explicit_source_host_like_legacy(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr(settings, "memory_upload_enabled", True)
     monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
     monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
@@ -1009,6 +1020,7 @@ def test_promote_memory_session_requires_explicit_source_host_like_legacy(tmp_pa
 def test_promote_memory_session_without_host_returns_structured_api_error(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr(settings, "memory_upload_enabled", True)
     monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
     monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
@@ -1040,6 +1052,7 @@ def test_promote_memory_session_without_host_returns_structured_api_error(tmp_pa
 def test_promote_memory_session_rejects_host_from_another_case(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr(settings, "memory_upload_enabled", True)
     monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
     monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
@@ -1085,6 +1098,7 @@ def test_promote_disk_image_with_multiple_segments_passes_all_segments_in_order(
     upload_disk_image, in upload order."""
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     db = _db()
     _case(db)
 
@@ -1139,6 +1153,7 @@ def test_promote_disk_image_with_multiple_segments_passes_all_segments_in_order(
 def test_promote_folder_session(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr(settings, "backend_enable_experimental_folder_upload", True)
     monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: "job-1")
     db = _db()
@@ -1177,6 +1192,7 @@ def test_promote_folder_session(tmp_path, monkeypatch):
 def test_forced_route_metadata_is_written_to_promoted_evidence(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     db = _db()
     _case(db)
 
@@ -1216,6 +1232,7 @@ def test_promote_server_path_session_never_deletes_original(tmp_path, monkeypatc
 
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: "job-1")
     allowed_root = tmp_path / "evidence"
     allowed_root.mkdir(parents=True, exist_ok=True)
@@ -1256,6 +1273,7 @@ def test_promote_server_path_session_never_deletes_original(tmp_path, monkeypatc
 def test_api_create_then_promote_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
     monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: "job-1")
     db = _db()
     _case(db)

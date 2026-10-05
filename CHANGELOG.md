@@ -45,6 +45,13 @@
 
 ### Fixed
 
+- Process graph: Sysmon registry events (12/13/14) no longer attached to their process. The EVTX normalizer stores them under the generic registry event names, which the graph did not recognise.
+- Scheduled tasks were all reported as system-scope because every task is stored under `System32\Tasks`. The task's principal now decides; the location is only a fallback.
+- PowerShell events without a user stored the placeholder `-` as the user name.
+- A compressed (MAM) Prefetch file smaller than the uncompressed header size was rejected before being decompressed.
+- Command history opened a second database connection for memory commands even when the caller had one.
+- Raw SRUM databases found in a collection now show the hint to use the SRUM action.
+- Backend tests: the 89 entries in `tests/known_failures.txt` are gone. Some were real bugs (above); the rest were tests of behaviour that changed on purpose, environment assumptions (group ids, cached settings), or state leaking between tests.
 - Rotated logs compressed on their own (`sh.log.1.gz`, `auth.log.2.gz`) were indexed twice: they were unpacked as nested archives while the original stayed in place and was read too. A gzip text log that a Linux parser recognises is now read once, in place, keeping its original path; tar archives and binary records (wtmp, journals) are still unpacked.
 - A folder of logs uploaded as it is was mostly ignored: generic logs were only read under `var/log` and similar system paths. Logs in any folder named `log` or `logs` are read now (except in Windows layouts), with web-server logs there going to the web parser; and `sh.log`/`bash.log` keep every line, not only the commands in the expected format.
 - Collection evidence (Velociraptor and other ZIP/TAR collections) failed to ingest with "cannot access local variable 'disk_image_materialization'" since 2026-10-01: the platform detection read a value only the disk-image path set.
