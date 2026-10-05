@@ -32,6 +32,7 @@ from typing import Any, Callable
 from app.core.timing import timed_phase
 
 from app.core.artifact_registry import artifact_registry_entries
+from app.disk_images.qemu import allocated_data_bytes
 from app.core.config import get_settings
 from app.core.evidence_platforms import EvidencePlatform, detect_evidence_platform
 from app.disk_images.service import inspect_disk_image_readonly
@@ -64,6 +65,22 @@ _ASSUMED_THROUGHPUT_BYTES_PER_SECOND = 45 * 1024 * 1024
 _MIN_ESTIMATED_SECONDS = 30
 _STORAGE_SAFETY_MARGIN = 1.15
 _NESTED_ARCHIVE_PEEK_LIMIT_BYTES = 200 * 1024 * 1024
+
+
+def _temp_storage_fixes() -> list[str]:
+    """How to get room for the temporary copy, in terms of how Kairon is running."""
+    if Path("/.dockerenv").exists():
+        # In the bundled Docker deployment BACKEND_TEMP_DIR is a path inside the container, on the
+        # same host disk as Kairon's data folder: changing it in .env does not move it to another disk.
+        return [
+            "Free space on the host disk that holds Kairon's data folder (for example: docker builder prune -f, docker image prune -f, or removing old backups)",
+            "Or put the temp folder on a larger disk: in docker-compose.override.yml mount a host folder at /app/data/tmp for the backend and worker services, then run docker compose up -d",
+        ]
+    return [
+        "Free space on the temp directory's volume",
+        "Or move BACKEND_TEMP_DIR to a volume with more free space",
+        "Restart the backend after changing BACKEND_TEMP_DIR",
+    ]
 
 
 def _human(num_bytes: int | None) -> str:
@@ -458,6 +475,7 @@ def run_preflight(
     expected_parsers: list[str] = []
     estimated_extracted_bytes: int | None = None
     estimated_temp_storage_bytes: int | None = None
+    estimated_temp_data_bytes: int | None = None
     detected_archive_depth: int | None = None
     detected_backing_chain_depth: int | None = None
     estimated_artifact_count: int | None = None
@@ -543,6 +561,9 @@ def run_preflight(
             # qemu-img convert, so this estimate is still the right one
             # to warn about for those.
             estimated_temp_storage_bytes = 0 if format_key in {"raw", "ewf"} else estimated_extracted_bytes
+            if estimated_temp_storage_bytes:
+                # The RAW copy is written sparse: on disk it takes about the image's real data.
+                estimated_temp_data_bytes = allocated_data_bytes(path)
             volume_diagnostics = _translate_volume_diagnostics(volumes)
             if installs:
                 first = installs[0]
@@ -668,25 +689,42 @@ def run_preflight(
         ))
 
     storage_needed = int((estimated_temp_storage_bytes or 0) * _STORAGE_SAFETY_MARGIN)
-    storage_ok = available_space > storage_needed
+    sparse_needed = int(estimated_temp_data_bytes * _STORAGE_SAFETY_MARGIN) if estimated_temp_data_bytes is not None else None
+    fits_worst_case = available_space > storage_needed
+    fits_real_data = sparse_needed is not None and available_space > sparse_needed
+    storage_ok = fits_worst_case or fits_real_data
     status_checks.append(PreflightStatusCheck(
         label="Enough storage",
         ok=storage_ok,
-        detail=f"{_human(available_space)} available, ~{_human(storage_needed)} needed",
+        detail=(
+            f"{_human(available_space)} available, ~{_human(storage_needed)} needed"
+            if fits_worst_case or sparse_needed is None
+            else f"{_human(available_space)} available, ~{_human(sparse_needed)} needed for the image's data (up to {_human(storage_needed)} in the worst case)"
+        ),
     ))
+    if storage_ok and not fits_worst_case:
+        diagnostics.append(PreflightDiagnostic(
+            problem="Temporary storage is tight",
+            reason=(
+                f"The disk image is converted to a temporary RAW copy written sparse, which takes about its real data "
+                f"({_human(sparse_needed or 0)} with margin) and fits in the {_human(available_space)} available. On a filesystem "
+                f"without sparse-file support the copy would need up to {_human(storage_needed)}."
+            ),
+            current_configuration={"available": _human(available_space), "temp_directory": str(settings.backend_temp_dir)},
+            required_configuration={"available": f"{_human(sparse_needed or 0)} (up to {_human(storage_needed)})"},
+            how_to_fix=_temp_storage_fixes(),
+            severity="recommendation",
+        ))
     if not storage_ok:
+        needed = sparse_needed if sparse_needed is not None else storage_needed
         diagnostics.append(PreflightDiagnostic(
             problem="Temporary storage too low",
-            reason=f"Processing this evidence needs approximately {_human(storage_needed)} of free space in the temp directory, but only {_human(available_space)} is available.",
+            reason=f"Processing this evidence needs approximately {_human(needed)} of free space in the temp directory, but only {_human(available_space)} is available.",
             current_configuration={"available": _human(available_space), "temp_directory": str(settings.backend_temp_dir)},
-            required_configuration={"available": _human(storage_needed)},
+            required_configuration={"available": _human(needed)},
             configuration_key="BACKEND_TEMP_DIR",
             configuration_file=SETTINGS_OVERRIDE_FILE,
-            how_to_fix=[
-                "Free space on the temp directory's volume",
-                "Or move BACKEND_TEMP_DIR to a volume with more free space",
-                "Restart the backend after changing BACKEND_TEMP_DIR",
-            ],
+            how_to_fix=_temp_storage_fixes(),
         ))
 
     # BACKEND_MAX_EXTRACTED_BYTES guards app.ingest.archive._enforce_limits'
