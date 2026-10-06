@@ -6427,6 +6427,8 @@ export const api = {
       object_type?: string;
       object_name?: string;
       name?: string;
+      indicator_type?: string;
+      review_priority?: string;
       page?: number;
       page_size?: number;
     },

@@ -27,7 +27,7 @@ def _settings(*, enabled_plugins: str | None = None):
     object.__setattr__(base, "memory_analysis_enabled", True)
     object.__setattr__(base, "memory_allow_external_tool_execution", True)
     object.__setattr__(base, "memory_process_profile_enabled", True)
-    object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,shell_history_basic,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory")
+    object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,shell_history_basic,find_evil,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory")
     object.__setattr__(
         base,
         "memory_allowed_plugins",
@@ -255,8 +255,11 @@ def test_normal_volatility_command_has_no_offline_flag() -> None:
 
 def test_runner_guardrail_allows_configured_plugins() -> None:
     from app.core.config import Settings
+    from app.services.memory.memprocfs_runner import MEMPROCFS_PLUGINS
     from app.services.memory.volatility_runner import ALLOWED_VOLATILITY_PLUGINS
 
     settings = Settings()
 
-    assert set(settings.allowed_memory_plugins).issubset(ALLOWED_VOLATILITY_PLUGINS)
+    # Every configured plugin has a runner that accepts it: Volatility's allowlist, or the
+    # MemProcFS runner for memprocfs.* plugins.
+    assert set(settings.allowed_memory_plugins).issubset(ALLOWED_VOLATILITY_PLUGINS | MEMPROCFS_PLUGINS)

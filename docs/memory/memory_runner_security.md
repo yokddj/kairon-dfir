@@ -86,7 +86,7 @@ Logs may include run ID, case ID, evidence ID, backend, plugin, state transition
 ## Known limitations
 
 - Only `windows.info`, `windows.pslist`, `windows.pstree`, `windows.psscan`, and `windows.cmdline` are supported.
-- MemProcFS execution is not implemented.
+- MemProcFS runs only for FindEvil, as a separate process loading its library, offline (Microsoft symbol server disabled), with the same timeout, cancellation and output limits as Volatility.
 - No network, registry, credential, malware, file, string, injection, YARA, DLL, handle, driver, service, or hybrid-correlation analysis is implemented.
 - Real execution requires either an administrator-provided Volatility 3 executable or the optional operator-built `memory-worker`, plus authorized lab evidence.
 

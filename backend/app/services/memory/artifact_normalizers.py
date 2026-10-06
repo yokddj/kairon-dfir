@@ -1592,3 +1592,121 @@ def normalize_windows_filescan(
         "conflicts": 0,
         "normalization_version": NORMALIZATION_VERSION,
     }
+
+
+# ---------------------------------------------------------------------------
+# find_evil -> memory_findevil
+#   MemProcFS's FindEvil (forensic mode) lists memory indicators worth a look:
+#   processes unlinked from the kernel list, masquerading or with odd parents,
+#   injected or patched modules, executable private memory, suspicious threads,
+#   Defender detections still in memory. Many are expected on a healthy system
+#   (browsers and JIT runtimes allocate executable private memory, Windows
+#   hot-patches its own modules), so each indicator is stored as a neutral
+#   observation with a review priority and a plain explanation, never a
+#   verdict -- the same contract as windows.malfind here.
+# ---------------------------------------------------------------------------
+
+# type -> (review priority, category, explanation)
+FINDEVIL_TYPES: dict[str, tuple[str, str, str]] = {
+    "AV_DETECT": ("high", "antivirus", "Antivirus detection event still in memory (Windows Defender)."),
+    "PROC_NOLINK": ("high", "process", "Process missing from the kernel's active process list: hidden (unlinked), or exiting when memory was captured."),
+    "PROC_PARENT": ("high", "process", "Well-known Windows process with an unexpected parent process."),
+    "PEB_MASQ": ("high", "process", "Process image path in user memory differs from the kernel's: possible masquerading."),
+    "PE_INJECT": ("high", "module", "Executable module image found in private memory: possible injected module."),
+    "NOIMAGE_RWX": ("high", "memory", "Writable and executable memory not backed by a file: typical of injected code."),
+    "PROC_USER": ("medium", "process", "Process running as an unexpected account for its name."),
+    "PROC_BAD_DTB": ("medium", "process", "Process page-table base is not valid: possible tampering, or a process that was exiting."),
+    "PROC_DEBUG": ("medium", "process", "Process holds the debug privilege (SeDebugPrivilege): it can read and write other processes' memory."),
+    "PEB_BAD_LDR": ("medium", "process", "Process loader data (PEB) unreadable or inconsistent."),
+    "PE_NOLINK": ("medium", "module", "Module mapped in memory but missing from the process's loaded-module list."),
+    "PE_HDR_SPOOF": ("medium", "module", "Module header in memory does not match the module it belongs to."),
+    "DRIVER_PATH": ("medium", "driver", "Kernel driver loaded from an unusual location."),
+    "THREAD": ("medium", "thread", "Thread with an unusual property (for example impersonating SYSTEM, or starting outside a module)."),
+    "HIGH_ENTROPY": ("medium", "memory", "Memory region with very high entropy: packed, compressed or encrypted content."),
+    "NOIMAGE_RX": ("medium", "memory", "Executable memory not backed by a file."),
+    "PRIVATE_RWX": ("low", "memory", "Private memory that is writable and executable: injected code, but also normal for browsers and JIT runtimes."),
+    "PRIVATE_RX": ("low", "memory", "Executable private memory: common for JIT runtimes."),
+    "PE_PATCHED": ("low", "module", "Executable page of a module differs from the file on disk: hooking or patching, also done by Windows and JIT runtimes."),
+}
+FINDEVIL_PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+
+def _findevil_type_info(indicator_type: str) -> tuple[str, str, str]:
+    if indicator_type in FINDEVIL_TYPES:
+        return FINDEVIL_TYPES[indicator_type]
+    if indicator_type.startswith("YR_"):
+        return ("high", "yara", "YARA rule match in memory.")
+    return ("medium", "other", "MemProcFS FindEvil indicator.")
+
+
+def normalize_memprocfs_findevil(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "memprocfs.findevil",
+    max_records: int = 200000,
+) -> dict[str, Any]:
+    rows = _rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    dropped = 0
+    for index, row in enumerate(rows):
+        if len(items) >= max_records:
+            warnings.append("findevil_max_records_reached")
+            dropped += len(rows) - index
+            break
+        indicator_type = _str_or_none(_lookup(row, "Type", "type"), 64)
+        if not indicator_type:
+            dropped += 1
+            warnings.append("findevil_row_missing_type")
+            continue
+        pid = _int_or_none(_lookup(row, "PID", "pid"))
+        process_name = _str_or_none(_lookup(row, "Process", "ProcessName", "process_name"), MAX_NAME_LENGTH)
+        address = _str_or_none(_lookup(row, "Address", "address"), 32)
+        description = _scrub_paths(_str_or_none(_lookup(row, "Description", "description"), MAX_OBJECT_NAME_LENGTH) or "") or None
+        priority, category, explanation = _findevil_type_info(indicator_type)
+        identity = _identity_pid_offset(pid, indicator_type, address, description, index)
+        items.append({
+            "document_id": _document_id(prefix="memory_findevil", case_id=case_id, run_id=scan_run_id, identity=identity),
+            "document_type": "memory_findevil",
+            "case_id": case_id,
+            "evidence_id": evidence_id,
+            "scan_run_id": scan_run_id,
+            "plugin_run_id": plugin_run_id,
+            "platform": "windows",
+            # PID 0 is MemProcFS's "not tied to a process" (Defender events).
+            "pid": pid if pid else None,
+            "process_entity_id": None,
+            "process_name": process_name or None,
+            "indicator_type": indicator_type,
+            "indicator_category": category,
+            "review_priority": priority,
+            "review_rank": FINDEVIL_PRIORITY_ORDER[priority],
+            "explanation": explanation,
+            "address": address,
+            "description": description,
+            "sequence": len(items),
+            "source_plugin": source_plugin,
+            "source_record_index": index,
+            "confidence": "reported_by_tool",
+            "provenance": _provenance(
+                case_id=case_id,
+                evidence_id=evidence_id,
+                scan_run_id=scan_run_id,
+                plugin_run_id=plugin_run_id,
+                source_plugin=source_plugin,
+            ),
+            "normalization_version": NORMALIZATION_VERSION,
+        })
+    return {
+        "items": items,
+        "warnings": warnings,
+        "raw_count": len(rows),
+        "accepted_count": len(items),
+        "dropped_count": dropped,
+        "conflicts": 0,
+        "normalization_version": NORMALIZATION_VERSION,
+    }

@@ -70,6 +70,16 @@ _ACTIVE_RESULT_MAX_PAGE_SIZE = 200
 # tried in order; the first profile that has a successful run wins.
 # The ``fallback_plugins`` list is the set of plugins the run must
 # have executed for the family to be considered available.
+# Families listed in an order other than pid: FindEvil's indicators most worth a look first.
+FAMILY_SORT: dict[str, list[dict[str, Any]]] = {
+    "find_evil": [
+        {"review_rank": {"order": "asc", "missing": "_last", "unmapped_type": "integer"}},
+        {"indicator_type": {"order": "asc", "unmapped_type": "keyword"}},
+        {"pid": {"order": "asc", "missing": "_last", "unmapped_type": "long"}},
+        {"sequence": {"order": "asc", "missing": "_last", "unmapped_type": "long"}},
+    ],
+}
+
 FAMILY_RESOLUTION = {
     "system_info": {
         "preferred_profiles": ["metadata_only"],
@@ -129,6 +139,11 @@ FAMILY_RESOLUTION = {
     "shell_history": {
         "preferred_profiles": ["shell_history_basic"],
         "fallback_doc_types": ["memory_shell_history"],
+        "evidence_id_required": True,
+    },
+    "find_evil": {
+        "preferred_profiles": ["find_evil"],
+        "fallback_doc_types": ["memory_findevil"],
         "evidence_id_required": True,
     },
     "files": {
@@ -591,6 +606,7 @@ def _family_items(
             page=page,
             page_size=page_size,
             filters=filters,
+            sort=FAMILY_SORT.get(family),
         )
         total = payload.get("total")
         return list(payload.get("items", [])), "opensearch", (int(total) if total is not None else None)

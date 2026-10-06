@@ -39,6 +39,7 @@ from app.services.memory.artifact_normalizers import (
     normalize_windows_modules,
     normalize_windows_consoles,
     normalize_windows_filescan,
+    normalize_memprocfs_findevil,
     normalize_windows_netscan,
     normalize_windows_privileges,
     normalize_windows_vadinfo,
@@ -50,6 +51,7 @@ from app.services.memory.process_entities import renormalize_documents
 from app.services.memory.storage import memory_run_dir, relative_to_data_dir, write_atomic_bytes, write_atomic_json
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
 from app.services.memory.volatility_runner import VolatilityRunnerError, probe_windows_symbol_identity, run_plugin
+from app.services.memory.memprocfs_runner import MEMPROCFS_PLUGINS, run_findevil
 from app.services.memory import volatility_runner
 from app.services.memory.symbol_control import record_symbol_requirement
 from app.services.memory.analysis_plan import MemoryAnalysisPlan, build_memory_analysis_plan
@@ -98,6 +100,7 @@ ARTIFACT_PLUGIN_NORMALIZER = {
     "linux.sockstat": "memory_network_connection",
     "windows.consoles": "memory_shell_history",
     "windows.filescan": "memory_file_object",
+    "memprocfs.findevil": "memory_findevil",
 }
 ARTIFACT_PLUGIN_LIMITS = {
     # Per-plugin guard-rails to keep offline execution bounded.
@@ -139,6 +142,9 @@ ARTIFACT_PLUGIN_LIMITS = {
     # flat Offset+Name list (tens of thousands of short rows), hence the
     # higher max_output_bytes than the other flat plugins here.
     "windows.filescan": {"timeout_seconds": 240, "max_output_bytes": 64 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    # MemProcFS forensic scan + FindEvil: about one minute on a real 4 GB Windows 11 image
+    # (338 indicators); the bound leaves room for larger images.
+    "memprocfs.findevil": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
 }
 
 # Each existing profile name already encodes one capability's intent.
@@ -172,6 +178,8 @@ PROFILE_CAPABILITY = {
     # (file_extraction.py's dumpfiles-based recovery is Windows-only and
     # windows.filescan has no analogous Linux plugin in this registry).
     "files_basic": MemoryCapability.FILES,
+    # Capability-registry-only like the two above: Windows resolves to memprocfs.findevil.
+    "find_evil": MemoryCapability.FIND_EVIL,
 }
 
 TIMEOUT_POLICY_VERSION = "memory_timeout_hierarchy_v1"
@@ -872,6 +880,8 @@ def _normalize_artifact_payload(
         return normalize_windows_consoles(payload, source_plugin=plugin, **common)
     if plugin == "windows.filescan":
         return normalize_windows_filescan(payload, source_plugin=plugin, **common)
+    if plugin == "memprocfs.findevil":
+        return normalize_memprocfs_findevil(payload, source_plugin=plugin, **common)
     return {
         "items": [],
         "warnings": [f"unsupported_artifact_plugin:{plugin}"],
@@ -1041,15 +1051,26 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
         db.refresh(run)
         return bool(run.cancellation_requested)
 
-    try:
-        result = run_plugin(
-            plugin,
+    if plugin in MEMPROCFS_PLUGINS:
+        result = run_findevil(
             evidence_path,
             output_dir,
             timeout_seconds=timeout_seconds,
             max_output_bytes=max_output_bytes,
             cancellation_check=cancellation_requested,
         )
+    else:
+        result = None
+    try:
+        if result is None:
+            result = run_plugin(
+                plugin,
+                evidence_path,
+                output_dir,
+                timeout_seconds=timeout_seconds,
+                max_output_bytes=max_output_bytes,
+                cancellation_check=cancellation_requested,
+            )
     except TypeError as exc:
         if "unexpected keyword" not in str(exc):
             raise

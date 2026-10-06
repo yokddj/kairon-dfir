@@ -546,7 +546,7 @@ def test_catalogue_uses_blocked_not_unavailable_for_symbol_probe_required(db_ses
         evidence_id=FRESH_EVIDENCE_ID,
     )
     for item in items:
-        if item["profile"] in ("shell_history_basic", "files_basic"):
+        if item["profile"] in ("shell_history_basic", "files_basic", "find_evil"):
             # Orthogonal to this test's symbol-probe gate: this test's fake
             # MemoryAnalysisPlan only marks MemoryCapability.NETWORK
             # eligible, so any other capability-registry-only profile

@@ -359,9 +359,9 @@ def test_catalogue_returns_eight_profiles_with_network_plugin_availability(db: S
          patch("app.services.memory.catalogue.build_memory_analysis_plan", return_value=windows_plan), \
          patch("app.services.memory.catalogue.get_settings", return_value=settings_with_process_profiles):
         catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
-    # 8 original Windows-shaped profiles + shell_history_basic + files_basic
-    # (both resolved via capability_registry, not PROFILE_PLUGINS).
-    assert len(catalogue) == 10
+    # 8 original Windows-shaped profiles + shell_history_basic, files_basic and
+    # find_evil (resolved via capability_registry, not PROFILE_PLUGINS).
+    assert len(catalogue) == 11
     profiles = [item["profile"] for item in catalogue]
     assert "metadata_only" in profiles
     assert "processes_extended" in profiles

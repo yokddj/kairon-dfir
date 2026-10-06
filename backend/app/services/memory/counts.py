@@ -50,6 +50,7 @@ FAMILY_TO_DOCUMENT_TYPE: dict[str, str] = {
     "raw_observations": "memory_process_observation",
     "shell_history": "memory_shell_history",
     "files": "memory_file_object",
+    "find_evil": "memory_findevil",
 }
 
 
@@ -59,6 +60,7 @@ FAMILY_TO_DOCUMENT_TYPE: dict[str, str] = {
 # not a network/module/kernel artifact.
 FAMILY_ORDER: tuple[str, ...] = (
     "system_info",
+    "find_evil",
     "processes",
     "shell_history",
     "modules",
@@ -84,6 +86,7 @@ FAMILY_TITLE: dict[str, str] = {
     "raw_observations": "Raw observations",
     "shell_history": "Shell history",
     "files": "Files",
+    "find_evil": "Find Evil",
 }
 
 

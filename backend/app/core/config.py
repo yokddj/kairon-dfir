@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     memory_analysis_enabled: bool = False
     volatility3_command: str = "vol"
     memprocfs_command: str = "memprocfs"
+    # MemProcFS's library, loaded in a child process for FindEvil (see
+    # app/services/memory/memprocfs_runner.py). The memory-worker image installs it here.
+    memprocfs_library: str = "/opt/memprocfs/vmm.so"
     memory_tools_auto_install_enabled: bool = False
     memory_allow_external_tool_execution: bool = False
     memory_backend_check_timeout_seconds: int = 10
@@ -117,13 +120,13 @@ class Settings(BaseSettings):
         "windows.envars,windows.getsids,windows.privileges,"
         "windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,"
         "windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,"
-        "windows.filescan,"
+        "windows.filescan,memprocfs.findevil,"
         "linux.pslist,linux.pstree,linux.sockstat,linux.bash"
     )
     memory_allowed_profiles: str = (
         "metadata_only,processes_basic,processes_extended,"
         "network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,"
-        "shell_history_basic,files_basic"
+        "shell_history_basic,files_basic,find_evil"
     )
     memory_default_profile: str = "metadata_only"
     memory_process_profile_enabled: bool = False
@@ -514,6 +517,7 @@ class Settings(BaseSettings):
             "windows.vadinfo",
             "windows.consoles",
             "windows.filescan",
+            "memprocfs.findevil",
             "linux.pslist",
             "linux.pstree",
             "linux.sockstat",
@@ -539,6 +543,7 @@ class Settings(BaseSettings):
             "suspicious_memory",
             "shell_history_basic",
             "files_basic",
+            "find_evil",
         }
         profiles = [item.strip() for item in str(self.memory_allowed_profiles or "").split(",") if item.strip()]
         return [profile for profile in profiles if profile in allowed] or ["metadata_only"]

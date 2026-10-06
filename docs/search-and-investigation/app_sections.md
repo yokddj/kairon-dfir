@@ -49,7 +49,7 @@
 ## Memory Analysis
 
 - **What it's for**: registering and reviewing the isolated state of authorized RAM/memory evidence.
-- **Current status**: Preview (Core DFIR Capability — Preview). The capability itself is enabled by default (`memory_enabled=true`); execution of Volatility 3 profiles remains disabled by default (`MEMORY_ANALYSIS_ENABLED=false`) until an administrator explicitly enables it together with upload, external execution and the `memory-worker`; MemProcFS remains readiness-only.
+- **Current status**: Preview (Core DFIR Capability — Preview). The capability itself is enabled by default (`memory_enabled=true`); execution of Volatility 3 profiles remains disabled by default (`MEMORY_ANALYSIS_ENABLED=false`) until an administrator explicitly enables it together with upload, external execution and the `memory-worker`; MemProcFS runs FindEvil (the Find Evil tab).
 - **Recommended flow**: `Case -> Memory Analysis -> Add memory image`. The generic Evidence Upload form still works, but the dedicated upload shows capability, privacy, authorization and progress more clearly.
 - **What it shows**: case mode (`empty`, `disk_only`, `memory_only`, `hybrid`), `memory_dump` evidence, upload readiness, backend readiness, run metadata/process and isolated results.
 - **What it doesn't do yet**: it doesn't add memory to Search, Timeline, Artifact Explorer, Detections, Reports, SIEM, Command History, Persistence or Execution Stories. It does allow creating Findings directly from memory process rows and memory-derived views when row context is available — see `docs/search-and-investigation/findings-notes.md`.
