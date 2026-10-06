@@ -42,6 +42,28 @@ pytest -q /app/tests/test_event_identity.py
 pytest -q /app/tests/test_search_query_syntax.py
 ```
 
+### Integration: ingest end to end
+
+The unit tests replace PostgreSQL with SQLite and OpenSearch with fakes. `tests/integration/test_ingest_pipeline.py` runs the real path instead: it creates a case, uploads three synthetic evidence items through the API (the demo pack, a Linux triage `.tar.gz`, and a Velociraptor collection that goes through discovery and selection like the wizard), lets an RQ worker process the queue, and checks through the API that each evidence completes, that every artifact type has exactly the events it should (nothing dropped, nothing twice), that searches, the timeline, command history and the report preview see them, and that reprocessing does not duplicate. It takes about 20 seconds.
+
+It is skipped unless `KAIRON_INTEGRATION=1`. The `integration` CI job runs it with PostgreSQL, OpenSearch and Redis as service containers. To run it locally, start the three services on spare ports and point the backend at them (`7z` must be installed, as in the backend image):
+
+```bash
+docker run -d --rm --name it-pg -e POSTGRES_USER=dfir -e POSTGRES_PASSWORD=dfir -e POSTGRES_DB=dfir -p 127.0.0.1:55432:5432 postgres:16-alpine
+docker run -d --rm --name it-redis -p 127.0.0.1:56379:6379 redis:7-alpine
+docker run -d --rm --name it-os -e discovery.type=single-node -e DISABLE_SECURITY_PLUGIN=true -e DISABLE_INSTALL_DEMO_CONFIG=true \
+  -e OPENSEARCH_JAVA_OPTS="-Xms512m -Xmx512m" -p 127.0.0.1:59200:9200 opensearchproject/opensearch:2.15.0
+
+cd backend
+KAIRON_INTEGRATION=1 KAIRON_AUTH_ENABLED=false \
+POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=55432 REDIS_URL=redis://127.0.0.1:56379/0 \
+OPENSEARCH_HOST=127.0.0.1 OPENSEARCH_PORT=59200 \
+BACKEND_DATA_DIR=/tmp/kairon-it BACKEND_TEMP_DIR=/tmp/kairon-it/tmp \
+python -m pytest tests/integration -v
+```
+
+When a parser or the demo pack changes on purpose, the expected counts in the test change too; update them in the same pull request.
+
 ## Frontend
 
 ```bash

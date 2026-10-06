@@ -257,7 +257,7 @@ FIELD_ALIASES: dict[str, list[str]] = {
     "port": ["network.source_port", "network.destination_port"],
     "proto": ["network.protocol", "linux.network_protocol"],
     # Linux shortcuts.
-    "action": ["event.action"],
+    "action": ["event.action", "linux.event_action"],
     "verdict": ["linux.firewall_action"],
     "jail": ["linux.jail"],
     "xff": ["linux.x_forwarded_for"],

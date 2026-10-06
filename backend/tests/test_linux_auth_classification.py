@@ -28,6 +28,17 @@ def test_a_refused_sudo_is_a_failure():
     assert (row["event_action"], row["authentication_result"], row["username"], row["command"]) == ("sudo_failed", "failure", "guest", "/bin/bash")
 
 
+@pytest.mark.parametrize("line", [
+    "Mar  1 08:30:00 web sudo:      bob : user NOT in sudoers ; TTY=pts/1 ; PWD=/home/bob ; USER=root ; COMMAND=/bin/bash",
+    "Mar  1 08:30:00 web sudo:      bob : user NOT in the sudoers file ; TTY=pts/1 ; PWD=/home/bob ; USER=root ; COMMAND=/bin/bash",
+    "Mar  1 08:30:00 web sudo:      bob : user NOT allowed to execute '/bin/bash' as root ; TTY=pts/1 ; PWD=/home/bob ; USER=root ; COMMAND=/bin/bash",
+    "Mar  1 08:30:00 web sudo:      bob : command not allowed ; TTY=pts/1 ; PWD=/home/bob ; USER=root ; COMMAND=/bin/bash",
+])
+def test_a_sudo_refused_by_policy_is_not_a_command_run(line):
+    row = _one(line)
+    assert (row["event_action"], row["authentication_result"], row["username"], row["run_as"], row["command"]) == ("sudo_failed", "failure", "bob", "root", "/bin/bash")
+
+
 def test_too_many_attempts_is_a_failed_login_with_its_source():
     row = _one("Oct  5 13:20:59 web sshd[2000]: error: maximum authentication attempts exceeded for root from 203.0.113.9 port 57418 ssh2 [preauth]")
     assert (row["event_action"], row["auth_event_type"], row["username"], row["source_ip"], row["source_port"]) == ("max_auth_attempts", "login_failure", "root", "203.0.113.9", 57418)
@@ -36,6 +47,9 @@ def test_too_many_attempts_is_a_failed_login_with_its_source():
 @pytest.mark.parametrize("line, user, tty", [
     ("Apr 16 15:20:01 web login[900]: ROOT LOGIN  on '/dev/tty1'", "root", "tty1"),
     ("Apr 16 15:20:01 web login[900]: LOGIN ON tty2 BY admin", "admin", "tty2"),
+    # util-linux login, as Debian and Ubuntu write it.
+    ("Apr 16 15:20:01 web login[900]: ROOT LOGIN ON tty1", "root", "tty1"),
+    ("Apr 16 15:20:01 web login[900]: ROOT LOGIN ON pts/3 FROM 192.0.2.5", "root", "pts/3"),
 ])
 def test_console_logins(line, user, tty):
     row = _one(line)
