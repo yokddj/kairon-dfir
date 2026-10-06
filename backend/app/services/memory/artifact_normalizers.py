@@ -1260,6 +1260,7 @@ def normalize_linux_bash(
             "process_name": process_name,
             "command": command,
             "command_time": command_time,
+            "sequence": len(items),
             "source_plugin": source_plugin,
             "source_record_index": index,
             "confidence": "reported_by_plugin",
@@ -1420,6 +1421,9 @@ def normalize_windows_consoles(
             "process_name": process_name,
             "command": command,
             "command_time": None,
+            # Order the commands were recovered in (history first, then each screen top to bottom):
+            # with no timestamps this is the only order there is.
+            "sequence": len(items),
             "working_directory": working_directory,
             "recovered_from": recovered_from,
             "source_plugin": source_plugin,

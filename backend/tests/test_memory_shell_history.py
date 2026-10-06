@@ -782,6 +782,8 @@ def test_windows_consoles_recovers_powershell_commands_from_the_screen() -> None
     ]
     item = result["items"][0]
     assert (item["process_name"], item["pid"], item["recovered_from"], item["confidence"]) == ("powershell.EXE", 5404, "screen", "recovered_from_screen")
+    # No timestamps: the order typed is the only order, kept in "sequence".
+    assert [item["sequence"] for item in result["items"]] == [0, 1, 2]
 
 
 def test_windows_consoles_joins_a_command_wrapped_across_screen_rows() -> None:
@@ -804,6 +806,7 @@ def test_windows_consoles_reads_cmd_prompts_and_does_not_list_history_twice() ->
     result = _normalize_consoles(_screen_rows(88, dump, title="C:\\Windows\\system32\\cmd.exe", history=["whoami"]))
     listed = [(item["command"], item["recovered_from"]) for item in result["items"]]
     assert listed == [("whoami", "command_history"), ("net user backup P@ss /add", "screen")]
+    assert [item["sequence"] for item in result["items"]] == [0, 1]
     assert result["items"][1]["working_directory"] == "C:\\Windows\\system32"
 
 
@@ -811,3 +814,19 @@ def test_windows_consoles_output_ending_in_a_bracket_is_not_a_prompt() -> None:
     dump = "\n".join(["PS C:\\> Get-Thing", "<result>", "value -> other>", "Name> not a path"])
     result = _normalize_consoles(_screen_rows(9, dump))
     assert [item["command"] for item in result["items"]] == ["Get-Thing"]
+
+
+def test_shell_history_listing_keeps_the_recovered_order(monkeypatch) -> None:
+    from app.services.memory import artifact_indexing
+
+    captured = {}
+
+    class _Client:
+        def search(self, index, body, params):  # noqa: ANN001
+            captured["sort"] = body["sort"]
+            return {"hits": {"total": {"value": 0}, "hits": []}}
+
+    monkeypatch.setattr(artifact_indexing, "get_opensearch_client", lambda: _Client())
+    artifact_indexing.search_artifact_documents(CASE, document_type="memory_shell_history", evidence_id=EVIDENCE)
+    fields = [next(iter(clause)) for clause in captured["sort"]]
+    assert fields.index("pid") < fields.index("sequence") < fields.index("document_id")
