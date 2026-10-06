@@ -10919,7 +10919,7 @@ def test_build_problematic_artifacts_report_includes_failed_aborted_artifact_row
     assert item["artifact_id"] == "artifact-1"
     assert item["status"] == "failed_aborted"
     assert item["effective_status"] == "failed_aborted"
-    # 1910 records were already indexed with random ids; a retry would index them again.
+    # This fallback path (artifact rows without a job report) offers a retry only when nothing was indexed.
     assert item["retryable"] is False
     assert item["suggested_retry_mode"] == "deep_safe_mode"
     assert item["current_data_loss_expected"] is True

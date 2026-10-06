@@ -155,3 +155,9 @@ Another example:
    - `process.path`
    - `windows.event_data`
    - `windows.payload`
+
+## Retrying an EVTX that stopped partway
+
+A large or damaged `.evtx` can stop before the end (timeout, worker restart). It then appears under **Problematic artifacts** on the evidence page, where it can be retried with a slower, safer mode. A retry reads the whole file again; when it ends, Kairon compares it with the earlier run(s) of the same file and keeps the events of whichever reached more records, removing the others, so the events are never duplicated and a retry that stops sooner does not lose what was already indexed. Retrying again later works the same way.
+
+Evidence retried before 2026-10-06 may hold the same events twice for those files; reprocess it to clean them.

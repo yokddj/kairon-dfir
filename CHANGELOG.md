@@ -45,6 +45,7 @@
 
 ### Fixed
 
+- Retrying a raw EVTX that stopped partway indexed the records of the interrupted run a second time (event ids are random), and a retry that failed again left its documents uncounted, so the next retry added a third copy. After a retry, Kairon now keeps the events of whichever run reached more records and removes the other run's, for every earlier run of the same file; nothing is lost when the retry stops sooner. Evidence retried before this change keeps its duplicates until it is reprocessed.
 - `scripts/restore.sh` only knew the file names of the old `backup.sh` draft, so with a backup from `dfir-backup.sh` it restored the database alone, and a database restore over existing tables failed silently. It now reads both layouts, empties the schema before loading the dump, stops at the first error, and runs from the installation directory instead of a fixed `/root` path. The unused `scripts/backup.sh` draft is removed.
 - Documentation brought up to date: backups and restore, upgrades, request protection (cross-site check, CORS, failed-login limit), search shortcuts, Linux logs, temporary storage for disk images, Artifact Views, the Investigation Guide, process-graph activity and scheduled-task scope.
 - Process graph: Sysmon registry events (12/13/14) no longer attached to their process. The EVTX normalizer stores them under the generic registry event names, which the graph did not recognise.
