@@ -103,7 +103,9 @@ _SUDO_LINE_RE = re.compile(
     r"^\s*(?P<user>[^\s:]+)\s*:\s*(?:(?P<problem>[^;]*?)\s*;\s*)?TTY=(?P<tty>[^;]*?)\s*;\s*PWD=(?P<pwd>[^;]*?)\s*;\s*USER=(?P<runas>[^;]*?)\s*;(?:[^;]*;)*?\s*COMMAND=(?P<cmd>.*)$"
 )
 _MAX_ATTEMPTS_RE = re.compile(r"maximum authentication attempts exceeded for (?:invalid user )?(?P<user>\S+) from (?P<ip>[0-9a-fA-F:.]+) port (?P<port>\d+)", re.IGNORECASE)
-_CONSOLE_LOGIN_RE = re.compile(r"(?:ROOT LOGIN\s+on '?(?P<tty1>[^'\s]+)'?|LOGIN ON (?P<tty2>\S+) BY (?P<user>\S+))")
+# shadow-utils: "ROOT LOGIN  on '/dev/tty1'"; util-linux: "ROOT LOGIN ON tty1 [FROM host]",
+# "LOGIN ON tty2 BY admin [FROM host]".
+_CONSOLE_LOGIN_RE = re.compile(r"(?:ROOT LOGIN\s+on\s+'?(?P<tty1>[^'\s]+)'?|LOGIN ON (?P<tty2>\S+) BY (?P<user>\S+))", re.IGNORECASE)
 
 
 def _extract_event_action(log_message: str, process: str | None = None) -> str:
@@ -122,7 +124,9 @@ def _extract_event_action(log_message: str, process: str | None = None) -> str:
         return "invalid_user"
     # The program name is split off the message, so "sudo:" is usually not in the text itself.
     if program == "sudo" or lower.startswith("sudo") or "sudo:" in lower:
-        if "incorrect password" in lower or "not in the sudoers" in lower or "authentication failure" in lower:
+        # "user NOT in sudoers", "user NOT in the sudoers file", "user NOT allowed to execute ...",
+        # "command not allowed": sudo refused, even though the line still names the COMMAND.
+        if any(marker in lower for marker in ("incorrect password", "not in sudoers", "not in the sudoers", "not allowed to execute", "command not allowed", "authentication failure")):
             return "sudo_failed"
         if "command=" in lower:
             return "sudo_command"
