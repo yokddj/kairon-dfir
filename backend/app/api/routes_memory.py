@@ -809,6 +809,8 @@ def get_memory_active_result(
     object_type: str | None = Query(default=None),
     object_name: str | None = Query(default=None),
     name: str | None = Query(default=None),
+    indicator_type: str | None = Query(default=None),
+    review_priority: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> dict:
     """Return the active scan run for a single artifact family of an
@@ -853,6 +855,8 @@ def get_memory_active_result(
         "object_type": object_type,
         "object_name": object_name,
         "name": name,
+        "indicator_type": indicator_type,
+        "review_priority": review_priority,
     }
     return resolve_active_memory_result(
         db,
@@ -3479,6 +3483,7 @@ def _artifact_overview(
             "suspicious_regions": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
             "shell_history": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
             "files": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
+            "find_evil": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
             "facets": {},
             "normalization_version": "memory_artifact_canonical_v1",
         }
@@ -3570,6 +3575,11 @@ def _artifact_overview(
             "count": counts["files"],
             "active_run": family_states.get("files", {}).get("active_run"),
             "analysis_state": family_states.get("files", {}).get("analysis_state", "not_analyzed"),
+        },
+        "find_evil": {
+            "count": counts["find_evil"],
+            "active_run": family_states.get("find_evil", {}).get("active_run"),
+            "analysis_state": family_states.get("find_evil", {}).get("analysis_state", "not_analyzed"),
         },
         "facets": facets,
         "normalization_version": "memory_artifact_canonical_v1",

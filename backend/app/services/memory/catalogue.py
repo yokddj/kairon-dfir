@@ -222,6 +222,19 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         # above for why that matters).
         "supported_os_families": ["windows"],
     },
+    {
+        "profile": "find_evil",
+        "family": "find_evil",
+        "title": "Find Evil",
+        "description": "Indicators to review from MemProcFS FindEvil: hidden or masquerading processes, injected or patched modules, executable private memory, suspicious threads and Defender detections still in memory.",
+        # MemProcFS forensic scan: about a minute on a real 4 GB Windows 11 image. It runs
+        # without the Microsoft symbol server (MemProcFS's info.db covers what it needs).
+        "cost_label": "Medium",
+        "est_duration_seconds": 120,
+        "requires_windows_symbols": False,
+        "can_run_without_symbols": True,
+        "supported_os_families": ["windows"],
+    },
 ]
 
 

@@ -38,7 +38,7 @@ Setting `memory_enabled=false` removes Memory's routers and startup reconciliati
 
 External tools such as Volatility 3 or MemProcFS are optional, external to Kairon, not bundled, and subject to their own licenses. Kairon does not auto-install them during the default Docker build, app startup, tests, or frontend build.
 
-Operators may optionally build a dedicated `memory-worker` image with `docker compose --profile memory build memory-worker`. That image installs pinned Volatility 3 from official PyPI during the operator-initiated build and is not published by Kairon as a prebuilt image. Volatility 3 remains governed by its own license, and redistribution of a prebuilt image requires separate review.
+Operators may optionally build a dedicated `memory-worker` image with `docker compose --profile memory build memory-worker`. That image installs pinned Volatility 3 from official PyPI and MemProcFS's Linux release binaries (pinned version, SHA-256 checked) during the operator-initiated build, and is not published by Kairon as a prebuilt image. Each tool remains governed by its own license (MemProcFS: AGPL-3.0; see `docker/memory-worker/THIRD_PARTY_NOTICES.md`), and redistribution of a prebuilt image requires separate review.
 
 Kairon can report backend readiness for supported external tools. Readiness means only that the server-side configuration points to a valid executable and that a harmless help/version check can run. It does not mean any memory image has been analyzed.
 
@@ -100,8 +100,23 @@ Supported profiles:
 - `suspicious_memory`: `windows.malfind`, `windows.vadinfo`
 - `shell_history_basic`: `windows.consoles` on Windows, `linux.bash` on Linux
 - `files_basic`: `windows.filescan`
+- `find_evil`: MemProcFS FindEvil (Windows)
 
-**Run all** runs every profile above except `files_basic`, in this order: metadata, processes, extended processes, shell history, network, modules, handles, kernel, suspicious memory.
+**Run all** runs every profile above except `files_basic`, in this order: metadata, processes, extended processes, shell history, Find Evil, network, modules, handles, kernel, suspicious memory.
+
+### Find Evil
+
+The **Find Evil** tab lists the indicators MemProcFS's FindEvil reports after its forensic scan of the image: processes missing from the kernel's process list or masquerading, processes with the debug privilege or an unexpected account, injected, unlinked or patched modules, executable memory not backed by a file, high-entropy regions, unusual threads, drivers loaded from odd paths, and Windows Defender detections still in memory.
+
+Each indicator has a **review priority** and a one-line explanation:
+
+- **High**: Defender detections, hidden or masquerading processes, injected modules and writable-executable memory not backed by a file.
+- **Medium**: debug privilege, unexpected account, invalid page table, patched loader data, spoofed headers, odd drivers, threads and high-entropy memory.
+- **Low**: writable-executable or executable private memory and patched module pages, which browsers, JIT runtimes and Windows itself also produce. On a typical workstation most indicators are low.
+
+The list is sorted by priority and can be filtered by priority, type and PID. Like the suspicious-memory profile, these are leads for review, not verdicts: Kairon does not mark anything as malware or create findings from them.
+
+How it runs: MemProcFS's library is loaded in a separate process with the same containment as Volatility (own session, timeout, cancellation, output cap), with the Microsoft symbol server disabled, so it works offline. It needs 64-bit Windows 10 or later; on other images the profile is reported as unsupported for that build. On a 4 GB Windows 11 image it takes about a minute.
 
 ### Shell history on Windows
 
@@ -155,6 +170,7 @@ Configuration:
 - `MEMORY_UPLOAD_ALLOWED_EXTENSIONS=.raw,.mem,.vmem,.dmp,.lime`
 - `VOLATILITY3_COMMAND=vol`
 - `MEMPROCFS_COMMAND=memprocfs`
+- `MEMPROCFS_LIBRARY=/opt/memprocfs/vmm.so`
 - `MEMORY_BACKEND_CHECK_TIMEOUT_SECONDS=10`
 - `MEMORY_BACKEND_STATUS_CACHE_SECONDS=60`
 - `MEMORY_PREFERRED_BACKEND=volatility3`
@@ -162,8 +178,8 @@ Configuration:
 - `MEMORY_PLUGIN_TIMEOUT_SECONDS=600`
 - `MEMORY_PLUGIN_OUTPUT_MAX_BYTES=10485760`
 - `MEMORY_WORKER_CONCURRENCY=1`
-- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.filescan,linux.pslist,linux.pstree,linux.sockstat,linux.bash`
-- `MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,shell_history_basic,files_basic`
+- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.filescan,memprocfs.findevil,linux.pslist,linux.pstree,linux.sockstat,linux.bash`
+- `MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,shell_history_basic,files_basic,find_evil`
 - `MEMORY_DEFAULT_PROFILE=metadata_only`
 - `MEMORY_PROCESS_PROFILE_ENABLED=false`
 - `MEMORY_MAX_PROCESS_ROWS=100000`
@@ -182,4 +198,4 @@ Command settings are administrator-controlled and require trusted server access 
 
 ## Scope Boundary
 
-The current runner scope is isolated memory analysis only. It does not add MemProcFS execution, credential extraction, file extraction, memory dumping, process dumping, DLL dumping, malware verdicts, hybrid correlation, or global Search/Timeline integration.
+The current runner scope is isolated memory analysis only. MemProcFS is used for FindEvil only. It does not add credential extraction, file extraction, memory dumping, process dumping, DLL dumping, malware verdicts, hybrid correlation, or global Search/Timeline integration.

@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from app.services.memory.platform import PlatformFamily
 
 FRAMEWORK_VOLATILITY3 = "volatility3"
+FRAMEWORK_MEMPROCFS = "memprocfs"
 
 
 class MemoryCapability(str, enum.Enum):
@@ -38,6 +39,7 @@ class MemoryCapability(str, enum.Enum):
     SUSPICIOUS_REGIONS = "suspicious_regions"
     SHELL_HISTORY = "shell_history"
     FILES = "files"
+    FIND_EVIL = "find_evil"
 
 
 class SkipReason(str, enum.Enum):
@@ -127,6 +129,11 @@ _WINDOWS: tuple[CapabilityPluginSpec, ...] = (
     # row; this capability persists the full result as a browsable,
     # searchable list instead.
     CapabilityPluginSpec(MemoryCapability.FILES, PlatformFamily.WINDOWS, FRAMEWORK_VOLATILITY3, "windows.filescan", depends_on=(MemoryCapability.IDENTIFICATION,), presentation_family="memory_file_object"),
+    # MemProcFS's FindEvil: its forensic scan flags processes unlinked from the process list,
+    # injected or spoofed modules, unusual memory and Defender detections still in memory. It
+    # runs without the Microsoft symbol server (MemProcFS's info.db carries what it needs), so
+    # it neither needs nor waits for Kairon's symbol preparation.
+    CapabilityPluginSpec(MemoryCapability.FIND_EVIL, PlatformFamily.WINDOWS, FRAMEWORK_MEMPROCFS, "memprocfs.findevil", depends_on=(MemoryCapability.IDENTIFICATION,), requires_symbols=False, presentation_family="memory_findevil"),
 )
 
 # ---------------------------------------------------------------------------

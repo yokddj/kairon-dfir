@@ -109,12 +109,12 @@ Kairon documents compatible outputs, but does not redistribute third-party colle
 
 ## Memory Analysis Backends
 
-These backends are external, optional, not bundled, and not installed by Kairon. Do not add memory dumps, third-party memory-forensics outputs, symbol packs, malware samples, credentials, Volatility plugins, or MemProcFS binaries to the repository.
+These backends are external, optional, not bundled, and not installed by Kairon. Do not add memory dumps, third-party memory-forensics outputs, symbol packs, malware samples, credentials, Volatility plugins, or MemProcFS binaries to the repository; the optional memory-worker image downloads pinned releases at build time.
 
 | Backend | Distribution | Readiness detection | Evidence execution |
 | --- | --- | --- | --- |
 | Volatility 3 | external optional tool, not bundled | supported through configured executable detection and harmless help/version check | metadata and process profiles supported conditionally for a fixed set of read-only plugins (see [Memory Analysis](../memory/memory_analysis.md) for the current list) |
-| MemProcFS | external optional tool, not bundled | supported through configured executable detection and harmless help/version check | not implemented |
+| MemProcFS | installed in the optional `memory-worker` image (pinned release, SHA-256 checked), not in the repository | library present in the worker | FindEvil (`find_evil` profile, Windows 10+ 64-bit) |
 
 Readiness detection does not supply a memory-image path, run plugins, mount devices, create artifacts, create MemoryScanRun rows, or write OpenSearch documents.
 

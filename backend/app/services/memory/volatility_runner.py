@@ -171,6 +171,76 @@ def _minimal_environment(*, offline: bool = False) -> dict[str, str]:
     return env
 
 
+def run_isolated_process(
+    argv: list[str],
+    *,
+    work_dir: Path,
+    env: dict[str, str],
+    timeout: int,
+    max_bytes: int,
+    label: str,
+    timeout_label: str,
+    cancellation_check: Callable[[], bool] | None = None,
+) -> tuple[bytes, bytes, int, int]:
+    """Run an analysis tool in its own session (killable as a group), with a timeout,
+    operator cancellation and an output cap. Returns (stdout, stderr, returncode, duration_ms).
+    Used for Volatility and MemProcFS alike, so both get the same containment."""
+    settings = get_settings()
+    termination_grace = max(1, int(getattr(settings, "memory_plugin_termination_grace_seconds", 15)))
+    work_dir.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        process = subprocess.Popen(
+            argv,
+            shell=False,
+            cwd=str(work_dir),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        if cancellation_check is None:
+            stdout, stderr = process.communicate(timeout=timeout)
+        else:
+            deadline = started + timeout
+            while True:
+                if cancellation_check():
+                    stdout, stderr = _terminate_process_group(process, timeout=termination_grace)
+                    raise VolatilityRunnerError(
+                        "PLUGIN_CANCELLED",
+                        f"{label} was cancelled by the operator.",
+                        stdout=(stdout or b"")[:max_bytes],
+                        stderr=(stderr or b"")[:65536],
+                        stdout_length=len(stdout or b""),
+                        stderr_length=len(stderr or b""),
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                try:
+                    stdout, stderr = process.communicate(timeout=min(1.0, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= deadline:
+                        raise
+    except subprocess.TimeoutExpired as exc:
+        if process is not None:
+            stdout, stderr = _terminate_process_group(process, timeout=termination_grace)
+        else:
+            stdout, stderr = exc.output or b"", exc.stderr or b""
+        raise VolatilityRunnerError("PLUGIN_TIMEOUT", f"{timeout_label} exceeded its {timeout}-second timeout.", stdout=(stdout or b"")[:max_bytes], stderr=(stderr or b"")[:65536], stdout_length=len(stdout or b""), stderr_length=len(stderr or b"")) from exc
+    except OSError as exc:
+        raise VolatilityRunnerError("BACKEND_START_FAILED", sanitize_backend_error(exc)) from exc
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    if len(stdout or b"") > max_bytes:
+        raise VolatilityRunnerError("OUTPUT_TOO_LARGE", f"{label} output exceeded the configured size limit.", stdout=(stdout or b"")[:max_bytes], stderr=(stderr or b"")[:4096])
+    if len(stderr or b"") > 65536:
+        stderr = (stderr or b"")[:65536]
+    return stdout or b"", stderr or b"", int(process.returncode or 0), duration_ms
+
+
 def run_plugin(
     plugin: str,
     evidence_path: Path,
@@ -205,64 +275,22 @@ def run_plugin(
     argv = build_plugin_argv(argv_prefix, evidence_path, plugin, offline=offline, cache_path=effective_cache_path, symbol_path=effective_symbol_path, extra_args=extra_args)
     timeout = max(1, int(timeout_seconds or settings.memory_plugin_timeout_seconds))
     max_bytes = max(1, int(max_output_bytes or settings.memory_plugin_output_max_bytes))
-    termination_grace = max(1, int(getattr(settings, "memory_plugin_termination_grace_seconds", 15)))
-    work_dir.mkdir(parents=True, exist_ok=True)
     logger.info("memory volatility plugin started", extra={"plugin": plugin, "executable": display})
-    started = time.monotonic()
-    process: subprocess.Popen[bytes] | None = None
-    try:
-        process = subprocess.Popen(
-            argv,
-            shell=False,
-            cwd=str(work_dir),
-            env=_minimal_environment(offline=offline),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-        )
-        if cancellation_check is None:
-            stdout, stderr = process.communicate(timeout=timeout)
-        else:
-            deadline = started + timeout
-            while True:
-                if cancellation_check():
-                    stdout, stderr = _terminate_process_group(process, timeout=termination_grace)
-                    raise VolatilityRunnerError(
-                        "PLUGIN_CANCELLED",
-                        f"Volatility {plugin} was cancelled by the operator.",
-                        stdout=(stdout or b"")[:max_bytes],
-                        stderr=(stderr or b"")[:65536],
-                        stdout_length=len(stdout or b""),
-                        stderr_length=len(stderr or b""),
-                    )
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise subprocess.TimeoutExpired(argv, timeout)
-                try:
-                    stdout, stderr = process.communicate(timeout=min(1.0, remaining))
-                    break
-                except subprocess.TimeoutExpired:
-                    if time.monotonic() >= deadline:
-                        raise
-    except subprocess.TimeoutExpired as exc:
-        if process is not None:
-            stdout, stderr = _terminate_process_group(process, timeout=termination_grace)
-        else:
-            stdout, stderr = exc.output or b"", exc.stderr or b""
-        raise VolatilityRunnerError("PLUGIN_TIMEOUT", f"{plugin} exceeded its {timeout}-second timeout.", stdout=(stdout or b"")[:max_bytes], stderr=(stderr or b"")[:65536], stdout_length=len(stdout or b""), stderr_length=len(stderr or b"")) from exc
-    except OSError as exc:
-        raise VolatilityRunnerError("BACKEND_START_FAILED", sanitize_backend_error(exc)) from exc
-
-    duration_ms = int((time.monotonic() - started) * 1000)
+    stdout, stderr, returncode, duration_ms = run_isolated_process(
+        argv,
+        work_dir=work_dir,
+        env=_minimal_environment(offline=offline),
+        timeout=timeout,
+        max_bytes=max_bytes,
+        label=f"Volatility {plugin}",
+        timeout_label=plugin,
+        cancellation_check=cancellation_check,
+    )
     stdout_length = len(stdout or b"")
     stderr_length = len(stderr or b"")
-    if len(stdout or b"") > max_bytes:
-        raise VolatilityRunnerError("OUTPUT_TOO_LARGE", "Volatility output exceeded the configured size limit.", stdout=(stdout or b"")[:max_bytes], stderr=(stderr or b"")[:4096])
-    if len(stderr or b"") > 65536:
-        stderr = (stderr or b"")[:65536]
-    if process.returncode != 0:
+    if returncode != 0:
         message = _classify_failure(stderr or b"", plugin)
-        raise VolatilityRunnerError(message[0], message[1], stdout=(stdout or b"")[:max_bytes], stderr=stderr or b"", return_code=process.returncode, stdout_length=stdout_length, stderr_length=stderr_length)
+        raise VolatilityRunnerError(message[0], message[1], stdout=(stdout or b"")[:max_bytes], stderr=stderr or b"", return_code=returncode, stdout_length=stdout_length, stderr_length=stderr_length)
     display_argv = [display]
     if offline:
         display_argv.append("--offline")
@@ -451,6 +479,11 @@ def probe_volatility_plugin(plugin: str) -> bool:
 
     The result is cached for the lifetime of the process.
     """
+    if plugin.startswith("memprocfs."):
+        # Not a Volatility plugin: available when MemProcFS's library is installed.
+        from app.services.memory.memprocfs_runner import memprocfs_available
+
+        return memprocfs_available()
     import functools
     cache_attr = "_volatility_plugin_cache"
     cache: dict[str, bool] | None = getattr(probe_volatility_plugin, cache_attr, None)

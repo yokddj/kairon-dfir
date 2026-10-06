@@ -40,6 +40,7 @@ type OverviewFamily = {
 
 const FAMILIES: Array<{ family: string; title: string; tab: MemoryTab; artifact?: string }> = [
   { family: "system_info", title: "System information", tab: "system" },
+  { family: "find_evil", title: "Find Evil indicators", tab: "find_evil" },
   { family: "processes", title: "Processes", tab: "processes" },
   { family: "shell_history", title: "Shell history", tab: "shell_history" },
   { family: "modules", title: "Modules and DLLs", tab: "modules" },

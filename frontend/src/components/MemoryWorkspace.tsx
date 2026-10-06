@@ -11,6 +11,7 @@ import { MEMORY_TABS, useMemoryTab, type MemoryTab } from "../lib/memoryWorkspac
 import { MemoryOverviewTab } from "./memory/MemoryOverviewTab";
 import { MemoryProcessesTab } from "./memory/MemoryProcessesTab";
 import { MemoryShellHistoryTab } from "./memory/MemoryShellHistoryTab";
+import { MemoryFindEvilTab } from "./memory/MemoryFindEvilTab";
 import { MemoryGraphTab } from "./memory/MemoryGraphTab";
 import { MemoryArtifactsTab } from "./memory/MemoryArtifactsTab";
 import { MemorySystemTab } from "./memory/MemorySystemTab";
@@ -325,6 +326,16 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
             selectedEntityId={selectedEntityId}
             onSelectEntityId={setSelectedEntityId}
             onCreateFinding={(entity) => setFindingPrefill(buildFindingPrefillFromArtifact({ ...entity, ...entity.process, plugin: (entity.sources || []).join(", ") }, { caseId, evidenceId: effectiveEvidenceId, hosts: caseContext?.hosts ?? [], sourceView: "memory", sourceRoute: window.location.pathname + window.location.search, artifactFamily: "memory", artifactType: "process", label: "Memory process" }))}
+          />
+        ) : null}
+
+        {tab === "find_evil" ? (
+          <MemoryFindEvilTab
+            caseId={caseId}
+            evidenceId={effectiveEvidenceId}
+            runOptions={runOptionsQuery.data ?? null}
+            selectedRunId={selectedRunId}
+            onSelectRunId={setSelectedRunId}
           />
         ) : null}
 
