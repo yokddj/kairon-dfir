@@ -73,8 +73,8 @@ _ACTIVE_RESULT_MAX_PAGE_SIZE = 200
 # Families listed in an order other than pid: FindEvil's indicators most worth a look first.
 FAMILY_SORT: dict[str, list[dict[str, Any]]] = {
     "find_evil": [
-        {"review_rank": {"order": "asc", "missing": "_last", "unmapped_type": "integer"}},
-        {"indicator_type": {"order": "asc", "unmapped_type": "keyword"}},
+        {"review_rank": {"order": "asc", "missing": "_last", "unmapped_type": "long"}},
+        {"indicator_type.keyword": {"order": "asc", "unmapped_type": "keyword"}},
         {"pid": {"order": "asc", "missing": "_last", "unmapped_type": "long"}},
         {"sequence": {"order": "asc", "missing": "_last", "unmapped_type": "long"}},
     ],
