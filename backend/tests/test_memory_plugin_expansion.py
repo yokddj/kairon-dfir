@@ -21,7 +21,7 @@ def _settings():
 
     base = Settings()
     object.__setattr__(base, "memory_process_profile_enabled", True)
-    object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory")
+    object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,shell_history_basic,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory")
     object.__setattr__(base, "memory_allowed_plugins", "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo")
     return base
 

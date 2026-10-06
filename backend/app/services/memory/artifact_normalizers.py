@@ -1312,6 +1312,47 @@ def normalize_linux_bash(
 
 _CONSOLE_COMMAND_PROPERTY = re.compile(r"_Command_\d+$")
 _CONSOLE_APPLICATION_PROPERTY = re.compile(r"_Application$")
+# The console's visible text ("..._ScreenBuffer_N.Dump", one line per screen row) and its width
+# ("..._ScreenBuffer_N.ScreenX"). PowerShell keeps its own history (PSReadLine), so conhost's
+# CommandHistory lists stay empty for PowerShell windows; the commands are still on screen after
+# the prompt, which is where they are recovered from.
+_CONSOLE_SCREEN_DUMP_PROPERTY = re.compile(r"(?P<buffer>ScreenBuffer_\d+)\.Dump$")
+_CONSOLE_SCREEN_WIDTH_PROPERTY = re.compile(r"(?P<buffer>ScreenBuffer_\d+)\.ScreenX$")
+_CONSOLE_TITLE_PROPERTY = re.compile(r"\.OriginalTitle$")
+# "PS C:\Users\x> command" (PowerShell) and "C:\Users\x>command" (cmd.exe). The directory must look
+# like one (drive letter, UNC path or a PowerShell provider path) so output lines ending in ">" are
+# not taken for prompts.
+_POWERSHELL_PROMPT = re.compile(r"^PS (?P<cwd>(?:[A-Za-z]:\\|\\\\|[A-Za-z][\w.]*::|[A-Za-z][\w.]*:\\?)[^<>|\r\n]{0,259})> (?P<command>\S.*)$")
+_CMD_PROMPT = re.compile(r"^(?P<cwd>(?:[A-Za-z]:\\|\\\\)[^<>|\r\n]{0,259})>(?P<command>\S.*)$")
+
+
+def _console_screen_commands(text: str, width: int | None) -> list[tuple[str, str, str]]:
+    """(shell, working directory, command) for every prompt line in a console screen dump.
+
+    A command longer than the screen wraps onto the next rows; the plugin truncates each row's
+    trailing blanks, so a prompt row that fills the whole width continues on the next row.
+    """
+    lines = text.splitlines()
+    commands: list[tuple[str, str, str]] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index].rstrip()
+        match = _POWERSHELL_PROMPT.match(line)
+        shell = "powershell" if match else None
+        if not match:
+            match = _CMD_PROMPT.match(line)
+            shell = "cmd" if match else None
+        index += 1
+        if not match:
+            continue
+        command = match.group("command")
+        row = line
+        while width and len(row) >= width and index < len(lines):
+            row = lines[index].rstrip()
+            command += row
+            index += 1
+        commands.append((shell or "", match.group("cwd"), command.strip()))
+    return commands
 
 
 def _flatten_console_rows(payload: Any) -> list[dict[str, Any]]:
@@ -1360,6 +1401,41 @@ def normalize_windows_consoles(
     dropped = 0
     accepted = 0
     last_application_by_pid: dict[int, str] = {}
+    title_by_pid: dict[int, str] = {}
+    screen_width: dict[tuple[int | None, str], int] = {}
+    screens: list[tuple[int, int | None, str | None, str, str]] = []
+    history_commands: dict[int | None, list[str]] = {}
+
+    def _doc(index: int, pid: int | None, process_name: str | None, command: str, identity: str, *, recovered_from: str, working_directory: str | None = None) -> dict[str, Any]:
+        return {
+            "document_id": _document_id(prefix="memory_shell_history", case_id=case_id, run_id=scan_run_id, identity=identity),
+            "document_type": "memory_shell_history",
+            "case_id": case_id,
+            "evidence_id": evidence_id,
+            "scan_run_id": scan_run_id,
+            "plugin_run_id": plugin_run_id,
+            "platform": "windows",
+            "pid": pid,
+            "process_entity_id": None,
+            "process_name": process_name,
+            "command": command,
+            "command_time": None,
+            "working_directory": working_directory,
+            "recovered_from": recovered_from,
+            "source_plugin": source_plugin,
+            "source_record_index": index,
+            "confidence": "reported_by_plugin" if recovered_from == "command_history" else "recovered_from_screen",
+            "provenance": _provenance(
+                case_id=case_id,
+                evidence_id=evidence_id,
+                scan_run_id=scan_run_id,
+                plugin_run_id=plugin_run_id,
+                source_plugin=source_plugin,
+            ),
+            "normalization_version": NORMALIZATION_VERSION,
+            "unresolved_process_reference": pid is None,
+        }
+
     for index, row in enumerate(rows):
         if accepted >= max_records:
             warnings.append("consoles_max_records_reached")
@@ -1369,6 +1445,22 @@ def normalize_windows_consoles(
         conhost_process_name = _str_or_none(_lookup(row, "Process", "process_name"), MAX_NAME_LENGTH)
         property_name = _str_or_none(_lookup(row, "Property", "property"), MAX_OBJECT_NAME_LENGTH) or ""
         data = _lookup(row, "Data", "data")
+        if pid is not None and _CONSOLE_TITLE_PROPERTY.search(property_name):
+            title = _str_or_none(data, MAX_OBJECT_NAME_LENGTH)
+            if title:
+                title_by_pid[pid] = title.replace("/", "\\").rsplit("\\", 1)[-1]
+            continue
+        width_match = _CONSOLE_SCREEN_WIDTH_PROPERTY.search(property_name)
+        if width_match:
+            width = _int_or_none(data)
+            if width:
+                screen_width[(pid, width_match.group("buffer"))] = width
+            continue
+        dump_match = _CONSOLE_SCREEN_DUMP_PROPERTY.search(property_name)
+        if dump_match:
+            if isinstance(data, str) and data.strip():
+                screens.append((index, pid, conhost_process_name, dump_match.group("buffer"), data))
+            continue
         if pid is not None and _CONSOLE_APPLICATION_PROPERTY.search(property_name):
             application = _str_or_none(data, MAX_NAME_LENGTH)
             if application:
@@ -1387,34 +1479,24 @@ def normalize_windows_consoles(
             warnings.append("consoles_row_missing_pid")
         process_name = (pid is not None and last_application_by_pid.get(pid)) or conhost_process_name
         identity = _identity_pid_offset(pid, property_name, command, index)
-        doc = {
-            "document_id": _document_id(prefix="memory_shell_history", case_id=case_id, run_id=scan_run_id, identity=identity),
-            "document_type": "memory_shell_history",
-            "case_id": case_id,
-            "evidence_id": evidence_id,
-            "scan_run_id": scan_run_id,
-            "plugin_run_id": plugin_run_id,
-            "platform": "windows",
-            "pid": pid,
-            "process_entity_id": None,
-            "process_name": process_name,
-            "command": command,
-            "command_time": None,
-            "source_plugin": source_plugin,
-            "source_record_index": index,
-            "confidence": "reported_by_plugin",
-            "provenance": _provenance(
-                case_id=case_id,
-                evidence_id=evidence_id,
-                scan_run_id=scan_run_id,
-                plugin_run_id=plugin_run_id,
-                source_plugin=source_plugin,
-            ),
-            "normalization_version": NORMALIZATION_VERSION,
-            "unresolved_process_reference": pid is None,
-        }
-        items.append(doc)
+        items.append(_doc(index, pid, process_name, command, identity, recovered_from="command_history"))
+        history_commands.setdefault(pid, []).append(command)
         accepted += 1
+    for index, pid, conhost_process_name, buffer_name, text in screens:
+        # Commands already in conhost's own history (cmd.exe windows) are not listed twice.
+        remaining_history = list(history_commands.get(pid, []))
+        for line_number, (shell, working_directory, command) in enumerate(_console_screen_commands(text, screen_width.get((pid, buffer_name)))):
+            if accepted >= max_records:
+                warnings.append("consoles_max_records_reached")
+                break
+            command = _scrub_paths(command)[:MAX_OBJECT_NAME_LENGTH]
+            if command in remaining_history:
+                remaining_history.remove(command)
+                continue
+            process_name = (pid is not None and (last_application_by_pid.get(pid) or title_by_pid.get(pid))) or ("powershell.exe" if shell == "powershell" else "cmd.exe")
+            identity = _identity_pid_offset(pid, buffer_name, "screen", line_number, command)
+            items.append(_doc(index, pid, process_name, command, identity, recovered_from="screen", working_directory=_scrub_paths(working_directory)))
+            accepted += 1
     return {
         "items": items,
         "warnings": warnings,

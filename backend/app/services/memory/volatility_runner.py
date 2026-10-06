@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -371,6 +372,13 @@ def _classify_failure(stderr: bytes, plugin: str = "") -> tuple[str, str]:
         return "MEMORY_SYMBOL_CACHE_NOT_WRITABLE", "Volatility could not use its controlled symbol cache under the read-only worker filesystem."
     if "symbol_table_name" in lower or ("unable to validate" in lower and "symbol" in lower):
         return "SYMBOLS_UNAVAILABLE", f"Volatility could not resolve the symbol/ISF table required by {plugin_label}."
+    # Some plugins only know specific Windows builds (windows.consoles reads conhost.exe's internal
+    # structures, which change between builds): "NotImplementedError: This version of Windows is not
+    # supported: 10.0 15.17134!". The image is fine; the plugin cannot read it.
+    version_match = re.search(r"this version of windows is not supported:?\s*([0-9][0-9. ]*)", lower)
+    if version_match:
+        build = version_match.group(1).strip().rstrip(".")
+        return "PLUGIN_UNSUPPORTED_WINDOWS_BUILD", f"{plugin_label} does not support this Windows build ({build}) in the installed Volatility version."
     if "unable to validate" in lower and "layer" in lower:
         return "INVALID_MEMORY_LAYER", f"Volatility could not construct a valid memory layer for this image ({plugin_label})."
     if "no suitable" in lower and "layer" in lower:

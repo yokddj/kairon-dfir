@@ -94,7 +94,23 @@ Supported profiles:
 - `processes_basic`: `windows.info`, `windows.pslist`, `windows.pstree`, `windows.cmdline`
 - `processes_extended`: `windows.psscan`, `windows.envars`, `windows.getsids`, `windows.privileges`
 - `network_basic`: `windows.netscan`, `windows.netstat`
+- `modules_basic`: `windows.dlllist`, `windows.ldrmodules`
+- `handles_basic`: `windows.handles`
+- `kernel_basic`: `windows.modules`, `windows.driverscan`
 - `suspicious_memory`: `windows.malfind`, `windows.vadinfo`
+- `shell_history_basic`: `windows.consoles` on Windows, `linux.bash` on Linux
+- `files_basic`: `windows.filescan`
+
+**Run all** runs every profile above except `files_basic`, in this order: metadata, processes, extended processes, shell history, network, modules, handles, kernel, suspicious memory.
+
+### Shell history on Windows
+
+`windows.consoles` reads the console windows (`conhost.exe`) in memory. Commands are recovered from two places, and each row says which (**Source**):
+
+- **Console history**: the command history conhost keeps per window. `cmd.exe` uses it; PowerShell does not (it keeps its own, PSReadLine, outside the console), so for PowerShell windows this list is empty.
+- **Console screen**: the text still on the window's screen. Every line that starts with a prompt (`PS C:\Users\x> command` or `C:\Users\x>command`) gives a command and the directory it ran in (**Directory**); a command that wraps across rows is joined. Only what was still in the window's screen buffer (a few thousand rows; older lines are overwritten) can be recovered, and commands also in the console history are listed once.
+
+There is no time for these commands. On Windows builds that Volatility's console support does not cover (for example Windows 10 1803, build 17134), the plugin is reported as unsupported for that build, not as a failed run.
 
 Process profiles are disabled by default with `MEMORY_PROCESS_PROFILE_ENABLED=false`.
 
@@ -146,8 +162,8 @@ Configuration:
 - `MEMORY_PLUGIN_TIMEOUT_SECONDS=600`
 - `MEMORY_PLUGIN_OUTPUT_MAX_BYTES=10485760`
 - `MEMORY_WORKER_CONCURRENCY=1`
-- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,linux.pslist,linux.pstree,linux.sockstat,linux.bash`
-- `MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory`
+- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.filescan,linux.pslist,linux.pstree,linux.sockstat,linux.bash`
+- `MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,shell_history_basic,files_basic`
 - `MEMORY_DEFAULT_PROFILE=metadata_only`
 - `MEMORY_PROCESS_PROFILE_ENABLED=false`
 - `MEMORY_MAX_PROCESS_ROWS=100000`

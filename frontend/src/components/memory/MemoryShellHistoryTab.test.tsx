@@ -180,4 +180,21 @@ describe("MemoryShellHistoryTab", () => {
     expect(evidenceId).toBe(EVIDENCE);
     expect(family).toBe("shell_history");
   });
+  it("shows where a Windows command came from and its working directory", async () => {
+    getMemoryActiveResultMock.mockResolvedValue(
+      activeResult({
+        analysis_state: "analyzed_with_results",
+        active_run: { id: "run-3", profile: "shell_history_basic", status: "completed", started_at: null, completed_at: null },
+        total: 2,
+        items: [
+          { document_id: "d1", pid: 5404, process_name: "powershell.EXE", command: ".\\tool.exe", working_directory: "C:\\Users\\admin\\Desktop", recovered_from: "screen" },
+          { document_id: "d2", pid: 88, process_name: "cmd.exe", command: "whoami", working_directory: null, recovered_from: "command_history" },
+        ] as unknown as MemoryActiveResult["items"],
+      }),
+    );
+    renderTab();
+    await waitFor(() => expect(screen.getAllByTestId("shell-history-row")).toHaveLength(2));
+    expect(screen.getAllByTestId("shell-history-source").map((cell) => cell.textContent)).toEqual(["Console screen", "Console history"]);
+    expect(screen.getAllByTestId("shell-history-directory").map((cell) => cell.textContent)).toEqual(["C:\\Users\\admin\\Desktop", "—"]);
+  });
 });

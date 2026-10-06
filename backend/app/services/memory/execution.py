@@ -640,6 +640,15 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     db.commit()
                 except VolatilityRunnerError as exc:
                     _write_plugin_error(run, plugin_run, exc)
+                    if exc.code == "PLUGIN_UNSUPPORTED_WINDOWS_BUILD":
+                        # Not a failure of the run: the plugin has no support for this build.
+                        plugin_run.status = "skipped_unsupported"
+                        plugin_run.completed_at = utc_now_naive()
+                        plugin_run.error_code = exc.code
+                        plugin_run.error_message = _sanitize_message(exc.message)
+                        plugin_run.metadata_json = {**(plugin_run.metadata_json or {}), "capability_state": "unsupported_windows_build", "raw_output_retained": False}
+                        db.commit()
+                        continue
                     if exc.code == "PLUGIN_TIMEOUT":
                         plugin_run.status = "timed_out"
                     elif exc.code == "PLUGIN_CANCELLED":
