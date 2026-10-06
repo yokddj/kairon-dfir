@@ -569,12 +569,22 @@ do_upgrade() {
   fi
 
   preserve_secrets_from_env "$ROOT_DIR/.env"
-  migrate_memory_allowlists "$ROOT_DIR/.env"
 
   echo ""
   echo "Pulling latest code..."
   git -C "$ROOT_DIR" pull 2>&1 || echo "WARNING: git pull failed. Continuing with local code."
   echo ""
+
+  # This shell is still running the setup.sh from before the pull; take the .env migration from
+  # the pulled one, so a release's new memory analyses are enabled on its first upgrade.
+  # (A temporary file, not process substitution: macOS's bash 3.2 cannot source the latter.)
+  local migration
+  migration="$(mktemp)"
+  sed -n '/^migrate_memory_allowlists() {/,/^}/p' "$ROOT_DIR/scripts/setup.sh" > "$migration"
+  # shellcheck disable=SC1090
+  source "$migration"
+  rm -f "$migration"
+  migrate_memory_allowlists "$ROOT_DIR/.env"
 
   echo "Rebuilding and restarting services..."
   FORCE_RECREATE=true

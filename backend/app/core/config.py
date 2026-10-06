@@ -528,6 +528,7 @@ class Settings(BaseSettings):
             plugins = [item.strip() for item in values.split(",") if item.strip()]
         else:
             plugins = [str(item).strip() for item in values if str(item).strip()]
+        plugins = _with_new_defaults(plugins, _ADDED_MEMORY_PLUGINS)
         return [plugin for plugin in plugins if plugin in allowed] or ["windows.info"]
 
     @property
@@ -546,6 +547,7 @@ class Settings(BaseSettings):
             "find_evil",
         }
         profiles = [item.strip() for item in str(self.memory_allowed_profiles or "").split(",") if item.strip()]
+        profiles = _with_new_defaults(profiles, _ADDED_MEMORY_PROFILES)
         return [profile for profile in profiles if profile in allowed] or ["metadata_only"]
 
     @property
@@ -736,6 +738,39 @@ class Settings(BaseSettings):
                         f"{field_name} must not be a default CHANGE_ME value in production (profile=release)"
                     )
         return self
+
+
+# Memory analyses added after a deployment's .env was written. setup.sh wrote the allowlists out in
+# full, so a list that is still exactly an earlier default is extended with what came later; a list
+# the operator changed is used as it is. (setup.sh --upgrade rewrites such lines too, but only from
+# the second upgrade on: the first runs the setup.sh that was there before the pull.)
+_ADDED_MEMORY_PROFILES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        ("metadata_only", "processes_basic", "processes_extended", "network_basic", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory", "shell_history_basic", "files_basic"),
+        ("find_evil",),
+    ),
+    (
+        ("metadata_only", "processes_basic", "processes_extended", "shell_history_basic", "files_basic"),
+        ("find_evil",),
+    ),
+)
+_ADDED_MEMORY_PLUGINS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        ("windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "windows.envars", "windows.getsids", "windows.privileges", "windows.netscan", "windows.netstat", "windows.dlllist", "windows.ldrmodules", "windows.handles", "windows.modules", "windows.driverscan", "windows.malfind", "windows.vadinfo", "windows.consoles", "windows.filescan", "linux.pslist", "linux.pstree", "linux.sockstat", "linux.bash"),
+        ("memprocfs.findevil",),
+    ),
+    (
+        ("windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "windows.consoles", "windows.filescan", "linux.pslist", "linux.pstree", "linux.sockstat", "linux.bash"),
+        ("memprocfs.findevil",),
+    ),
+)
+
+
+def _with_new_defaults(values: list[str], upgrades: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]) -> list[str]:
+    for previous_default, added in upgrades:
+        if tuple(values) == previous_default:
+            return [*values, *added]
+    return values
 
 
 @lru_cache
