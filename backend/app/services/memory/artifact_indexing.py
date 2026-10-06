@@ -123,6 +123,7 @@ ARTIFACT_MAPPING = {
             "command_time": {"type": "date", "ignore_malformed": True},
             "working_directory": {"type": "keyword", "ignore_above": 1024, "fields": {"text": {"type": "text"}}},
             "recovered_from": {"type": "keyword"},
+            "sequence": {"type": "long"},
         },
     }
 }
@@ -274,6 +275,8 @@ def search_artifact_documents(
         "track_total_hits": True,
         "sort": sort or [
             {"pid": {"order": "asc", "missing": "_last", "unmapped_type": "long"}},
+            # Shell history has no times; keep the commands of a process in the order recovered.
+            {"sequence": {"order": "asc", "missing": "_last", "unmapped_type": "long"}},
             {"document_id": {"order": "asc", "unmapped_type": "keyword"}},
         ],
     }
