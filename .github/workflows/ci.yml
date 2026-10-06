@@ -21,12 +21,18 @@ jobs:
           test -f .env.example || { echo "MISSING .env.example"; exit 1; }
           echo "All required files present"
       - name: Check no em-dash in flags
+        # A flag pasted from a word processor (`–upgrade`, `—run`) does not work in a shell. Match
+        # the UTF-8 bytes of an en or em dash directly followed by a letter, at the start of a word;
+        # LC_ALL=C makes grep compare bytes (in a UTF-8 locale "\xe2" is a character and never
+        # matched). Dashes in prose ("10–20 minutes") are fine.
+        shell: bash
         run: |
-          if grep -rPn '\xe2\x80\x93' --include='*.sh' --include='*.md' scripts/ README.md docs/ 2>/dev/null | grep -q .; then
-            echo "ERROR: em-dash found in flags. Use ASCII double-dash (--) instead."
+          dash=$'\xe2\x80[\x93\x94]'
+          if LC_ALL=C grep -rnE "(^|[[:space:]\`(\"'])${dash}[A-Za-z]" --include='*.sh' --include='*.md' scripts/ README.md docs/; then
+            echo "ERROR: en/em dash used as a flag. Use ASCII double-dash (--) instead."
             exit 1
           fi
-          echo "OK: no em-dash in flags"
+          echo "OK: no en/em dash used as a flag"
 
   backend-tests:
     runs-on: ubuntu-latest

@@ -27,6 +27,8 @@ A full backup can take several GB. Keep one recent full backup and a few databas
 
 If a file changes while `./data` is archived (a log being written), the backup still completes and the manifest says so; only a real archive error stops it.
 
+A backup that fails (Docker not running, disk full, an archive error) removes its folder and exits with an error, so every folder under `backups/` is a complete backup.
+
 ## What Is Not Backed Up
 
 - Docker images (rebuilt from the code).

@@ -35,6 +35,17 @@ fi
 
 mkdir -p "$OUT_DIR"
 
+# A backup that stops halfway (Docker not running, disk full) would leave a folder that looks
+# like a backup but holds an empty or truncated dump. Remove it unless the backup finished.
+COMPLETED=0
+cleanup_incomplete() {
+  if [ "$COMPLETED" -ne 1 ]; then
+    rm -rf "$OUT_DIR"
+    echo "ERROR: backup did not complete; removed ${OUT_DIR}" >&2
+  fi
+}
+trap cleanup_incomplete EXIT
+
 POSTGRES_USER="${POSTGRES_USER:-dfir}"
 POSTGRES_DB="${POSTGRES_DB:-dfir}"
 
@@ -106,4 +117,5 @@ cat > "${OUT_DIR}/manifest.json" <<EOF
 }
 EOF
 
+COMPLETED=1
 echo "Backup completed at ${OUT_DIR}"
