@@ -17,8 +17,18 @@ type ShellHistoryRow = {
   process_name?: string | null;
   command?: string | null;
   command_time?: string | null;
+  working_directory?: string | null;
+  recovered_from?: string | null;
   source_plugin?: string | null;
   scan_run_id?: string | null;
+};
+
+// Where a Windows command was recovered from (windows.consoles): conhost's own command history
+// (cmd.exe windows) or the console's screen text after the prompt (PowerShell windows keep their
+// history elsewhere, so the screen is often the only place it survives).
+const RECOVERED_FROM_LABEL: Record<string, string> = {
+  command_history: "Console history",
+  screen: "Console screen",
 };
 
 function reported(value: unknown): string {
@@ -126,9 +136,10 @@ export function MemoryShellHistoryTab({ caseId, evidenceId, runOptions, selected
           <div>
             <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Shell History</h3>
             <p className="mt-1 text-xs text-muted">
-              Interactive shell command history recovered from memory (linux.bash on Linux evidence,
-              windows.consoles on Windows evidence). Commands without a recovered timestamp remain
-              valid, searchable observations.
+              Interactive shell commands recovered from memory: bash history on Linux; on Windows, the
+              command history of console windows and the commands still visible on their screens
+              (cmd.exe and PowerShell). Commands without a recovered timestamp remain valid, searchable
+              observations.
             </p>
           </div>
           <RunPicker runOptions={runOptions} selectedRunId={selectedRunId} onSelectRunId={(next) => { onSelectRunId(next); setPage(1); }} />
@@ -201,7 +212,9 @@ export function MemoryShellHistoryTab({ caseId, evidenceId, runOptions, selected
                     <th className="px-2 py-1">Time</th>
                     <th className="px-2 py-1">PID</th>
                     <th className="px-2 py-1">Process</th>
+                    <th className="px-2 py-1">Directory</th>
                     <th className="px-2 py-1">Command</th>
+                    <th className="px-2 py-1">Source</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
@@ -212,8 +225,12 @@ export function MemoryShellHistoryTab({ caseId, evidenceId, runOptions, selected
                       </td>
                       <td className="px-2 py-1 text-muted">{reported(row.pid)}</td>
                       <td className="px-2 py-1 text-ink">{reported(row.process_name)}</td>
+                      <td className="px-2 py-1 font-mono text-[11px] text-muted" data-testid="shell-history-directory">{reported(row.working_directory)}</td>
                       <td className="px-2 py-1">
                         <CommandCell command={row.command} />
+                      </td>
+                      <td className="px-2 py-1 text-muted" data-testid="shell-history-source">
+                        {row.recovered_from ? RECOVERED_FROM_LABEL[row.recovered_from] ?? row.recovered_from : reported(row.source_plugin)}
                       </td>
                     </tr>
                   ))}

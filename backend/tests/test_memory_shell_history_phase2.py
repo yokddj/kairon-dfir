@@ -331,25 +331,16 @@ def test_start_memory_scan_request_default_profile_unchanged() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Run-all is unaffected (documented, not modified)
+# 7. Run-all includes shell history
 # ---------------------------------------------------------------------------
 
 
-def test_run_all_profiles_does_not_include_shell_history_basic() -> None:
-    """RUN_ALL_PROFILES in batch.py is a separate, manually-curated tuple
-    -- NOT derived from PROFILE_CATALOGUE. Adding shell_history_basic to
-    the catalogue does not add it to run-all; it would need to be added
-    to RUN_ALL_PROFILES explicitly in a future phase."""
+def test_run_all_profiles_include_shell_history_basic() -> None:
+    """RUN_ALL_PROFILES in batch.py is a manually curated tuple, not derived
+    from PROFILE_CATALOGUE. Shell history was added to it explicitly once the
+    Windows producer recovered commands from real images (console screens), so
+    "Run all" lists typed commands without a separate manual run."""
     from app.services.memory.batch import RUN_ALL_PROFILES
 
-    assert "shell_history_basic" not in RUN_ALL_PROFILES
-    assert set(RUN_ALL_PROFILES) == {
-        "metadata_only",
-        "processes_basic",
-        "processes_extended",
-        "network_basic",
-        "modules_basic",
-        "handles_basic",
-        "kernel_basic",
-        "suspicious_memory",
-    }
+    assert "shell_history_basic" in RUN_ALL_PROFILES
+    assert RUN_ALL_PROFILES.index("shell_history_basic") > RUN_ALL_PROFILES.index("processes_basic")

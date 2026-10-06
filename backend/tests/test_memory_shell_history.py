@@ -733,3 +733,81 @@ def test_shell_history_now_appears_in_the_case_landing_page(db: Session) -> None
     families_shown = {family["family"] for family in matching[0]["families"]}
     assert "shell_history" in families_shown
     assert families_shown == set(FAMILY_ORDER)
+
+
+# ---------------------------------------------------------------------------
+# Commands recovered from the console screen. PowerShell keeps its own history
+# (PSReadLine), so conhost's CommandHistory lists are empty for PowerShell
+# windows -- seen on real Windows 10/Server images -- but every command typed
+# is still on screen after its prompt.
+# ---------------------------------------------------------------------------
+
+
+def _screen_rows(pid: int, dump: str, *, width: int = 120, title: str = "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.EXE", history: list[str] | None = None) -> list[dict]:
+    rows = [{"PID": pid, "Process": "conhost.exe", "Property": "_CONSOLE_INFORMATION.OriginalTitle", "Data": title}]
+    if history is not None:
+        rows.append({"PID": pid, "Process": "conhost.exe", "Property": "_CONSOLE_INFORMATION.HistoryList.CommandHistory_0_Application", "Data": "cmd.exe"})
+        rows += [{"PID": pid, "Process": "conhost.exe", "Property": f"_CONSOLE_INFORMATION.HistoryList.CommandHistory_0_Command_{i}", "Data": c} for i, c in enumerate(history)]
+    rows += [
+        {"PID": pid, "Process": "conhost.exe", "Property": "_CONSOLE_INFORMATION.ScreenBuffer_0.ScreenX", "Data": width},
+        {"PID": pid, "Process": "conhost.exe", "Property": "_CONSOLE_INFORMATION.ScreenBuffer_0.Dump", "Data": dump},
+    ]
+    return rows
+
+
+def _normalize_consoles(rows: list[dict]) -> dict:
+    return _normalize_artifact_payload("windows.consoles", rows, case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:windows.consoles")
+
+
+def test_windows_consoles_recovers_powershell_commands_from_the_screen() -> None:
+    dump = "\n".join([
+        "Windows PowerShell",
+        "Copyright (C) Microsoft Corporation. All rights reserved.",
+        "",
+        "PS C:\\Users\\Administrator.EXAMPLE> cd .\\Desktop\\triage\\",
+        "PS C:\\Users\\Administrator.EXAMPLE\\Desktop\\triage> ls",
+        "    Directory: C:\\Users\\Administrator.EXAMPLE\\Desktop\\triage",
+        "Mode                 LastWriteTime         Length Name",
+        "-a----        14/03/2023     10:38         625480 tool.exe",
+        "PS C:\\Users\\Administrator.EXAMPLE\\Desktop\\triage> .\\tool.exe",
+        "    --> Proceed with the acquisition ? [y/n] y",
+        "PS C:\\Users\\Administrator.EXAMPLE\\Desktop\\triage>",
+    ])
+    result = _normalize_consoles(_screen_rows(5404, dump))
+    rows = [(item["command"], item["working_directory"]) for item in result["items"]]
+    assert rows == [
+        ("cd .\\Desktop\\triage\\", "C:\\Users\\Administrator.EXAMPLE"),
+        ("ls", "C:\\Users\\Administrator.EXAMPLE\\Desktop\\triage"),
+        (".\\tool.exe", "C:\\Users\\Administrator.EXAMPLE\\Desktop\\triage"),
+    ]
+    item = result["items"][0]
+    assert (item["process_name"], item["pid"], item["recovered_from"], item["confidence"]) == ("powershell.EXE", 5404, "screen", "recovered_from_screen")
+
+
+def test_windows_consoles_joins_a_command_wrapped_across_screen_rows() -> None:
+    first = "PS C:\\> powershell -nop -w hidden -enc " + "A" * 61
+    assert len(first) == 100
+    dump = "\n".join([first, "B" * 100, "CCCC", "output line"])
+    result = _normalize_consoles(_screen_rows(77, dump, width=100))
+    assert [item["command"] for item in result["items"]] == ["powershell -nop -w hidden -enc " + "A" * 61 + "B" * 100 + "CCCC"]
+
+
+def test_windows_consoles_reads_cmd_prompts_and_does_not_list_history_twice() -> None:
+    dump = "\n".join([
+        "Microsoft Windows [Version 10.0.19045.3803]",
+        "C:\\Windows\\system32>whoami",
+        "example\\alice",
+        "C:\\Windows\\system32>net user backup P@ss /add",
+        "The command completed successfully.",
+        "C:\\Windows\\system32>",
+    ])
+    result = _normalize_consoles(_screen_rows(88, dump, title="C:\\Windows\\system32\\cmd.exe", history=["whoami"]))
+    listed = [(item["command"], item["recovered_from"]) for item in result["items"]]
+    assert listed == [("whoami", "command_history"), ("net user backup P@ss /add", "screen")]
+    assert result["items"][1]["working_directory"] == "C:\\Windows\\system32"
+
+
+def test_windows_consoles_output_ending_in_a_bracket_is_not_a_prompt() -> None:
+    dump = "\n".join(["PS C:\\> Get-Thing", "<result>", "value -> other>", "Name> not a path"])
+    result = _normalize_consoles(_screen_rows(9, dump))
+    assert [item["command"] for item in result["items"]] == ["Get-Thing"]

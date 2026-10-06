@@ -2660,10 +2660,18 @@ def test_historical_crash_dump_command_matches_working_direct_execution(tmp_path
         (b"No suitable translation layer was found", "UNSUPPORTED_MEMORY_IMAGE"),
         (b"Unable to validate layer requirement", "INVALID_MEMORY_LAYER"),
         (b"OSError: [Errno 30] Read-only file system while preparing symbol PDB", "MEMORY_SYMBOL_CACHE_NOT_WRITABLE"),
+        # windows.consoles on Windows 10 1803, as Volatility 2.28 reports it.
+        (b"Traceback (most recent call last):\n  File \"consoles.py\", line 317, in determine_conhost_version\nNotImplementedError: This version of Windows is not supported: 10.0 15.17134!", "PLUGIN_UNSUPPORTED_WINDOWS_BUILD"),
     ],
 )
 def test_volatility_failure_classification(stderr: bytes, expected: str) -> None:
     assert volatility_runner._classify_failure(stderr)[0] == expected
+
+
+def test_unsupported_windows_build_message_names_the_build() -> None:
+    code, message = volatility_runner._classify_failure(b"NotImplementedError: This version of Windows is not supported: 10.0 15.17134!", "windows.consoles")
+    assert code == "PLUGIN_UNSUPPORTED_WINDOWS_BUILD"
+    assert message == "windows.consoles does not support this Windows build (10.0 15.17134) in the installed Volatility version."
 
 
 def test_volatility_runner_timeout_terminates_process_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

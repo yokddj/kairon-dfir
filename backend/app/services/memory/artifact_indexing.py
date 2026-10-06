@@ -121,6 +121,8 @@ ARTIFACT_MAPPING = {
             "platform": {"type": "keyword"},
             "command": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 1024}}},
             "command_time": {"type": "date", "ignore_malformed": True},
+            "working_directory": {"type": "keyword", "ignore_above": 1024, "fields": {"text": {"type": "text"}}},
+            "recovered_from": {"type": "keyword"},
         },
     }
 }

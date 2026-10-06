@@ -65,6 +65,8 @@ RUN_ALL_PROFILES: tuple[str, ...] = (
     "metadata_only",
     "processes_basic",
     "processes_extended",
+    # Commands typed in console windows (windows.consoles) or bash (linux.bash). Cheap: seconds.
+    "shell_history_basic",
     "network_basic",
     "modules_basic",
     "handles_basic",

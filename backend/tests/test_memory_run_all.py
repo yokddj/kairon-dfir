@@ -95,7 +95,7 @@ def db(tmp_path, monkeypatch) -> Session:
     def _patched_get_settings() -> Settings:
         base = Settings()
         object.__setattr__(base, "memory_process_profile_enabled", True)
-        object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory")
+        object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,shell_history_basic,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory")
         object.__setattr__(base, "memory_allowed_plugins", "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo")
         return base
 
@@ -426,7 +426,7 @@ def test_profile_with_no_enabled_plugins_is_skipped_without_empty_job(db: Sessio
     def _settings() -> Settings:
         base = Settings()
         object.__setattr__(base, "memory_process_profile_enabled", True)
-        object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory")
+        object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,shell_history_basic,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory")
         object.__setattr__(base, "memory_allowed_plugins", "windows.info,windows.pslist,windows.pstree,windows.cmdline,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo")
         return base
 
