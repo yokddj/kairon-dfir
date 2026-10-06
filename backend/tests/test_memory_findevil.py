@@ -144,3 +144,32 @@ def test_execution_sends_findevil_to_memprocfs_not_volatility(tmp_path, monkeypa
     assert len(payload) == 6 and duration_ms == 5 and argv == ["memprocfs"]
     # The raw output is kept like any plugin's, under the run's output directory.
     assert raw_info["size"] == len(json.dumps(findevil_rows(CSV)).encode())
+
+
+def test_listing_sorts_and_filters_on_fields_every_case_index_has(monkeypatch) -> None:
+    # Case indexes created before FindEvil existed got these fields from dynamic mapping
+    # (text + .keyword): sorting or term-filtering the text field itself fails there.
+    from app.services.memory import active_result, artifact_indexing
+
+    captured = {}
+
+    class _Client:
+        def search(self, index, body, params):  # noqa: ANN001
+            captured.update(body)
+            return {"hits": {"total": {"value": 0}, "hits": []}}
+
+    monkeypatch.setattr(artifact_indexing, "get_opensearch_client", lambda: _Client())
+    artifact_indexing.search_artifact_documents(
+        "case-1",
+        document_type="memory_findevil",
+        evidence_id="ev-1",
+        filters={"indicator_type": "PROC_NOLINK", "review_priority": "high"},
+        sort=active_result.FAMILY_SORT["find_evil"],
+    )
+    fields = [next(iter(clause)) for clause in captured["sort"]]
+    assert fields[:2] == ["review_rank", "indicator_type.keyword"]
+    terms = [clause["term"] for clause in captured["query"]["bool"]["filter"] if "term" in clause]
+    assert {"indicator_type.keyword": "PROC_NOLINK"} in terms
+    assert {"review_priority.keyword": "high"} in terms
+    mapping = artifact_indexing.ARTIFACT_MAPPING["mappings"]["properties"]
+    assert mapping["indicator_type"]["fields"]["keyword"]["type"] == "keyword"
