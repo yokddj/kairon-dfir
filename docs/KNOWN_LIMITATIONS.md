@@ -10,8 +10,6 @@ This document describes current known limitations. It is intentionally explicit 
 - PECmd is available, but raw Prefetch parsing with PECmd is disabled on Linux when Windows decompression support is required. The internal Prefetch backend remains active.
 - EZ Tools for LNK, Jumplist, Amcache and Shimcache are advanced rebuild backends, not default activation for every case.
 
-- Retrying a problematic artifact that was partly indexed can index its first records again. Kairon offers the retry for a raw EVTX file that stopped partway (from the job report), and event ids are not stable across runs, so the events indexed before the stop appear twice. Prefer reprocessing the whole evidence when duplicates matter; artifacts with nothing indexed are not affected.
-
 ## Search / Timeline
 
 - Search is the primary exploration workspace. Search Timeline is a filtered view of matching events over time.

@@ -7155,6 +7155,71 @@ def _artifact_retry_run_id(evidence_id: str, artifact_ids: list[str]) -> str:
     return f"artifact-retry-{digest[:16]}"
 
 
+def _reconcile_retried_artifact_documents(
+    *,
+    case_id: str,
+    evidence_id: str,
+    previous_artifact_ids: list[str],
+    retry_artifact_id: str,
+) -> dict:
+    """Keep one copy of a retried file's events.
+
+    Event ids are random, so a retry indexes the records the earlier, interrupted run already
+    indexed a second time. Whichever run got further is kept and the other's documents are
+    removed: a retry that reaches more records replaces the earlier ones, and one that stops
+    sooner is dropped instead of losing what was already there.
+    """
+    previous_artifact_ids = [item for item in dict.fromkeys(previous_artifact_ids) if item and item != retry_artifact_id]
+    result = {"kept": "retry", "previous_docs": 0, "retry_docs": 0, "removed_docs": 0}
+    client = get_opensearch_client()
+    index = get_events_index(case_id)
+
+    def _scope(artifact_ids: list[str]) -> dict:
+        return {"bool": {"filter": [{"term": {"evidence_id": evidence_id}}, {"terms": {"artifact_id": artifact_ids}}]}}
+
+    client.indices.refresh(index=index)
+    result["retry_docs"] = int(client.count(index=index, body={"query": _scope([retry_artifact_id])}).get("count") or 0)
+    if previous_artifact_ids:
+        result["previous_docs"] = int(client.count(index=index, body={"query": _scope(previous_artifact_ids)}).get("count") or 0)
+    if result["retry_docs"] >= result["previous_docs"]:
+        stale = previous_artifact_ids if result["previous_docs"] else []
+    else:
+        result["kept"] = "previous"
+        stale = [retry_artifact_id] if result["retry_docs"] else []
+    if stale:
+        response = client.delete_by_query(index=index, body={"query": _scope(stale)}, conflicts="proceed", refresh=True)
+        result["removed_docs"] = int(response.get("deleted") or 0)
+    return result
+
+
+def _keep_one_copy_of_retried_artifact(
+    *,
+    case_id: str,
+    evidence_id: str,
+    previous_artifact_ids: list[str],
+    retry_artifact_id: str,
+    docs_processed: int,
+) -> int:
+    """Reconcile and update the artifact rows; returns how many documents the retry keeps."""
+    try:
+        outcome = _reconcile_retried_artifact_documents(
+            case_id=case_id,
+            evidence_id=evidence_id,
+            previous_artifact_ids=previous_artifact_ids,
+            retry_artifact_id=retry_artifact_id,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not reconcile retried artifact %s; earlier documents are kept as they are", retry_artifact_id, exc_info=True)
+        return docs_processed
+    logger.info("Retried artifact %s reconciled: %s", retry_artifact_id, outcome)
+    if outcome["kept"] == "previous":
+        return 0
+    if outcome["removed_docs"]:
+        for artifact_id in previous_artifact_ids:
+            _update_artifact_row_isolated(artifact_id, record_count=0)
+    return outcome["retry_docs"]
+
+
 def retry_problematic_artifacts(
     evidence_id: str,
     artifact_ids: list[str],
@@ -7278,6 +7343,11 @@ def retry_problematic_artifacts(
                     "heartbeat_at": utc_now().isoformat(),
                 },
             )
+            previous_artifact_ids = [
+                row.id
+                for row in artifact_rows
+                if str(row.source_path or "") == str(artifact_info["source_path"] or "") and str(row.parser or "").lower() == "evtx_raw"
+            ]
             retry_artifact_id = _create_artifact_row_isolated(
                 case_id=evidence.case_id,
                 evidence_id=evidence.id,
@@ -7337,6 +7407,14 @@ def retry_problematic_artifacts(
                     )
                     if performance_mode != "parse_only":
                         docs_processed = len(final_result.events)
+                if performance_mode != "parse_only":
+                    docs_processed = _keep_one_copy_of_retried_artifact(
+                        case_id=evidence.case_id,
+                        evidence_id=evidence.id,
+                        previous_artifact_ids=previous_artifact_ids,
+                        retry_artifact_id=retry_artifact_id,
+                        docs_processed=docs_processed,
+                    )
                 records_read = int(final_result.records_read or 0)
                 total_records_read += records_read
                 total_records_indexed += docs_processed
@@ -7381,7 +7459,17 @@ def retry_problematic_artifacts(
                     },
                 )
             except Exception as exc:  # noqa: BLE001
-                _update_artifact_row_isolated(retry_artifact_id, status="failed", record_count=0)
+                # Batches indexed before the failure are real documents: reconcile them too, or the
+                # next retry would add a third copy.
+                if docs_processed and performance_mode != "parse_only":
+                    docs_processed = _keep_one_copy_of_retried_artifact(
+                        case_id=evidence.case_id,
+                        evidence_id=evidence.id,
+                        previous_artifact_ids=previous_artifact_ids,
+                        retry_artifact_id=retry_artifact_id,
+                        docs_processed=docs_processed,
+                    )
+                _update_artifact_row_isolated(retry_artifact_id, status="failed", record_count=docs_processed)
                 retry_errors.append(
                     {
                         "artifact_id": retry_artifact_id,
