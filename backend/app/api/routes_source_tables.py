@@ -14,6 +14,7 @@ from app.services.source_tables import (
     SourceTableError,
     column_values,
     delete_source_table,
+    ensure_column_emptiness,
     export_table_csv,
     query_table_rows,
     schedule_source_tables,
@@ -92,7 +93,12 @@ def create_source_tables(case_id: str, evidence_id: str, payload: SourceTableReq
 
 @router.get("/api/cases/{case_id}/source-tables/{table_id}")
 def get_source_table(case_id: str, table_id: str, db: Session = Depends(get_db)) -> dict:
-    return serialize_table(_get_table(db, case_id, table_id))
+    table = _get_table(db, case_id, table_id)
+    try:
+        ensure_column_emptiness(db, table)
+    except Exception:  # noqa: BLE001 - the table is still usable without it
+        db.rollback()
+    return serialize_table(table)
 
 
 @router.delete("/api/cases/{case_id}/source-tables/{table_id}")

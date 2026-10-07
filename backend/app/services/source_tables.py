@@ -337,7 +337,7 @@ def build_source_table(db: Session, table: SourceTable, evidence: Evidence) -> N
     failed = len(errors) if isinstance(errors, list) else int(errors or 0)
 
     table.columns = [
-        {"index": position, "name": name, "numeric": bool(numeric[position] and seen_value[position])}
+        {"index": position, "name": name, "numeric": bool(numeric[position] and seen_value[position]), "empty": not seen_value[position]}
         for position, name in enumerate(headers)
     ]
     table.row_count = int(indexed)
@@ -346,6 +346,27 @@ def build_source_table(db: Session, table: SourceTable, evidence: Evidence) -> N
     table.error = f"{failed} rows could not be indexed" if failed else None
     db.commit()
     logger.info("Built source table %s (%s rows, %s columns) from %s", table.id, indexed, width, path)
+
+
+def ensure_column_emptiness(db: Session, table: SourceTable) -> None:
+    """Tables built before columns carried "empty" get it computed once.
+
+    A column counts as empty when no row has a value in it. Values longer than
+    the keyword limit are not indexed and would read as missing here, which is
+    why new tables record emptiness while reading the file instead.
+    """
+    columns = list(table.columns or [])
+    if table.status != "ready" or not table.index_name or not columns or all("empty" in column for column in columns):
+        return
+    body = {
+        "size": 0,
+        "track_total_hits": False,
+        "aggs": {f"c{column['index']}": {"filter": {"exists": {"field": f"c{column['index']}"}}} for column in columns},
+    }
+    response = get_opensearch_client().search(index=table.index_name, body=body)
+    aggregations = response.get("aggregations", {})
+    table.columns = [{**column, "empty": int(aggregations.get(f"c{column['index']}", {}).get("doc_count", 0)) == 0} for column in columns]
+    db.commit()
 
 
 def build_pending_source_tables(db: Session, evidence_id: str) -> int:

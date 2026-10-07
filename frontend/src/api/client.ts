@@ -5805,7 +5805,13 @@ function buildArtifactQuery(path: string, params: Record<string, unknown> | unde
 
 export type SourceTableStatus = "pending" | "building" | "ready" | "failed" | "unavailable";
 
-export type SourceTableColumn = { index: number; name: string; numeric: boolean };
+export type SourceTableColumn = {
+  index: number;
+  name: string;
+  numeric: boolean;
+  /** No row of the file has a value in this column. */
+  empty?: boolean;
+};
 
 export type SourceTable = {
   id: string;

@@ -244,6 +244,8 @@ function SourceTableView({ caseId, tableId }: { caseId: string; tableId: string 
   const debouncedColumnText = useDebounced(columnText);
 
   const visibleColumns = useMemo(() => columns.filter((column) => !hidden.includes(column.index)), [columns, hidden]);
+  const emptyColumns = useMemo(() => columns.filter((column) => column.empty), [columns]);
+  const visibleEmptyCount = emptyColumns.filter((column) => !hidden.includes(column.index)).length;
   const resizable = useMemo(() => visibleColumns.map((column) => ({ key: String(column.index), defaultWidth: 180 })), [visibleColumns]);
   const { widths, startResize, nudge, resizingKey } = useResizableColumns(`sourceTable.${tableId}`, resizable);
 
@@ -290,6 +292,12 @@ function SourceTableView({ caseId, tableId }: { caseId: string; tableId: string 
 
   const toggleHidden = (index: number) => {
     const next = hidden.includes(index) ? hidden.filter((value) => value !== index) : [...hidden, index];
+    setHidden(next);
+    writeHidden(tableId, next);
+  };
+
+  const hideEmptyColumns = () => {
+    const next = [...new Set([...hidden, ...emptyColumns.map((column) => column.index)])];
     setHidden(next);
     writeHidden(tableId, next);
   };
@@ -344,6 +352,14 @@ function SourceTableView({ caseId, tableId }: { caseId: string; tableId: string 
           </h2>
           <p className="text-xs text-muted">
             {total.toLocaleString()} of {table.row_count.toLocaleString()} rows · {visibleColumns.length}/{columns.length} columns
+            {visibleEmptyCount ? (
+              <>
+                {" · "}
+                <button type="button" className="text-accent hover:underline" onClick={hideEmptyColumns} title={emptyColumns.map((column) => column.name).join(", ")}>
+                  hide {visibleEmptyCount} empty column{visibleEmptyCount === 1 ? "" : "s"}
+                </button>
+              </>
+            ) : null}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -364,6 +380,11 @@ function SourceTableView({ caseId, tableId }: { caseId: string; tableId: string 
                   <button type="button" className="text-accent hover:underline" onClick={() => { setHidden([]); writeHidden(tableId, []); }}>
                     Show all
                   </button>
+                  {emptyColumns.length ? (
+                    <button type="button" className="text-accent hover:underline" onClick={hideEmptyColumns}>
+                      Hide empty ({emptyColumns.length})
+                    </button>
+                  ) : null}
                   <button type="button" className="text-muted hover:underline" onClick={() => setShowColumns(false)}>
                     Close
                   </button>
@@ -371,7 +392,8 @@ function SourceTableView({ caseId, tableId }: { caseId: string; tableId: string 
                 {columns.map((column) => (
                   <label key={column.index} className="flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-abyss">
                     <input type="checkbox" checked={!hidden.includes(column.index)} onChange={() => toggleHidden(column.index)} />
-                    <span className="truncate">{column.name}</span>
+                    <span className={`truncate ${column.empty ? "text-muted" : ""}`}>{column.name}</span>
+                    {column.empty ? <span className="ml-auto shrink-0 rounded-full border border-line px-1.5 text-[10px] uppercase tracking-wide text-muted">empty</span> : null}
                   </label>
                 ))}
               </div>
@@ -423,7 +445,12 @@ function SourceTableView({ caseId, tableId }: { caseId: string; tableId: string 
               {visibleColumns.map((column) => (
                 <th key={column.index} className="relative border-b border-l border-line/60 px-2 py-1.5 font-medium">
                   <div className="flex items-center gap-1">
-                    <button type="button" className="min-w-0 flex-1 truncate text-left text-ink hover:text-accent" title={`${column.name} — click to sort`} onClick={() => cycleSort(column.index)}>
+                    <button
+                      type="button"
+                      className={`min-w-0 flex-1 truncate text-left hover:text-accent ${column.empty ? "italic text-muted" : "text-ink"}`}
+                      title={column.empty ? `${column.name} — no values in the whole file` : `${column.name} — click to sort`}
+                      onClick={() => cycleSort(column.index)}
+                    >
                       {column.name}
                     </button>
                     {sort?.column === column.index ? sort.order === "asc" ? <ArrowUp className="h-3 w-3 shrink-0" /> : <ArrowDown className="h-3 w-3 shrink-0" /> : null}
