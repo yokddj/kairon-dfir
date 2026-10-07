@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     opensearch_verify_certs: bool = False
     opensearch_index_prefix: str = "dfir-events"
     opensearch_memory_index_prefix: str = "dfir-memory"
+    # Must not start with opensearch_index_prefix: Search queries "<prefix>-*".
+    opensearch_table_index_prefix: str = "dfir-tables"
     report_brand_name: str = "Kairon DFIR"
     report_brand_subtitle: str = "Digital Forensics & Incident Response"
     report_brand_primary_color: str = "#0f172a"

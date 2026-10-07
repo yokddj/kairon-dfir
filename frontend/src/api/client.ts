@@ -5803,7 +5803,73 @@ function buildArtifactQuery(path: string, params: Record<string, unknown> | unde
   return query.size ? `${path}?${query.toString()}` : path;
 }
 
+export type SourceTableStatus = "pending" | "building" | "ready" | "failed" | "unavailable";
+
+export type SourceTableColumn = { index: number; name: string; numeric: boolean };
+
+export type SourceTable = {
+  id: string;
+  case_id: string;
+  evidence_id: string;
+  /** "*" is a pending request for every CSV/TSV of the evidence. */
+  source_path: string;
+  name: string;
+  artifact_type: string | null;
+  status: SourceTableStatus;
+  columns: SourceTableColumn[];
+  row_count: number;
+  error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type SourceTableFilterOp = "contains" | "not_contains" | "equals" | "not_equals" | "empty" | "not_empty";
+
+export type SourceTableFilter = { column: number; op: SourceTableFilterOp; value?: string };
+
+export type SourceTableQuery = {
+  q?: string;
+  filters?: SourceTableFilter[];
+  sort_column?: number | null;
+  sort_order?: "asc" | "desc";
+};
+
+export type SourceTableRowsResponse = {
+  total: number;
+  rows: Array<{ row: number; values: string[] }>;
+  next_cursor: string | null;
+};
+
 export const api = {
+  listSourceTables: (caseId: string, evidenceId?: string) =>
+    request<{ items: SourceTable[] }>(`/cases/${caseId}/source-tables${evidenceId ? `?evidence_id=${encodeURIComponent(evidenceId)}` : ""}`),
+  getSourceTable: (caseId: string, tableId: string) => request<SourceTable>(`/cases/${caseId}/source-tables/${tableId}`),
+  requestSourceTables: (caseId: string, evidenceId: string, sourcePaths: string[] | null) =>
+    request<{ items: SourceTable[]; queued: boolean }>(`/cases/${caseId}/evidence/${evidenceId}/source-tables`, {
+      method: "POST",
+      body: JSON.stringify({ source_paths: sourcePaths }),
+    }),
+  deleteSourceTable: (caseId: string, tableId: string) =>
+    request<{ deleted: boolean }>(`/cases/${caseId}/source-tables/${tableId}`, { method: "DELETE" }),
+  querySourceTableRows: (caseId: string, tableId: string, payload: SourceTableQuery & { cursor?: string | null; size?: number }) =>
+    request<SourceTableRowsResponse>(`/cases/${caseId}/source-tables/${tableId}/rows`, { method: "POST", body: JSON.stringify(payload) }),
+  sourceTableColumnValues: (caseId: string, tableId: string, payload: SourceTableQuery & { column: number; size?: number }) =>
+    request<{ items: Array<{ value: string; count: number }> }>(`/cases/${caseId}/source-tables/${tableId}/values`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  exportSourceTable: async (caseId: string, tableId: string, payload: SourceTableQuery & { columns?: number[] }) => {
+    const response = await apiFetch(`/cases/${caseId}/source-tables/${tableId}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(body || `HTTP ${response.status}`);
+    }
+    return { blob: await response.blob(), filename: extractDownloadFilename(response.headers.get("content-disposition"), "table.csv") };
+  },
   listAiConversations: (caseId: string) =>
     request<{ conversations: AiConversationSummary[] }>(`/cases/${caseId}/ai/conversations`),
   getAiConversation: (caseId: string, conversationId: string) =>
@@ -7035,6 +7101,7 @@ export const api = {
       evidence_intent?: EvidenceIntent;
       ingest_mode?: IngestMode;
       forced_evidence_kind?: "disk_image" | "memory_dump" | "collection" | "archive" | "unknown" | null;
+      full_csv_tables?: boolean;
     },
   ) => request<Evidence>(`/cases/${caseId}/evidence-uploads/${sessionId}/promote`, { method: "POST", body: JSON.stringify(payload) }),
   cancelEvidenceUploadSession: (caseId: string, sessionId: string) =>

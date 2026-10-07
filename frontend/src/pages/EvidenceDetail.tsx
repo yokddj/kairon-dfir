@@ -10,6 +10,7 @@ import { useNotifications } from "../context/NotificationsContext";
 import { useHostAssignment } from "../hooks/useHostAssignment";
 import { useHostContext } from "../hooks/useHostContext";
 import { linuxCommandHistoryRoute, memoryEvidenceRoute } from "../lib/canonicalRoutes";
+import EvidenceSourceTablesPanel from "../components/EvidenceSourceTablesPanel";
 import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 import {
   asLinuxInventory,
@@ -2031,6 +2032,8 @@ function formatReportStatus(status: string | null | undefined) {
           </div>
         </details>
       </section>
+
+      {evidenceReadyForActions && evidenceQuery.data?.case_id ? <EvidenceSourceTablesPanel caseId={evidenceQuery.data.case_id} evidenceId={evidenceId} /> : null}
 
       {evidenceReadyForActions ? (
         <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">

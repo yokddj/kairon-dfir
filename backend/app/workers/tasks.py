@@ -526,6 +526,39 @@ def enqueue_recmd_user_activity_index(evidence_id: str, *, force: bool = False) 
     return job.id
 
 
+def enqueue_source_tables_build(evidence_id: str) -> str:
+    job = ingest_queue.enqueue(
+        "app.workers.tasks.build_source_tables_for_evidence",
+        evidence_id,
+        job_timeout=max(int(settings.artifact_retry_job_timeout_seconds or settings.ingest_job_timeout_seconds or 0), 60),
+    )
+    return job.id
+
+
+def build_source_tables_for_evidence(evidence_id: str) -> int:
+    from app.services.source_tables import build_pending_source_tables
+
+    db: Session = SessionLocal()
+    try:
+        return build_pending_source_tables(db, evidence_id)
+    finally:
+        db.close()
+
+
+def _enqueue_pending_source_tables(evidence_id: str) -> None:
+    """Full CSV tables requested in the wizard wait for the ingest to finish."""
+    from app.services.source_tables import has_pending_tables
+
+    db: Session = SessionLocal()
+    try:
+        if has_pending_tables(db, evidence_id):
+            enqueue_source_tables_build(evidence_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not enqueue source tables for evidence %s: %s", evidence_id, exc)
+    finally:
+        db.close()
+
+
 def enqueue_registry_persistence_summary_index(evidence_id: str, *, force: bool = False) -> str:
     job = ingest_queue.enqueue(
         "app.workers.tasks.index_registry_persistence_summary_for_evidence",
@@ -6817,6 +6850,8 @@ def ingest_evidence(evidence_id: str) -> None:
             evidence_id=evidence.id,
             metadata={"indexed_events": indexed_count, "generated_detections": detection_count, "errors": errors, "warnings": detection_warnings},
         )
+        if evidence.ingest_status != IngestStatus.failed:
+            _enqueue_pending_source_tables(evidence.id)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Ingest failed for evidence %s", evidence_id)
         db.rollback()

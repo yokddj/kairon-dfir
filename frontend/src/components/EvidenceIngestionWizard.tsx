@@ -301,6 +301,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [evidenceIntent, setEvidenceIntent] = useState<EvidenceIntent>("raw");
   const [ingestMode, setIngestMode] = useState<IngestMode>("full_forensic");
   const [evtxProfile, setEvtxProfile] = useState<EvtxProfile>("full");
+  const [fullCsvTables, setFullCsvTables] = useState(false);
   const [hashProgress, setHashProgress] = useState<number | null>(null);
   const [clientSha256, setClientSha256] = useState<string | null>(null);
   const [inspectionState, setInspectionState] = useState<InspectionState>("idle");
@@ -437,6 +438,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setProcessingMode("recommended");
     setLabels("");
     setNotes("");
+    setFullCsvTables(false);
     setHashProgress(null);
     setClientSha256(null);
     stopFinalizePollingRef.current?.();
@@ -989,6 +991,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
             evidence_intent: evidenceIntent,
             ingest_mode: ingestMode,
             evtx_profile: evtxProfile,
+            full_csv_tables: fullCsvTables && item.preflight.classification.category !== "memory_dump",
           });
           lastEvidence = evidence;
           if (evidence.evidence_type !== "memory_dump" && processingMode !== "skip") {
@@ -1019,6 +1022,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
           evidence_intent: evidenceIntent,
           ingest_mode: ingestMode,
           evtx_profile: evtxProfile,
+          full_csv_tables: fullCsvTables && preflight?.classification.category !== "memory_dump",
         });
         promotedRef.current = true;
         promotedEvidenceRef.current = evidence;
@@ -1790,6 +1794,15 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                       <label className={`rounded-2xl border p-3 text-sm ${processingMode === "skip" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}><input type="radio" name="processing-mode" className="mr-2" checked={processingMode === "skip"} onChange={() => setProcessingMode("skip")} />Save only</label>
                     </div>
                   </div>
+                ) : null}
+                {!hasMemoryEvidence ? (
+                  <label className={`flex items-start gap-2 rounded-2xl border p-3 text-sm ${fullCsvTables ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/60 text-muted"}`}>
+                    <input type="checkbox" className="mt-1" checked={fullCsvTables} onChange={(event) => setFullCsvTables(event.target.checked)} data-testid="full-csv-tables" />
+                    <span>
+                      Full CSV tables
+                      <span className="mt-1 block text-xs text-muted">Also index every CSV/TSV whole, with all its columns, for Source Tables (sort and filter by any column). Uses extra disk; Search results are unchanged. You can also enable it per file later from the evidence detail.</span>
+                    </span>
+                  </label>
                 ) : null}
                 <label className="text-xs text-muted">Labels<input value={labels} onChange={(event) => setLabels(event.target.value)} placeholder="comma, separated, labels" className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
                 <label className="text-xs text-muted">Evidence notes<textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="mt-1 h-20 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>

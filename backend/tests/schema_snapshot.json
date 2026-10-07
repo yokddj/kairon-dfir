@@ -1200,6 +1200,21 @@
     "user_agent",
     "user_id"
   ],
+  "source_tables": [
+    "artifact_type",
+    "case_id",
+    "columns",
+    "created_at",
+    "error",
+    "evidence_id",
+    "id",
+    "index_name",
+    "name",
+    "row_count",
+    "source_path",
+    "status",
+    "updated_at"
+  ],
   "tags": [
     "case_id",
     "color",
