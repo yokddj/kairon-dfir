@@ -12,7 +12,7 @@ from app.api import routes_activity, routes_admin, routes_ai, routes_auth, route
 from app.core.config import get_settings
 from app.core.csrf import CSRFOriginMiddleware
 from app.core.database import init_db
-from app.core.opensearch import ensure_events_indices_safe_settings
+from app.core.opensearch import ensure_events_indices_safe_settings, ensure_search_text_substring_field
 
 
 settings = get_settings()
@@ -385,6 +385,11 @@ def on_startup() -> None:
 
     init_db()
     ensure_events_indices_safe_settings()
+    try:
+        ensure_search_text_substring_field()
+    except Exception as exc:  # noqa: BLE001 - search still works, only substring matching on old events waits
+        import logging
+        logging.getLogger("uvicorn").warning("Could not schedule the search_text substring backfill: %s", exc)
 
     from app.core.database import SessionLocal
 

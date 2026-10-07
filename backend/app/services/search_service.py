@@ -14,7 +14,7 @@ from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
-from app.core.opensearch import fetch_event_by_id, get_events_index, get_opensearch_client, index_exists
+from app.core.opensearch import SEARCH_TEXT_SUBSTRING_FIELD, fetch_event_by_id, get_events_index, get_opensearch_client, index_exists, search_text_substring_clause
 from app.models.detection_result import DetectionResult
 from app.models.evidence import Evidence
 from app.models.finding import Finding, FindingSeverity, FindingStatus
@@ -94,7 +94,7 @@ TEXT_FIELDS = [
 _SUBSTRING_SAFE_TERM = r"[A-Za-z0-9_.:-]{3,128}"
 
 GENERIC_WILDCARD_TEXT_FIELDS = [
-    "search_text.wildcard",
+    SEARCH_TEXT_SUBSTRING_FIELD,
     "file.path",
     "file.name",
     "detection.threat_name",
@@ -105,7 +105,7 @@ GENERIC_WILDCARD_TEXT_FIELDS = [
     "network.application",
 ]
 COMMAND_QUERY_WILDCARD_FIELDS = [
-    "search_text.wildcard",
+    SEARCH_TEXT_SUBSTRING_FIELD,
     "process.command_line",
     "event.message",
     "raw_summary",
@@ -476,7 +476,10 @@ def _safe_wildcard(value: str) -> str:
 def _build_should_terms(fields: list[str], value: str, *, wildcard: bool = False, case_insensitive: bool = True) -> list[dict[str, Any]]:
     if wildcard:
         escaped = _safe_wildcard(value)
-        return [{"wildcard": {field: {"value": f"*{escaped}*", "case_insensitive": case_insensitive}}} for field in fields]
+        return [
+            search_text_substring_clause(f"*{escaped}*") if field == SEARCH_TEXT_SUBSTRING_FIELD else {"wildcard": {field: {"value": f"*{escaped}*", "case_insensitive": case_insensitive}}}
+            for field in fields
+        ]
     return [{"term": {field: value}} for field in fields]
 
 
@@ -623,7 +626,10 @@ def _wildcard_clause(fields: list[str], value: str, *, starts_with: bool = False
     pattern = f"{escaped}*" if starts_with else f"*{escaped}*"
     return {
         "bool": {
-            "should": [{"wildcard": {field: {"value": pattern, "case_insensitive": True}}} for field in fields],
+            "should": [
+                search_text_substring_clause(pattern) if field == SEARCH_TEXT_SUBSTRING_FIELD else {"wildcard": {field: {"value": pattern, "case_insensitive": True}}}
+                for field in fields
+            ],
             "minimum_should_match": 1,
         }
     }

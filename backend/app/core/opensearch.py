@@ -23,6 +23,15 @@ MAX_RAW_JSON_BYTES = 64 * 1024
 INDEX_TOTAL_FIELDS_LIMIT = 2000
 INDEX_MAX_DOCVALUE_FIELDS_SEARCH = 256
 INDEX_QUERY_DEFAULT_FIELDS = ["search_text"]
+# Substring ("contains") matching over search_text. OpenSearch 2.15's wildcard
+# field type returns no hits at all for a wildcard query with
+# case_insensitive=true, even on an exact-case match, so the original
+# "search_text.wildcard" subfield silently broke every substring fallback:
+# "psexesvc" never found "PSEXESVC.exe". This subfield lowercases values and
+# query patterns through the built-in normalizer instead; query it with a plain
+# wildcard and no case_insensitive flag (search_text_substring_clause).
+SEARCH_TEXT_SUBSTRING_FIELD = "search_text.wildcard_lc"
+SEARCH_TEXT_SUBSTRING_SUBFIELD = {"wildcard_lc": {"type": "wildcard", "normalizer": "lowercase"}}
 SEARCH_TEXT_MAX_CHARS = 32 * 1024
 _SEARCH_TEXT_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+")
 _SEARCH_TEXT_WHITESPACE = re.compile(r"\s+")
@@ -246,6 +255,67 @@ def ensure_events_indices_safe_settings() -> None:
     _apply_safe_index_settings(client, get_events_index(None))
 
 
+def search_text_substring_clause(pattern: str) -> dict:
+    """A wildcard clause over search_text that actually ignores case (see SEARCH_TEXT_SUBSTRING_FIELD)."""
+    return {"wildcard": {SEARCH_TEXT_SUBSTRING_FIELD: {"value": pattern.lower()}}}
+
+
+_SEARCH_TEXT_SUBSTRING_MISSING = {
+    "bool": {
+        "filter": [{"exists": {"field": "search_text"}}],
+        "must_not": [{"exists": {"field": SEARCH_TEXT_SUBSTRING_FIELD}}],
+    }
+}
+
+
+def ensure_search_text_substring_field() -> list[str]:
+    """Give indices created before SEARCH_TEXT_SUBSTRING_FIELD the subfield and fill it.
+
+    Adding a subfield is a plain mapping merge, but documents indexed before it
+    only get a value once they are re-indexed in place. That runs as an
+    asynchronous update_by_query per index, limited to documents still missing
+    the subfield, so a restart part-way through resumes instead of starting
+    over, and an index with a task already running is left alone.
+    """
+    client = get_opensearch_client()
+    pattern = get_events_index(None)
+    try:
+        mappings = client.indices.get_mapping(index=pattern, params={"allow_no_indices": "true", "ignore_unavailable": "true"}) or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not read events index mappings: %s", exc)
+        return []
+    try:
+        running = client.tasks.list(params={"actions": "*byquery", "detailed": "true"})
+        busy = " ".join(
+            str(task.get("description") or "")
+            for node in (running.get("nodes") or {}).values()
+            for task in (node.get("tasks") or {}).values()
+        )
+    except Exception:  # noqa: BLE001
+        busy = ""
+    started: list[str] = []
+    for index, body in sorted(mappings.items()):
+        try:
+            fields = (((body.get("mappings") or {}).get("properties") or {}).get("search_text") or {}).get("fields") or {}
+            if "wildcard_lc" not in fields:
+                client.indices.put_mapping(index=index, body={"properties": {"search_text": {"type": "text", "fields": dict(SEARCH_TEXT_SUBSTRING_SUBFIELD)}}})
+            if f"[{index}]" in busy:
+                continue
+            missing = int(client.count(index=index, body={"query": _SEARCH_TEXT_SUBSTRING_MISSING}).get("count") or 0)
+            if not missing:
+                continue
+            task = client.update_by_query(
+                index=index,
+                body={"query": _SEARCH_TEXT_SUBSTRING_MISSING},
+                params={"conflicts": "proceed", "wait_for_completion": "false", "slices": "auto"},
+            )
+            logger.info("Filling %s for %s documents in %s (task %s)", SEARCH_TEXT_SUBSTRING_FIELD, missing, index, task.get("task"))
+            started.append(index)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not add %s to %s: %s", SEARCH_TEXT_SUBSTRING_FIELD, index, exc)
+    return started
+
+
 def get_opensearch_client(*, timeout_seconds: int | None = None) -> OpenSearch:
     return OpenSearch(
         hosts=[{"host": settings.opensearch_host, "port": settings.opensearch_port}],
@@ -353,7 +423,7 @@ def ensure_case_index(case_id: str) -> str:
                             "type": "text",
                             "fields": {
                                 "keyword": {"type": "keyword", "ignore_above": 32766},
-                                "wildcard": {"type": "wildcard"},
+                                **SEARCH_TEXT_SUBSTRING_SUBFIELD,
                             },
                         },
                         "os": {"properties": {"type": {"type": "keyword"}, "version": {"type": "keyword"}}},
@@ -1717,6 +1787,7 @@ def ensure_case_index(case_id: str) -> str:
                 index=index,
                 body={
                     "properties": {
+                        "search_text": {"type": "text", "fields": dict(SEARCH_TEXT_SUBSTRING_SUBFIELD)},
                         "stable_event_id": {"type": "keyword"},
                         "event_fingerprint": {"type": "keyword"},
                         "event_fingerprint_version": {"type": "keyword"},

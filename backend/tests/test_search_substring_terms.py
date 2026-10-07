@@ -11,7 +11,7 @@ def test_a_single_stem_still_falls_back_to_substring_matching() -> None:
     reaches it through the wildcard subfield."""
     body = json.dumps(_build_text_query("comsvcs"))
 
-    assert "search_text.wildcard" in body
+    assert "search_text.wildcard_lc" in body
     assert "simple_query_string" in body
 
 
@@ -22,7 +22,7 @@ def test_two_terms_where_one_is_a_substring_are_not_dropped() -> None:
     query = _build_text_query("rundll32 comsvcs")
     body = json.dumps(query)
 
-    assert body.count("search_text.wildcard") >= 2, "each term needs its own substring clause"
+    assert body.count("search_text.wildcard_lc") >= 2, "each term needs its own substring clause"
     # Every term must match: two terms are a conjunction, not an either/or.
     inner = [clause for clause in query["bool"]["should"] if "bool" in clause and "must" in clause["bool"]]
     assert len(inner) == 1

@@ -18,7 +18,7 @@ from app.core.app_settings import get_setting, set_setting
 from app.core.app_settings import load_runtime_settings
 from app.core.config import get_settings
 from app.core.database import SessionLocal, get_db
-from app.core.opensearch import count_documents, get_events_index, get_index_health, get_opensearch_client, index_exists, is_index_queryable, resolve_aggregatable_field
+from app.core.opensearch import SEARCH_TEXT_SUBSTRING_FIELD, count_documents, get_events_index, get_index_health, get_opensearch_client, index_exists, is_index_queryable, resolve_aggregatable_field, search_text_substring_clause
 from app.models.case_host import CaseHost
 from app.models.evidence import Evidence
 from app.schemas.event import SearchRequest, SearchResponse, SiemRequest
@@ -269,7 +269,7 @@ TEXT_SEARCH_FIELDS = [
     "source_file",
 ]
 COMMAND_KEYWORD_FIELDS = [
-    "search_text.wildcard",
+    SEARCH_TEXT_SUBSTRING_FIELD,
     "file.path",
     "file.name",
     "process.executable",
@@ -624,7 +624,7 @@ def _build_command_like_query(query: str) -> dict:
         if len(escaped) > 128:
             continue
         should.extend(
-            {"wildcard": {field: {"value": f"*{escaped}*", "case_insensitive": True}}}
+            search_text_substring_clause(f"*{escaped}*") if field == SEARCH_TEXT_SUBSTRING_FIELD else {"wildcard": {field: {"value": f"*{escaped}*", "case_insensitive": True}}}
             for field in COMMAND_KEYWORD_FIELDS
         )
     return {"bool": {"should": should, "minimum_should_match": 1}}
@@ -673,7 +673,7 @@ def _build_ioc_query(query: str) -> dict:
             [
                 {"wildcard": {"browser.url": {"value": f"*{_escape_wildcard_term(value)}*", "case_insensitive": True}}},
                 {"wildcard": {"network.url": {"value": f"*{_escape_wildcard_term(value)}*", "case_insensitive": True}}},
-                {"wildcard": {"search_text.wildcard": {"value": f"*{_escape_wildcard_term(value.lower())}*", "case_insensitive": True}}},
+                search_text_substring_clause(f"*{_escape_wildcard_term(value.lower())}*"),
             ]
         )
     if not should:
@@ -701,7 +701,7 @@ def _build_text_query(payload: SearchRequest) -> dict:
         return {
             "bool": {
                 "should": [
-                    {"wildcard": {"search_text.wildcard": {"value": f"*{escaped}*", "case_insensitive": True}}},
+                    search_text_substring_clause(f"*{escaped}*"),
                 {"wildcard": {"file.name": {"value": f"*{escaped}*", "case_insensitive": True}}},
                 {"wildcard": {"file.path": {"value": f"*{escaped}*", "case_insensitive": True}}},
                 {"wildcard": {"artifact.name": {"value": f"*{escaped}*", "case_insensitive": True}}},
