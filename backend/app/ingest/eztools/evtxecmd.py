@@ -12,6 +12,7 @@ from dateutil import parser as date_parser
 
 from app.analysis.suspicious import detect_suspicious_path, detect_suspicious_powershell
 from app.ingest.eztools.base import ArtifactParser, read_delimited_rows
+from app.ingest.normalization.event_data_search import searchable_values, windows_event_data_search_values
 from app.ingest.windows_event_catalog import classify_windows_event as classify_windows_event_catalog
 from app.services.host_attribution import classify_host_candidate
 
@@ -501,6 +502,9 @@ def _document_base(case_id: str, evidence_id: str, artifact_id: str, source_file
     }
 
 
+EVTXECMD_SUMMARY_COLUMNS = frozenset({"mapdescription", "username", "remotehost", "executableinfo"})
+
+
 def _build_search_text(document: dict) -> str:
     values: list[str] = []
     candidates = [
@@ -541,6 +545,17 @@ def _build_search_text(document: dict) -> str:
     for value in candidates:
         if value not in (None, ""):
             values.append(str(value))
+    # EvtxECmd's own summary columns (MapDescription, UserName, RemoteHost,
+    # ExecutableInfo, PayloadData1-6) and every EventData field that has no
+    # normalized home -- WorkstationName, ShareName, RelativeTargetName... --
+    # were only in the event detail and could not be searched.
+    seen = {value.lower() for value in values}
+    raw = document.get("raw") if isinstance(document.get("raw"), dict) else {}
+    summary_columns = [(key, value) for key, value in raw.items() if str(key).strip().lower() in EVTXECMD_SUMMARY_COLUMNS or str(key).strip().lower().startswith(PAYLOAD_PREFIX)]
+    for value in [*searchable_values(summary_columns), *windows_event_data_search_values(document)]:
+        if value.lower() not in seen:
+            seen.add(value.lower())
+            values.append(value)
     return " | ".join(values)[:8192]
 
 

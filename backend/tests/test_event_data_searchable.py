@@ -69,3 +69,46 @@ def test_command_lines_are_long_enough_to_survive() -> None:
     text = build_search_text(_doc({"ServiceName": "abjtTGiR", "ImagePath": command}))
     assert "JuyTiUv5g" in text
     assert "abjtTGiR" in text
+
+
+def _evtxecmd_docs(tmp_path, rows: list[dict]) -> list[dict]:
+    import csv
+    import json
+
+    from app.ingest.eztools.evtxecmd import parse_evtxecmd_file
+
+    columns = ["RecordNumber", "TimeCreated", "EventId", "Provider", "Channel", "Computer", "MapDescription", "UserName", "RemoteHost", "PayloadData1", "PayloadData2", "ExecutableInfo", "Payload"]
+    path = tmp_path / "EvtxECmd_Output.csv"
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for index, row in enumerate(rows, start=1):
+            data = row.pop("data")
+            payload = json.dumps({"EventData": {"Data": [{"@Name": key, "#text": value} for key, value in data.items()]}})
+            writer.writerow({"RecordNumber": index, "TimeCreated": "2024-03-01 08:00:00", "Provider": "Microsoft-Windows-Security-Auditing", "Channel": "Security", "Computer": "WS01", "Payload": payload, **row})
+    return parse_evtxecmd_file("case", "evidence", "artifact", path, {"artifact_type": "evtx", "parser": "zimmerman", "source_path": path.name})
+
+
+def test_evtxecmd_event_data_without_a_normalized_field_is_searchable(tmp_path) -> None:
+    """EvtxECmd CSVs have their own search_text builder, which never got the
+    event_data fold-in: a share access (5145) could not be found by its share
+    or by the file pushed to it (PSEXESVC.exe, classic lateral movement)."""
+    docs = _evtxecmd_docs(
+        tmp_path,
+        [
+            {"EventId": 5145, "MapDescription": "A network share object was checked", "data": {"SubjectUserName": "alice", "ShareName": "\\\\*\\ADMIN$", "RelativeTargetName": "PSEXESVC.exe"}},
+            {"EventId": 4624, "MapDescription": "Successful logon", "RemoteHost": "WKS-07 (10.0.0.66)", "data": {"TargetUserName": "alice", "WorkstationName": "WKS-07", "IpAddress": "10.0.0.66"}},
+            {"EventId": 4720, "PayloadData1": "Target: CONTOSO\\backdoor_admin", "data": {"TargetUserName": "backdoor_admin", "DisplayName": "Helpdesk Backup"}},
+        ],
+    )
+    share, logon, account = (doc["search_text"] for doc in docs)
+    assert "PSEXESVC.exe" in share and "\\\\*\\ADMIN$" in share
+    assert "WKS-07" in logon and "WKS-07 (10.0.0.66)" in logon
+    assert "Helpdesk Backup" in account and "Target: CONTOSO\\backdoor_admin" in account
+    assert all(len(doc["search_text"]) <= 8192 for doc in docs)
+
+
+def test_evtxecmd_payload_blob_is_not_folded_in(tmp_path) -> None:
+    """The Payload column is the whole event as JSON; it must not eat the budget."""
+    (doc,) = _evtxecmd_docs(tmp_path, [{"EventId": 4624, "data": {"TargetUserName": "alice"}}])
+    assert '"EventData"' not in doc["search_text"]
