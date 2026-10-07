@@ -99,4 +99,20 @@ describe("SourceTablesPage", () => {
       expect(querySourceTableRowsMock).toHaveBeenLastCalledWith("case-1", "t1", expect.objectContaining({ sort_column: 1, sort_order: "asc" })),
     );
   });
+
+  it("flags empty columns and hides them all at once", async () => {
+    getSourceTableMock.mockResolvedValue({
+      ...table,
+      columns: [...table.columns, { index: 2, name: "PayloadData5", numeric: false, empty: true }, { index: 3, name: "PayloadData6", numeric: false, empty: true }],
+    });
+    querySourceTableRowsMock.mockResolvedValue({ total: 1, rows: [{ row: 1, values: ["2024-01-01 10:00:00", "4624", "", ""] }], next_cursor: null });
+    renderAt("/cases/case-1/tables/t1");
+
+    expect(await screen.findByRole("button", { name: "PayloadData5" })).toHaveAttribute("title", "PayloadData5 — no values in the whole file");
+    await userEvent.click(screen.getByRole("button", { name: "hide 2 empty columns" }));
+    expect(screen.queryByRole("button", { name: "PayloadData5" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "PayloadData6" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "EventId" })).toBeInTheDocument();
+    expect(screen.getByText(/2\/4 columns/)).toBeInTheDocument();
+  });
 });

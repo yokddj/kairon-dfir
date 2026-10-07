@@ -191,6 +191,7 @@ def test_build_keeps_every_column_positionally_and_detects_numeric_columns(fake_
     assert table.row_count == 2
     assert [column["name"] for column in table.columns] == ["Time", "Size", "Path.With.Dots", "Path.With.Dots", "Column5"]
     assert [column["numeric"] for column in table.columns] == [False, True, False, False, False]
+    assert [column["empty"] for column in table.columns] == [False, False, False, False, False]
     assert fake_client.docs[1]["c4"] == "EXTRA"
     assert fake_client.docs[0]["n1"] == 10.0
     mapping = fake_client.indices.created[table.index_name]["mappings"]
@@ -244,3 +245,27 @@ def test_filters_escape_wildcards_and_sort_numeric_columns_numerically(fake_clie
 def test_unknown_column_is_rejected():
     with pytest.raises(service.SourceTableError):
         service.build_table_query(_ready_table(), None, [{"column": 7, "op": "equals", "value": "x"}])
+
+
+def test_empty_columns_are_flagged_when_building(fake_client, evidence_root):
+    db = _db()
+    evidence = _seed(db)
+    (evidence_root / "extracted" / "out.csv").write_text("Time,PayloadData5,User\n2024-01-01,,alice\n2024-01-02,,\n", encoding="utf-8")
+    service.request_source_tables(db, evidence, ["out.csv"])
+    service.build_pending_source_tables(db, EVIDENCE_ID)
+    table = db.query(SourceTable).one()
+    assert {column["name"]: column["empty"] for column in table.columns} == {"Time": False, "PayloadData5": True, "User": False}
+
+
+def test_tables_built_before_the_flag_get_it_once(fake_client):
+    db = _db()
+    _seed(db)
+    table = _ready_table()
+    table.id = "cccccccc-3333-4333-8333-cccccccccccc"
+    db.add(table)
+    db.commit()
+    fake_client.search = lambda index, body: {"aggregations": {"c0": {"doc_count": 3}, "c1": {"doc_count": 0}}}
+    service.ensure_column_emptiness(db, table)
+    assert [column["empty"] for column in table.columns] == [False, True]
+    fake_client.search = lambda index, body: pytest.fail("computed twice")
+    service.ensure_column_emptiness(db, table)
