@@ -599,6 +599,13 @@ def promote_evidence_upload(
             mark_operation_job_finished(db, promotion_job, status="failed", error=str(exc))
         logger.exception("Promoting upload session %s failed for case %s", session_id, case_id)
         raise HTTPException(status_code=500, detail=f"Could not start processing: {exc.__class__.__name__}") from exc
+    if payload.full_csv_tables:
+        from app.services.source_tables import schedule_source_tables
+
+        try:
+            schedule_source_tables(db, evidence, None)
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not request full CSV tables for evidence %s", evidence.id)
     return evidence
 
 

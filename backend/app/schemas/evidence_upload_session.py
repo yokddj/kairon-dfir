@@ -129,6 +129,9 @@ class PromoteUploadSessionRequest(BaseModel):
     host_id: str | None = None
     provided_host: str | None = None
     evtx_profile: str | None = None
+    # Also index every CSV/TSV of the evidence whole, in its own table index,
+    # once the ingest finishes (Source tables view).
+    full_csv_tables: bool = False
     memory_authorization_acknowledged: bool = False
     folder_name: str | None = None
     labels: list[str] = []

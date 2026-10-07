@@ -13,6 +13,7 @@ import {
   LogOut,
   Search,
   ShieldAlert,
+  Table2,
   UserCog,
   Waypoints,
 } from "lucide-react";
@@ -37,6 +38,13 @@ const INVESTIGATION_ITEMS: NavItem[] = [
   { to: "/cases/:caseId/host-information", label: "Host Information", icon: Fingerprint, requiresCase: true },
   { to: "/cases/:caseId/search", label: "Search", icon: Search, requiresCase: true },
   { to: "/cases/:caseId/artifacts", label: "Artifact Views", icon: FolderSearch2, requiresCase: true },
+  {
+    to: "/cases/:caseId/tables",
+    label: "Source Tables",
+    icon: Table2,
+    requiresCase: true,
+    description: "CSV files indexed whole, with all their columns, to sort and filter like Timeline Explorer.",
+  },
   {
     to: "/cases/:caseId/timeline",
     label: "Timeline",

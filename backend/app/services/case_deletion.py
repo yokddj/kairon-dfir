@@ -79,6 +79,7 @@ from app.models.rule_run import RuleRun
 from app.models.rule_set import RuleSet
 from app.models.tag import Tag
 from app.models.timeline_bookmark import TimelineBookmark
+from app.services.source_tables import delete_case_source_table_indices
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +265,10 @@ def delete_case(db: Session, case_id: str) -> CaseDeletionResult:
     result = CaseDeletionResult(case_id=case_id)
 
     result.index_deleted["events"] = delete_case_index(case_id)
+    try:
+        delete_case_source_table_indices(case_id)
+    except Exception as exc:  # noqa: BLE001
+        result.cleanup_errors.append(f"source table index cleanup failed: {exc}")
     try:
         result.index_deleted.update(delete_case_memory_indices(case_id))
     except Exception as exc:  # noqa: BLE001

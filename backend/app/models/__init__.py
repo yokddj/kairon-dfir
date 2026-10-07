@@ -36,6 +36,7 @@ from app.models.session import Session
 from app.models.rule_import_run import RuleImportRun
 from app.models.rule_set import RuleSet
 from app.models.rule_run import RuleRun
+from app.models.source_table import SourceTable
 from app.models.tag import Tag
 from app.models.timeline_bookmark import TimelineBookmark
 from app.models.user import User

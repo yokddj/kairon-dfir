@@ -58,6 +58,7 @@ from app.schemas.disk_image import DiskImageRead, InstallationSummary
 from app.schemas.evidence import ArtifactRead, EvidenceRead, EvidenceRunQueuedResponse, EvidenceRunRead
 from app.schemas.evidence import EvidenceBenchmarkQueuedResponse, EvidenceBenchmarkRead
 from app.schemas.rule import DetectionRead, RuleRunRead, RulesRunRequest
+from app.services.source_tables import delete_source_table_indices_for_evidence
 from app.services.evidence_runs import (
     get_evidence_run,
     list_evidence_runs,
@@ -4873,6 +4874,7 @@ def delete_evidence(evidence_id: str, db: Session = Depends(get_db)) -> None:
     if not item:
         raise HTTPException(status_code=404, detail="Evidence not found")
     delete_events_by_evidence(item.id, item.case_id)
+    delete_source_table_indices_for_evidence(db, item.id)
     safe_remove(evidence_manifest_path(item.case_id, item.id).parent)
     log_activity(
         db,
