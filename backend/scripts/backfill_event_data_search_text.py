@@ -1,7 +1,9 @@
 """Backfill: fold windows.event_data values into search_text for already
 indexed events.
 
-Mirrors _windows_event_data_search_values() in app/ingest/normalizer.py. New
+Mirrors app/ingest/normalization/event_data_search.py, plus EvtxECmd's own
+summary columns (MapDescription, UserName, RemoteHost, ExecutableInfo,
+PayloadData1-6) that app/ingest/eztools/evtxecmd.py now folds in. New
 ingests get this for free; this exists so existing cases do not stay
 unsearchable until someone re-ingests hundreds of gigabytes of evidence.
 
@@ -23,13 +25,22 @@ PLACEHOLDERS = ["-", "--", "0x0", "0", "n/a", "null", "none", "%%1833", "%%1843"
 SCRIPT = """
 def w = ctx._source.windows;
 if (w == null || !(w instanceof Map)) { ctx.op = 'noop'; return; }
+def candidates = new ArrayList();
+def raw = ctx._source.raw;
+if (raw != null && raw instanceof Map) {
+  for (entry in raw.entrySet()) {
+    def k = entry.getKey().toString().toLowerCase();
+    if (params.summary_columns.contains(k) || k.startsWith('payloaddata')) { candidates.add(entry); }
+  }
+}
 def ed = w.event_data;
-if (ed == null || !(ed instanceof Map)) { ctx.op = 'noop'; return; }
+if (ed != null && ed instanceof Map) { candidates.addAll(ed.entrySet()); }
+if (candidates.size() == 0) { ctx.op = 'noop'; return; }
 def existing = ctx._source.search_text;
 if (existing == null) { existing = ''; }
 def added = new ArrayList();
 def seen = new HashSet();
-for (entry in ed.entrySet()) {
+for (entry in candidates) {
   if (added.size() >= params.max_values) { break; }
   def k = entry.getKey().toString().toLowerCase();
   if (params.skip_keys.contains(k)) { continue; }
@@ -62,6 +73,7 @@ body = {
             "placeholders": PLACEHOLDERS,
             "max_chars": 512,
             "max_values": 60,
+            "summary_columns": ["mapdescription", "username", "remotehost", "executableinfo"],
         },
     },
 }
