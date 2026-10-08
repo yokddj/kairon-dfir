@@ -23,6 +23,7 @@ import csv
 import ctypes
 import io
 import json
+import os
 import sys
 import time
 
@@ -32,6 +33,11 @@ EXIT_FORENSIC_UNAVAILABLE = 5
 EXIT_FINDEVIL_MISSING = 6
 
 _STATUS_SUCCESS = 0
+# The forensic scan reports progress in steps (10-59 % while scanning memory, then 60, 70, 90,
+# 95, 100). Past the memory scan it can wait forever on one of its own workers -- seen on a
+# Windows 11 24H2 crash dump that stays at 90 % -- so a long time without progress there means
+# it will not finish.
+_DEFAULT_STALL_SECONDS = 600
 _READ_CHUNK = 1024 * 1024
 _MAX_CSV_BYTES = 64 * 1024 * 1024
 
@@ -87,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--library", required=True)
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--scan-timeout", type=int, default=1500)
+    parser.add_argument("--stall-timeout", type=int, default=_DEFAULT_STALL_SECONDS)
     args = parser.parse_args(argv)
 
     try:
@@ -106,18 +113,30 @@ def main(argv: list[str] | None = None) -> int:
             return EXIT_FORENSIC_UNAVAILABLE
         deadline = time.monotonic() + max(1, args.scan_timeout)
         progress = ""
+        changed_at = time.monotonic()
+        stalled = False
         while time.monotonic() < deadline:
             raw = _read(lib, handle, "\\forensic\\progress_percent.txt", limit=64)
             if raw is None:
                 print("MemProcFS forensic mode is not available for this image.", file=sys.stderr)
                 return EXIT_FORENSIC_UNAVAILABLE
-            progress = raw.decode("utf-8", "replace").strip()
+            current = raw.decode("utf-8", "replace").strip()
+            if current != progress:
+                progress, changed_at = current, time.monotonic()
             if progress.startswith("100"):
+                break
+            if time.monotonic() - changed_at > max(30, args.stall_timeout):
+                stalled = True
                 break
             time.sleep(2)
         else:
-            print(f"MemProcFS forensic scan did not finish (at {progress or '?'}%).", file=sys.stderr)
-            return EXIT_FORENSIC_UNAVAILABLE
+            stalled = True
+        if stalled:
+            print(f"MemProcFS's forensic scan stopped making progress at {progress or '?'}% and cannot finish on this image, so it produced no FindEvil result. Kairon's own Find Evil checks still ran.", file=sys.stderr)
+            sys.stderr.flush()
+            # Closing MemProcFS waits for the stuck scan's workers and never returns; leave
+            # without it (the process exits, which releases everything).
+            os._exit(EXIT_FORENSIC_UNAVAILABLE)
         data = _read(lib, handle, "\\forensic\\csv\\findevil.csv", limit=_MAX_CSV_BYTES)
         if data is None:
             print("MemProcFS produced no FindEvil result for this image (FindEvil needs 64-bit Windows 10 or later).", file=sys.stderr)

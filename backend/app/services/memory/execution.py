@@ -5,6 +5,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import func
@@ -51,6 +52,7 @@ from app.services.memory.process_entities import renormalize_documents
 from app.services.memory.storage import memory_run_dir, relative_to_data_dir, write_atomic_bytes, write_atomic_json
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
 from app.services.memory.volatility_runner import VolatilityRunnerError, probe_windows_symbol_identity, run_plugin
+from app.services.memory.kairon_findevil import KAIRON_FINDEVIL_PLUGIN, run_kairon_findevil
 from app.services.memory.memprocfs_runner import MEMPROCFS_PLUGINS, run_findevil
 from app.services.memory import volatility_runner
 from app.services.memory.symbol_control import record_symbol_requirement
@@ -99,7 +101,9 @@ ARTIFACT_PLUGIN_NORMALIZER = {
     "linux.bash": "memory_shell_history",
     "linux.sockstat": "memory_network_connection",
     "windows.consoles": "memory_shell_history",
+    "windows.cmdscan": "memory_shell_history",
     "windows.filescan": "memory_file_object",
+    "kairon.findevil": "memory_findevil",
     "memprocfs.findevil": "memory_findevil",
 }
 ARTIFACT_PLUGIN_LIMITS = {
@@ -135,6 +139,10 @@ ARTIFACT_PLUGIN_LIMITS = {
     # bounded the same as linux.bash, the other full-process-memory
     # history scan.
     "windows.consoles": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    # windows.cmdscan finds conhost's command-history lists by scanning its memory instead of
+    # following _CONSOLE_INFORMATION, so it still works on builds windows.consoles does not know
+    # (seconds on a 4 GB image).
+    "windows.cmdscan": {"timeout_seconds": 900, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     # windows.filescan walks pool allocations image-wide; benchmarked well
     # under 240s on a real 4GB image (13,191 file objects recovered) --
     # matches FILESCAN_TIMEOUT_SECONDS already used by the separate
@@ -145,6 +153,9 @@ ARTIFACT_PLUGIN_LIMITS = {
     # MemProcFS forensic scan + FindEvil: about one minute on a real 4 GB Windows 11 image
     # (338 indicators); the bound leaves room for larger images.
     "memprocfs.findevil": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    # Kairon's checks run pslist, psscan, cmdline, malfind and ldrmodules (a few minutes on a
+    # 4 GB image); each source plugin keeps its own bound inside this one.
+    "kairon.findevil": {"timeout_seconds": 2400, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
 }
 
 # Each existing profile name already encodes one capability's intent.
@@ -178,7 +189,8 @@ PROFILE_CAPABILITY = {
     # (file_extraction.py's dumpfiles-based recovery is Windows-only and
     # windows.filescan has no analogous Linux plugin in this registry).
     "files_basic": MemoryCapability.FILES,
-    # Capability-registry-only like the two above: Windows resolves to memprocfs.findevil.
+    # Capability-registry-only like the two above: Windows resolves to kairon.findevil and
+    # memprocfs.findevil.
     "find_evil": MemoryCapability.FIND_EVIL,
 }
 
@@ -461,6 +473,34 @@ def mark_run_queued(db: Session, run_id: str, worker_task_id: str | None) -> Mem
     return run
 
 
+def fail_orphaned_memory_runs(current_run_id: str, job_is_alive: Callable[[str], bool]) -> int:
+    """Close runs left "running" by a worker that died (killed after a hang, out of memory,
+    restarted): nothing else ever finishes them, and the UI would wait on them forever."""
+    closed = 0
+    with SessionLocal() as db:
+        runs = db.query(MemoryScanRun).filter(MemoryScanRun.status == "running", MemoryScanRun.id != current_run_id).all()
+        for run in runs:
+            if not run.worker_task_id or job_is_alive(run.worker_task_id):
+                continue
+            plugin = ((run.metadata_json or {}).get("progress") or {}).get("current_plugin")
+            message = "The memory worker stopped while this analysis was running" + (f" ({plugin})" if plugin else "") + ", so it never finished. Run it again."
+            now = utc_now_naive()
+            run.status = "failed"
+            run.completed_at = now
+            run.error_log = {"code": "WORKER_LOST", "message": message}
+            for plugin_run in run.plugin_runs:
+                if plugin_run.status in ("running", "queued", "pending"):
+                    plugin_run.status = "failed"
+                    plugin_run.completed_at = now
+                    plugin_run.error_code = "WORKER_LOST"
+                    plugin_run.error_message = message
+            closed += 1
+        if closed:
+            db.commit()
+            logger.warning("memory runs left running by a lost worker were closed", extra={"count": closed})
+    return closed
+
+
 def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
     with SessionLocal() as db:
         run = db.get(MemoryScanRun, memory_scan_run_id)
@@ -728,6 +768,7 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                         {"profile": run.profile, "sources": sorted({doc.get("plugin_name") for doc in process_observation_docs})},
                     )
                 if artifact_results:
+                    _drop_repeated_console_commands(artifact_results)
                     artifact_indexing = _index_artifact_results(run.case_id, artifact_results, db, run)
                     indexing["artifacts"] = artifact_indexing
                 _recount_plugin_states(run)
@@ -876,11 +917,11 @@ def _normalize_artifact_payload(
         return normalize_linux_bash(payload, source_plugin=plugin, **common)
     if plugin == "linux.sockstat":
         return normalize_linux_sockstat(payload, source_plugin=plugin, **common)
-    if plugin == "windows.consoles":
+    if plugin in ("windows.consoles", "windows.cmdscan"):
         return normalize_windows_consoles(payload, source_plugin=plugin, **common)
     if plugin == "windows.filescan":
         return normalize_windows_filescan(payload, source_plugin=plugin, **common)
-    if plugin == "memprocfs.findevil":
+    if plugin in ("memprocfs.findevil", KAIRON_FINDEVIL_PLUGIN):
         return normalize_memprocfs_findevil(payload, source_plugin=plugin, **common)
     return {
         "items": [],
@@ -955,6 +996,31 @@ def _resolve_raw_output_path(relative_path: str | None) -> Path | None:
         if candidate.is_file():
             return candidate
     return candidates[0] if candidates else None
+
+
+def _drop_repeated_console_commands(artifact_results: dict[str, dict[str, Any]]) -> None:
+    """windows.consoles and windows.cmdscan read the same conhost history lists; when both
+    recovered a command, keep windows.consoles' copy (it also carries the screen text)."""
+    consoles = artifact_results.get("windows.consoles")
+    cmdscan = artifact_results.get("windows.cmdscan")
+    if not consoles or not cmdscan:
+        return
+    seen: dict[tuple[Any, str], int] = {}
+    for item in consoles.get("items") or []:
+        key = (item.get("pid"), str(item.get("command") or ""))
+        seen[key] = seen.get(key, 0) + 1
+    kept = []
+    for item in cmdscan.get("items") or []:
+        key = (item.get("pid"), str(item.get("command") or ""))
+        if seen.get(key):
+            seen[key] -= 1
+            continue
+        kept.append(item)
+    removed = len(cmdscan.get("items") or []) - len(kept)
+    if removed:
+        cmdscan["items"] = kept
+        cmdscan["accepted_count"] = max(0, int(cmdscan.get("accepted_count") or 0) - removed)
+        cmdscan.setdefault("warnings", []).append(f"cmdscan_duplicates_of_consoles:{removed}")
 
 
 def _index_artifact_results(
@@ -1057,6 +1123,15 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
             output_dir,
             timeout_seconds=timeout_seconds,
             max_output_bytes=max_output_bytes,
+            cancellation_check=cancellation_requested,
+        )
+    elif plugin == KAIRON_FINDEVIL_PLUGIN:
+        result = run_kairon_findevil(
+            evidence_path,
+            output_dir,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+            plugin_timeout=plugin_execution_timeout_seconds,
             cancellation_check=cancellation_requested,
         )
     else:

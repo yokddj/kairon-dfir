@@ -1312,7 +1312,8 @@ def normalize_linux_bash(
 # ---------------------------------------------------------------------------
 
 _CONSOLE_COMMAND_PROPERTY = re.compile(r"_Command_\d+$")
-_CONSOLE_APPLICATION_PROPERTY = re.compile(r"_Application$")
+# "..._CommandHistory_N_Application" (windows.consoles) or "_COMMAND_HISTORY.Application" (windows.cmdscan).
+_CONSOLE_APPLICATION_PROPERTY = re.compile(r"[._]Application$")
 # The console's visible text ("..._ScreenBuffer_N.Dump", one line per screen row) and its width
 # ("..._ScreenBuffer_N.ScreenX"). PowerShell keeps its own history (PSReadLine), so conhost's
 # CommandHistory lists stay empty for PowerShell windows; the commands are still on screen after
@@ -1626,6 +1627,14 @@ FINDEVIL_TYPES: dict[str, tuple[str, str, str]] = {
     "NOIMAGE_RX": ("medium", "memory", "Executable memory not backed by a file."),
     "PRIVATE_RWX": ("low", "memory", "Private memory that is writable and executable: injected code, but also normal for browsers and JIT runtimes."),
     "PRIVATE_RX": ("low", "memory", "Executable private memory: common for JIT runtimes."),
+    # Kairon's own checks (app.services.memory.kairon_findevil).
+    "PROC_DUPLICATE": ("high", "process", "More than one instance of a process Windows runs only once."),
+    "PROC_NAME": ("high", "process", "Process name one character away from a Windows system binary: typical masquerading."),
+    "PROC_PATH": ("high", "process", "Windows system binary running from outside System32: possible masquerading."),
+    "PROC_SPAWN": ("high", "process", "Command interpreter or script host started by an Office application, browser or server process."),
+    "CMDLINE": ("high", "command", "Command line with a pattern attackers often use (encoded PowerShell, download cradles, LOLBins, backup deletion, credential dumping, discovery)."),
+    "PROC_LOCATION": ("medium", "process", "Program running from a temporary or user-writable folder."),
+    "PROC_TERMINATED": ("low", "process", "Process that had already exited when memory was captured, still found by scanning memory: shows what ran recently."),
     "PE_PATCHED": ("low", "module", "Executable page of a module differs from the file on disk: hooking or patching, also done by Windows and JIT runtimes."),
 }
 FINDEVIL_PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
@@ -1668,6 +1677,10 @@ def normalize_memprocfs_findevil(
         address = _str_or_none(_lookup(row, "Address", "address"), 32)
         description = _scrub_paths(_str_or_none(_lookup(row, "Description", "description"), MAX_OBJECT_NAME_LENGTH) or "") or None
         priority, category, explanation = _findevil_type_info(indicator_type)
+        # Kairon's checks grade some indicators per row (a hit in a JIT host is low, elsewhere medium).
+        override = str(_lookup(row, "Priority", "priority") or "").strip().lower()
+        if override in FINDEVIL_PRIORITY_ORDER:
+            priority = override
         identity = _identity_pid_offset(pid, indicator_type, address, description, index)
         items.append({
             "document_id": _document_id(prefix="memory_findevil", case_id=case_id, run_id=scan_run_id, identity=identity),

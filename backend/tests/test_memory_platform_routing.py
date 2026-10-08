@@ -92,7 +92,7 @@ def test_windows_evidence_never_selects_linux_plugins(tmp_path: Path) -> None:
     assert plan.selected_plugins, "expected at least one selected Windows plugin"
     assert all(not plugin.startswith("linux.") for plugin in plan.selected_plugins)
     # Windows-only producers: Volatility's windows.* plugins and MemProcFS (FindEvil).
-    assert all(plugin.startswith(("windows.", "memprocfs.")) for plugin in plan.selected_plugins)
+    assert all(plugin.startswith(("windows.", "memprocfs.", "kairon.")) for plugin in plan.selected_plugins)
 
 
 def test_windows_plan_never_calls_linux_symbol_resolver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -109,7 +109,7 @@ def test_windows_plan_never_calls_linux_symbol_resolver(tmp_path: Path, monkeypa
 
     assert plan.detected_platform == PlatformFamily.WINDOWS
     # Windows-only producers: Volatility's windows.* plugins and MemProcFS (FindEvil).
-    assert all(plugin.startswith(("windows.", "memprocfs.")) for plugin in plan.selected_plugins)
+    assert all(plugin.startswith(("windows.", "memprocfs.", "kairon.")) for plugin in plan.selected_plugins)
 
 
 def test_unknown_platform_selects_no_plugins_and_never_defaults_to_windows(tmp_path: Path) -> None:
@@ -374,9 +374,9 @@ def test_process_source_plugin_filters_include_linux_process_producers() -> None
 def test_registry_never_binds_a_windows_plugin_name_to_linux_or_vice_versa() -> None:
     for spec in MEMORY_CAPABILITY_REGISTRY:
         if spec.platform == PlatformFamily.WINDOWS:
-            assert spec.plugin.startswith(("windows.", "memprocfs.")), spec.plugin
+            assert spec.plugin.startswith(("windows.", "memprocfs.", "kairon.")), spec.plugin
         elif spec.platform == PlatformFamily.LINUX:
-            assert not spec.plugin.startswith(("windows.", "memprocfs.")), spec.plugin
+            assert not spec.plugin.startswith(("windows.", "memprocfs.", "kairon.")), spec.plugin
 
 
 def test_resolved_plugins_for_capability_reproduces_legacy_profile_plugins_exactly() -> None:
@@ -399,13 +399,13 @@ def test_resolved_plugins_for_capability_reproduces_legacy_profile_plugins_exact
         assert resolved == PROFILE_PLUGINS[profile], profile
 
 
-def test_shell_history_basic_windows_producer_is_windows_consoles() -> None:
+def test_shell_history_basic_windows_producers_are_consoles_and_cmdscan() -> None:
     """windows.info is prepended: SHELL_HISTORY depends_on IDENTIFICATION,
     the same dependency-expansion PROCESSES already uses so windows.info
     (which warms the symbol/ISF cache) always runs first."""
     from app.services.memory.capability_registry import MemoryCapability
 
-    assert resolved_plugins_for_capability(PlatformFamily.WINDOWS, MemoryCapability.SHELL_HISTORY) == ["windows.info", "windows.consoles"]
+    assert resolved_plugins_for_capability(PlatformFamily.WINDOWS, MemoryCapability.SHELL_HISTORY) == ["windows.info", "windows.consoles", "windows.cmdscan"]
 
 
 # ---------------------------------------------------------------------------

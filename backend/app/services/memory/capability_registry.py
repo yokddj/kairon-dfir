@@ -120,6 +120,10 @@ _WINDOWS: tuple[CapabilityPluginSpec, ...] = (
     # linux.bash below -- both feed the same platform-agnostic
     # memory_shell_history document type.
     CapabilityPluginSpec(MemoryCapability.SHELL_HISTORY, PlatformFamily.WINDOWS, FRAMEWORK_VOLATILITY3, "windows.consoles", depends_on=(MemoryCapability.IDENTIFICATION,), presentation_family="memory_shell_history"),
+    # windows.cmdscan finds the same command-history lists by scanning conhost's memory for them,
+    # so it still recovers commands on Windows builds windows.consoles has no layout for (it only
+    # reports "Console Information Not Found" on Windows 11 24H2).
+    CapabilityPluginSpec(MemoryCapability.SHELL_HISTORY, PlatformFamily.WINDOWS, FRAMEWORK_VOLATILITY3, "windows.cmdscan", depends_on=(MemoryCapability.IDENTIFICATION,), presentation_family="memory_shell_history"),
     # windows.filescan walks pool allocations for _FILE_OBJECT structures
     # image-wide -- every file Windows currently has any object reference
     # to (open handle, cached section, mapped image), not just ones an
@@ -133,6 +137,11 @@ _WINDOWS: tuple[CapabilityPluginSpec, ...] = (
     # injected or spoofed modules, unusual memory and Defender detections still in memory. It
     # runs without the Microsoft symbol server (MemProcFS's info.db carries what it needs), so
     # it neither needs nor waits for Kairon's symbol preparation.
+    # Kairon's own checks (app.services.memory.kairon_findevil) from standard Volatility plugins:
+    # hidden processes, unexpected parents, masquerading names and paths, suspicious command
+    # lines, injected code and unlinked modules. They run first and work wherever Volatility
+    # does, so Find Evil has results even when MemProcFS cannot finish its scan.
+    CapabilityPluginSpec(MemoryCapability.FIND_EVIL, PlatformFamily.WINDOWS, FRAMEWORK_VOLATILITY3, "kairon.findevil", depends_on=(MemoryCapability.IDENTIFICATION,), presentation_family="memory_findevil"),
     CapabilityPluginSpec(MemoryCapability.FIND_EVIL, PlatformFamily.WINDOWS, FRAMEWORK_MEMPROCFS, "memprocfs.findevil", depends_on=(MemoryCapability.IDENTIFICATION,), requires_symbols=False, presentation_family="memory_findevil"),
 )
 
