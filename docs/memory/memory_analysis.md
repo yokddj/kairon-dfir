@@ -98,15 +98,22 @@ Supported profiles:
 - `handles_basic`: `windows.handles`
 - `kernel_basic`: `windows.modules`, `windows.driverscan`
 - `suspicious_memory`: `windows.malfind`, `windows.vadinfo`
-- `shell_history_basic`: `windows.consoles` on Windows, `linux.bash` on Linux
+- `shell_history_basic`: `windows.consoles` and `windows.cmdscan` on Windows, `linux.bash` on Linux
 - `files_basic`: `windows.filescan`
-- `find_evil`: MemProcFS FindEvil (Windows)
+- `find_evil`: Kairon's checks (`windows.pslist`, `windows.psscan`, `windows.cmdline`, `windows.malfind`, `windows.ldrmodules`) and MemProcFS FindEvil (Windows)
 
 **Run all** runs every profile above except `files_basic`, in this order: metadata, processes, extended processes, shell history, Find Evil, network, modules, handles, kernel, suspicious memory.
 
 ### Find Evil
 
-The **Find Evil** tab lists the indicators MemProcFS's FindEvil reports after its forensic scan of the image: processes missing from the kernel's process list or masquerading, processes with the debug privilege or an unexpected account, injected, unlinked or patched modules, executable memory not backed by a file, high-entropy regions, unusual threads, drivers loaded from odd paths, and Windows Defender detections still in memory.
+The **Find Evil** tab lists indicators from two sources; the **Source** column says which.
+
+- **Kairon**: checks over standard Volatility output, so they work on any image Volatility can read. They encode how Windows normally looks, nothing specific to a case:
+  - processes found by scanning memory (`psscan`) but missing from the kernel's list while still having threads and no exit time (`PROC_NOLINK`: hidden), and processes that had already exited (`PROC_TERMINATED`, low);
+  - Windows system processes with an unexpected parent (`PROC_PARENT`; a parent PID reused by a later process is ignored), more than one instance of a process Windows runs once (`PROC_DUPLICATE`), names one typo away from a system binary (`PROC_NAME`), system binaries outside System32 (`PROC_PATH`), programs run from temporary or user-writable folders (`PROC_LOCATION`);
+  - command interpreters started by an Office application, browser or server (`PROC_SPAWN`), and command lines with attacker patterns (`CMDLINE`: encoded PowerShell, download cradles, LOLBins, backup deletion, credential dumping; discovery commands are low);
+  - a PE header in executable private memory (`PE_INJECT`), other executable private memory (`PRIVATE_RWX`, low in browsers, JIT runtimes and the antivirus), and modules outside the Windows and Program Files folders missing from the loader lists (`PE_NOLINK`).
+- **MemProcFS**: the indicators MemProcFS's FindEvil reports after its forensic scan: processes missing from the kernel's process list or masquerading, processes with the debug privilege or an unexpected account, injected, unlinked or patched modules, executable memory not backed by a file, high-entropy regions, unusual threads, drivers loaded from odd paths, and Windows Defender detections still in memory.
 
 Each indicator has a **review priority** and a one-line explanation:
 
@@ -116,16 +123,27 @@ Each indicator has a **review priority** and a one-line explanation:
 
 The list is sorted by priority and can be filtered by priority, type and PID. Like the suspicious-memory profile, these are leads for review, not verdicts: Kairon does not mark anything as malware or create findings from them.
 
-How it runs: MemProcFS's library is loaded in a separate process with the same containment as Volatility (own session, timeout, cancellation, output cap), with the Microsoft symbol server disabled, so it works offline. It needs 64-bit Windows 10 or later; on other images the profile is reported as unsupported for that build. On a 4 GB Windows 11 image it takes about a minute.
+How it runs: Kairon's checks run first (a few minutes on a 4 GB image); a source plugin that fails only removes its own checks. MemProcFS's library is then loaded in a separate process with the same containment as Volatility (own session, timeout, cancellation, output cap), with the Microsoft symbol server disabled, so it works offline. It needs 64-bit Windows 10 or later; on other images it is reported as unsupported for that build. On a 4 GB Windows 11 image it takes about a minute. On some images its forensic scan never finishes (a Windows 11 24H2 crash dump stays at 90 %): after 10 minutes without progress it is stopped, reported as failed with that reason, and the tab shows Kairon's indicators with a note that part of Find Evil did not finish.
+
+If the memory worker dies while an analysis runs (killed, restarted, out of memory), the next analysis it starts closes that run as failed (`WORKER_LOST`) instead of leaving it running forever.
 
 ### Shell history on Windows
+
+The **Shell History** tab has two lists:
+
+- **Typed in shells**: commands typed in console windows, below.
+- **Commands executed**: the command line of every process found in memory, in the order they started, with its parent and whether it was running, had exited or was missing from the process list. It covers everything that ran, typed or not (scripts, scheduled tasks, services, programs starting programs), and comes from the Processes analysis.
 
 `windows.consoles` reads the console windows (`conhost.exe`) in memory. Commands are recovered from two places, and each row says which (**Source**):
 
 - **Console history**: the command history conhost keeps per window. `cmd.exe` uses it; PowerShell does not (it keeps its own, PSReadLine, outside the console), so for PowerShell windows this list is empty.
 - **Console screen**: the text still on the window's screen. Every line that starts with a prompt (`PS C:\Users\x> command` or `C:\Users\x>command`) gives a command and the directory it ran in (**Directory**); a command that wraps across rows is joined. Only what was still in the window's screen buffer (a few thousand rows; older lines are overwritten) can be recovered, and commands also in the console history are listed once.
 
+`windows.cmdscan` finds the same command-history lists by scanning conhost's memory for them instead of following its console structures, so it still recovers typed commands on builds `windows.consoles` has no layout for (on Windows 11 24H2 `windows.consoles` only reports "Console Information Not Found"). A command both plugins recover is listed once.
+
 There is no time for these commands. On Windows builds that Volatility's console support does not cover (for example Windows 10 1803, build 17134), the plugin is reported as unsupported for that build, not as a failed run.
+
+Every command in the case, from disk and memory, is also in **Command History**, in the sidebar.
 
 Process profiles are disabled by default with `MEMORY_PROCESS_PROFILE_ENABLED=false`.
 
@@ -178,7 +196,7 @@ Configuration:
 - `MEMORY_PLUGIN_TIMEOUT_SECONDS=600`
 - `MEMORY_PLUGIN_OUTPUT_MAX_BYTES=10485760`
 - `MEMORY_WORKER_CONCURRENCY=1`
-- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.filescan,memprocfs.findevil,linux.pslist,linux.pstree,linux.sockstat,linux.bash`
+- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.cmdscan,windows.filescan,kairon.findevil,memprocfs.findevil,linux.pslist,linux.pstree,linux.sockstat,linux.bash`
 - `MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,shell_history_basic,files_basic,find_evil`
 - `MEMORY_DEFAULT_PROFILE=metadata_only`
 - `MEMORY_PROCESS_PROFILE_ENABLED=false`

@@ -13,6 +13,7 @@ import {
   LogOut,
   Search,
   ShieldAlert,
+  SquareTerminal,
   Table2,
   UserCog,
   Waypoints,
@@ -38,6 +39,13 @@ const INVESTIGATION_ITEMS: NavItem[] = [
   { to: "/cases/:caseId/host-information", label: "Host Information", icon: Fingerprint, requiresCase: true },
   { to: "/cases/:caseId/search", label: "Search", icon: Search, requiresCase: true },
   { to: "/cases/:caseId/artifacts", label: "Artifact Views", icon: FolderSearch2, requiresCase: true },
+  {
+    to: "/cases/:caseId/command-history",
+    label: "Command History",
+    icon: SquareTerminal,
+    requiresCase: true,
+    description: "Every command found in the case, from disk and memory: process creation and PowerShell events, shell history files, console history and process command lines recovered from memory.",
+  },
   {
     to: "/cases/:caseId/tables",
     label: "Source Tables",

@@ -256,7 +256,7 @@ MEMORY_WORKER_MODE=dedicated_worker
 MEMORY_EVIDENCE_SHARED_GID=${memory_shared_gid}
 MEMORY_PROCESS_PROFILE_ENABLED=${ENABLE_MEMORY}
 MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,shell_history_basic,files_basic,find_evil
-MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.filescan,memprocfs.findevil,linux.pslist,linux.pstree,linux.sockstat,linux.bash
+MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.cmdscan,windows.filescan,kairon.findevil,memprocfs.findevil,linux.pslist,linux.pstree,linux.sockstat,linux.bash
 
 # ---- Advanced overrides (see config/defaults.env for all defaults) ----
 # POSTGRES_HOST=postgres
@@ -540,21 +540,22 @@ migrate_memory_allowlists() {
   local old_profiles="metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,shell_history_basic,files_basic"
   local new_profiles="metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,shell_history_basic,files_basic,find_evil"
   local old_plugins="windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.filescan,linux.pslist,linux.pstree,linux.sockstat,linux.bash"
-  local new_plugins="windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.filescan,memprocfs.findevil,linux.pslist,linux.pstree,linux.sockstat,linux.bash"
+  local previous_plugins="windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.filescan,memprocfs.findevil,linux.pslist,linux.pstree,linux.sockstat,linux.bash"
+  local new_plugins="windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.cmdscan,windows.filescan,kairon.findevil,memprocfs.findevil,linux.pslist,linux.pstree,linux.sockstat,linux.bash"
   local changed=false
   local tmp
   tmp="$(mktemp)"
   while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$line" == "MEMORY_ALLOWED_PROFILES=$old_profiles" ]]; then
       line="MEMORY_ALLOWED_PROFILES=$new_profiles"; changed=true
-    elif [[ "$line" == "MEMORY_ALLOWED_PLUGINS=$old_plugins" ]]; then
+    elif [[ "$line" == "MEMORY_ALLOWED_PLUGINS=$old_plugins" || "$line" == "MEMORY_ALLOWED_PLUGINS=$previous_plugins" ]]; then
       line="MEMORY_ALLOWED_PLUGINS=$new_plugins"; changed=true
     fi
     printf '%s\n' "$line"
   done < "$env_file" > "$tmp"
   if [[ "$changed" == true ]]; then
     cat "$tmp" > "$env_file"
-    echo "Memory analysis: enabled the new Find Evil profile in .env."
+    echo "Memory analysis: enabled the new memory analyses in .env."
   fi
   rm -f "$tmp"
 }

@@ -21,6 +21,13 @@ type FindEvilRow = {
   explanation?: string | null;
   address?: string | null;
   description?: string | null;
+  source_plugin?: string | null;
+};
+
+// Who reported the indicator: Kairon's own checks over Volatility's output, or MemProcFS FindEvil.
+const SOURCE_LABEL: Record<string, string> = {
+  "kairon.findevil": "Kairon",
+  "memprocfs.findevil": "MemProcFS",
 };
 
 const PRIORITIES = [
@@ -99,10 +106,11 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
           <div className="max-w-3xl">
             <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Find Evil</h3>
             <p className="mt-1 text-xs leading-5 text-muted">
-              Indicators to review, from MemProcFS FindEvil: processes hidden from the process list or masquerading, injected or
-              patched modules, executable memory not backed by a file, unusual threads, and Defender detections still in memory.
-              They are leads, not verdicts: browsers and JIT runtimes produce many low-priority ones on a clean system. The list
-              is sorted with the indicators most worth a look first.
+              Indicators to review from two sources. Kairon's checks over Volatility's output: processes hidden from the process
+              list, with an unexpected parent or masquerading as a system binary, programs run from temporary folders, suspicious
+              command lines, injected code and unlinked modules. MemProcFS FindEvil, when its scan finishes: patched modules,
+              unusual threads and Defender detections still in memory. They are leads, not verdicts: browsers and JIT runtimes
+              produce many low-priority ones on a clean system. The list is sorted with the indicators most worth a look first.
             </p>
           </div>
           <RunPicker runOptions={runOptions} selectedRunId={selectedRunId} onSelectRunId={(next) => { onSelectRunId(next); setPage(1); }} />
@@ -168,6 +176,11 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
           </p>
         ) : null}
 
+        {!activeResultQuery.isLoading && !activeResultQuery.error && state === "partial" ? (
+          <p className="mt-3 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100" data-testid="findevil-partial">
+            Part of Find Evil did not finish (the Runs tab says which and why); the indicators below are the ones that did.
+          </p>
+        ) : null}
         {!activeResultQuery.isLoading && !activeResultQuery.error && (state === "analyzed_with_results" || state === "partial") ? (
           <>
             <p className="mt-3 text-xs text-muted" data-testid="findevil-summary">
@@ -183,6 +196,7 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
                     <th className="px-2 py-1">Process</th>
                     <th className="px-2 py-1">Details</th>
                     <th className="px-2 py-1">What it means</th>
+                    <th className="px-2 py-1">Source</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
@@ -204,6 +218,7 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
                         <span className="break-all">{row.description || (row.address && row.address !== "0x0" ? row.address : "—")}</span>
                       </td>
                       <td className="max-w-[360px] px-2 py-1 text-muted">{reported(row.explanation)}</td>
+                      <td className="px-2 py-1 text-muted" data-testid="findevil-source">{SOURCE_LABEL[String(row.source_plugin)] ?? reported(row.source_plugin)}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -128,6 +128,7 @@ ALLOWED_VOLATILITY_PLUGINS = {
     "windows.filescan",
     "windows.dumpfiles",
     "windows.consoles",
+    "windows.cmdscan",
     "linux.pslist",
     "linux.pstree",
     "linux.sockstat",

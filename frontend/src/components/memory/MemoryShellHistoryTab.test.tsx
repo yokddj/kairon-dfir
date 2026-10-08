@@ -6,12 +6,18 @@ import type { MemoryActiveResult } from "../../api/client";
 import { MemoryShellHistoryTab } from "./MemoryShellHistoryTab";
 
 const getMemoryActiveResultMock = vi.fn();
+const getCommandLineHistoryMock = vi.fn();
 
 vi.mock("../../api/client", () => ({
   api: {
     getMemoryActiveResult: (...args: unknown[]) => getMemoryActiveResultMock(...args),
+    getCommandLineHistory: (...args: unknown[]) => getCommandLineHistoryMock(...args),
   },
 }));
+
+function commandLines(items: Array<Record<string, unknown>>, selectedRun: { id: string; profile: string; status: string } | null = { id: "run-p", profile: "processes_basic", status: "completed" }) {
+  return { items, total: items.length, page: 1, page_size: 50, sort_order: "oldest_first", selected_run: selectedRun, contributing_runs: [], coverage: { entities_with_command_lines: items.length, total_entities: items.length, unknown_timestamps: 0 } };
+}
 
 const CASE = "case-1";
 const EVIDENCE = "ev-1";
@@ -48,6 +54,30 @@ function renderTab() {
 describe("MemoryShellHistoryTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getCommandLineHistoryMock.mockResolvedValue(commandLines([], null));
+  });
+
+  it("lists the command line of every process as commands executed", async () => {
+    getMemoryActiveResultMock.mockResolvedValue(activeResult({ analysis_state: "analyzed_empty", selection_reason: "latest_completed" }));
+    getCommandLineHistoryMock.mockResolvedValue(
+      commandLines([
+        { process_entity_id: "p1", pid: 2164, ppid: 4744, process_name: "DumpIt.exe", command_line: "\"C:\\Users\\bob\\Desktop\\DumpIt.exe\"", create_time: "2025-03-07T19:41:23+00:00", exit_time: null, timestamp_source: "process_creation_time", visibility: { listed: true }, source_plugins: [], source_observations: [], parent_entity_id: null, findings: [], record_refs: [] },
+        { process_entity_id: "p2", pid: 6372, ppid: 1376, process_name: "taskhostw.exe", command_line: "taskhostw.exe", create_time: "2025-03-07T19:39:44+00:00", exit_time: "2025-03-07T19:39:44+00:00", timestamp_source: "process_creation_time", visibility: { scan_only: true, terminated: true }, source_plugins: [], source_observations: [], parent_entity_id: null, findings: [], record_refs: [] },
+      ]),
+    );
+    renderTab();
+    const rows = await screen.findAllByTestId("shell-history-launched-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("DumpIt.exe");
+    expect(rows[0]).toHaveTextContent("2025-03-07 19:41:23");
+    expect(rows[1]).toHaveTextContent("Exited");
+    expect(getCommandLineHistoryMock).toHaveBeenCalledWith(CASE, expect.objectContaining({ evidence_id: EVIDENCE, sort_order: "oldest_first" }));
+  });
+
+  it("asks for the Processes analysis when no process run exists", async () => {
+    getMemoryActiveResultMock.mockResolvedValue(activeResult({ analysis_state: "not_analyzed" }));
+    renderTab();
+    expect(await screen.findByTestId("shell-history-launched-not-analyzed")).toHaveTextContent("Run the Processes analysis");
   });
 
   it("shows the never-analyzed empty state", async () => {
@@ -64,7 +94,7 @@ describe("MemoryShellHistoryTab", () => {
       }),
     );
     renderTab();
-    expect(await screen.findByTestId("shell-history-empty-zero-results")).toHaveTextContent("No shell history was recovered from this memory image.");
+    expect(await screen.findByTestId("shell-history-empty-zero-results")).toHaveTextContent("No typed command was recovered from this memory image");
     expect(screen.queryByTestId("shell-history-empty-not-analyzed")).not.toBeInTheDocument();
   });
 

@@ -1005,9 +1005,26 @@ def run_memory_preparation(evidence_id: str) -> None:
     execute_memory_preparation(evidence_id)
 
 
-def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
-    from app.services.memory.execution import run_memory_metadata_scan as execute_memory_metadata_scan
+def _rq_job_is_alive(job_id: str) -> bool:
+    from rq.exceptions import NoSuchJobError
+    from rq.job import Job, JobStatus
 
+    try:
+        status = Job.fetch(job_id, connection=redis_conn).get_status()
+    except NoSuchJobError:
+        return False
+    except Exception:  # noqa: BLE001 -- when unsure, leave the run alone
+        return True
+    return status in (JobStatus.QUEUED, JobStatus.STARTED, JobStatus.DEFERRED, JobStatus.SCHEDULED)
+
+
+def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
+    from app.services.memory.execution import fail_orphaned_memory_runs, run_memory_metadata_scan as execute_memory_metadata_scan
+
+    try:
+        fail_orphaned_memory_runs(memory_scan_run_id, _rq_job_is_alive)
+    except Exception:  # noqa: BLE001 -- housekeeping never blocks the analysis
+        logger.warning("could not check for memory runs left by a lost worker", exc_info=True)
     execute_memory_metadata_scan(memory_scan_run_id)
 
 

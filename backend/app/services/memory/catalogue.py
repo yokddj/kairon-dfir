@@ -183,7 +183,7 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "profile": "shell_history_basic",
         "family": "shell_history",
         "title": "Shell History",
-        "description": "Recover interactive shell command history from memory when supported by the target platform.",
+        "description": "Commands typed in shells, recovered from memory: bash history on Linux; on Windows, console command history (windows.consoles and windows.cmdscan) and the prompts still on console screens.",
         # linux.bash scans every bash/sh/dash process's heap for resident
         # history entries -- it carries the same explicit 1800s timeout as
         # the other full-heap/VAD scan profiles (ARTIFACT_PLUGIN_LIMITS in
@@ -226,13 +226,13 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "profile": "find_evil",
         "family": "find_evil",
         "title": "Find Evil",
-        "description": "Indicators to review from MemProcFS FindEvil: hidden or masquerading processes, injected or patched modules, executable private memory, suspicious threads and Defender detections still in memory.",
-        # MemProcFS forensic scan: about a minute on a real 4 GB Windows 11 image. It runs
-        # without the Microsoft symbol server (MemProcFS's info.db covers what it needs).
+        "description": "Indicators to review: hidden or masquerading processes, unexpected parents, suspicious command lines, injected code and unlinked modules (Kairon's checks over Volatility), plus MemProcFS FindEvil's when its scan finishes: patched modules, suspicious threads and Defender detections still in memory.",
+        # Kairon's checks run pslist, psscan, cmdline, malfind and ldrmodules (a few minutes on a
+        # 4 GB image); MemProcFS's forensic scan adds about a minute when it finishes.
         "cost_label": "Medium",
-        "est_duration_seconds": 120,
-        "requires_windows_symbols": False,
-        "can_run_without_symbols": True,
+        "est_duration_seconds": 300,
+        "requires_windows_symbols": True,
+        "can_run_without_symbols": False,
         "supported_os_families": ["windows"],
     },
 ]

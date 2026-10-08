@@ -78,4 +78,16 @@ describe("MemoryFindEvilTab", () => {
     fireEvent.change(screen.getByTestId("findevil-type-input"), { target: { value: "proc_nolink" } });
     await waitFor(() => expect(getMemoryActiveResultMock).toHaveBeenLastCalledWith("case-1", "ev-1", "find_evil", undefined, expect.objectContaining({ indicator_type: "PROC_NOLINK" })));
   });
+
+  it("names the source of each indicator and flags a partial run", async () => {
+    const rows = [
+      { ...ROWS[1], source_plugin: "kairon.findevil" },
+      { ...ROWS[0], source_plugin: "memprocfs.findevil" },
+    ];
+    getMemoryActiveResultMock.mockResolvedValue(activeResult({ analysis_state: "partial", total: 2, items: rows as unknown as MemoryActiveResult["items"] }));
+    renderTab();
+    await waitFor(() => expect(screen.getAllByTestId("findevil-row")).toHaveLength(2));
+    expect(screen.getAllByTestId("findevil-source").map((cell) => cell.textContent)).toEqual(["Kairon", "MemProcFS"]);
+    expect(screen.getByTestId("findevil-partial")).toHaveTextContent("Runs tab");
+  });
 });

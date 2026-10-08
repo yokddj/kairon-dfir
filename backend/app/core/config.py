@@ -122,7 +122,7 @@ class Settings(BaseSettings):
         "windows.envars,windows.getsids,windows.privileges,"
         "windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,"
         "windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,"
-        "windows.filescan,memprocfs.findevil,"
+        "windows.cmdscan,windows.filescan,kairon.findevil,memprocfs.findevil,"
         "linux.pslist,linux.pstree,linux.sockstat,linux.bash"
     )
     memory_allowed_profiles: str = (
@@ -518,7 +518,9 @@ class Settings(BaseSettings):
             "windows.malfind",
             "windows.vadinfo",
             "windows.consoles",
+            "windows.cmdscan",
             "windows.filescan",
+            "kairon.findevil",
             "memprocfs.findevil",
             "linux.pslist",
             "linux.pstree",
@@ -765,13 +767,18 @@ _ADDED_MEMORY_PLUGINS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
         ("windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "windows.consoles", "windows.filescan", "linux.pslist", "linux.pstree", "linux.sockstat", "linux.bash"),
         ("memprocfs.findevil",),
     ),
+    (
+        ("windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "windows.envars", "windows.getsids", "windows.privileges", "windows.netscan", "windows.netstat", "windows.dlllist", "windows.ldrmodules", "windows.handles", "windows.modules", "windows.driverscan", "windows.malfind", "windows.vadinfo", "windows.consoles", "windows.filescan", "memprocfs.findevil", "linux.pslist", "linux.pstree", "linux.sockstat", "linux.bash"),
+        ("windows.cmdscan", "kairon.findevil"),
+    ),
 )
 
 
 def _with_new_defaults(values: list[str], upgrades: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]) -> list[str]:
+    # Applied in order, so a list written several releases ago picks up every later addition.
     for previous_default, added in upgrades:
-        if tuple(values) == previous_default:
-            return [*values, *added]
+        if set(values) == set(previous_default):
+            values = [*values, *(item for item in added if item not in values)]
     return values
 
 

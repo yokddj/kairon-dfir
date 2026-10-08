@@ -186,7 +186,7 @@ export default function App() {
                         <Route path="/cases/:caseId/m/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/entities/memory-process/:entityId" element={<MemoryProcessEntityPage />} />
                         <Route path="/cases/:caseId/linux-authentication" element={<LegacyCaseParamRedirect suffix="/l/access/authentication" />} />
-                        <Route path="/cases/:caseId/command-history" element={<LegacyCaseParamRedirect suffix="/l/execution/command-history" />} />
+                        <Route path="/cases/:caseId/command-history" element={<CommandHistoryPage />} />
                         <Route path="/cases/:caseId/process-graph" element={<LegacyCaseParamRedirect suffix="/w/execution/stories" />} />
                         <Route path="/cases/:caseId/process-tree" element={<LegacyCaseParamRedirect suffix="/w/execution/stories" />} />
                         <Route path="/cases/:caseId/artifact-search" element={<LegacyCaseParamRedirect suffix="/artifacts" />} />
@@ -204,7 +204,7 @@ export default function App() {
                         <Route path="/siem" element={<Siem />} />
                         <Route path="/timeline" element={<ActiveCaseCanonicalRedirect suffix="/timeline" />} />
                         <Route path="/process-tree" element={<ActiveCaseCanonicalRedirect suffix="/w/execution/stories" />} />
-                        <Route path="/command-history" element={<ActiveCaseCanonicalRedirect suffix="/l/execution/command-history" />} />
+                        <Route path="/command-history" element={<ActiveCaseCanonicalRedirect suffix="/command-history" />} />
                         <Route path="/dashboard" element={<ActiveCaseCanonicalRedirect suffix="/overview" />} />
                         <Route path="/analysis/semi-auto" element={<ActiveCaseCanonicalRedirect suffix="/findings" />} />
                         <Route path="/semi-auto" element={<ActiveCaseCanonicalRedirect suffix="/findings" />} />

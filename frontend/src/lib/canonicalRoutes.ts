@@ -10,6 +10,11 @@ export function windowsCommandHistoryRoute(caseId: string, search?: string | URL
   return appendSearch(caseRoute(caseId, "/w/execution/command-history"), search);
 }
 
+// Command History for the whole case (every platform, disk and memory), linked from the sidebar.
+export function commandHistoryRoute(caseId: string, search?: string | URLSearchParams) {
+  return appendSearch(caseRoute(caseId, "/command-history"), search);
+}
+
 export function linuxCommandHistoryRoute(caseId: string, search?: string | URLSearchParams) {
   return appendSearch(caseRoute(caseId, "/l/execution/command-history"), search);
 }
