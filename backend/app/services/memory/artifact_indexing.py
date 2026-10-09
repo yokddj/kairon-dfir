@@ -133,6 +133,8 @@ ARTIFACT_MAPPING = {
             "review_rank": {"type": "long"},
             "explanation": {"type": "text", "index": False},
             "description": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 1024}}},
+            # Tools that reported the indicator, when Kairon's checks and MemProcFS agree.
+            "sources": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}},
         },
     }
 }

@@ -769,6 +769,7 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     )
                 if artifact_results:
                     _drop_repeated_console_commands(artifact_results)
+                    _merge_findevil_sources(artifact_results)
                     artifact_indexing = _index_artifact_results(run.case_id, artifact_results, db, run)
                     indexing["artifacts"] = artifact_indexing
                 _recount_plugin_states(run)
@@ -1021,6 +1022,47 @@ def _drop_repeated_console_commands(artifact_results: dict[str, dict[str, Any]])
         cmdscan["items"] = kept
         cmdscan["accepted_count"] = max(0, int(cmdscan.get("accepted_count") or 0) - removed)
         cmdscan.setdefault("warnings", []).append(f"cmdscan_duplicates_of_consoles:{removed}")
+
+
+def _findevil_key(item: dict[str, Any]) -> tuple[Any, ...]:
+    """Same indicator from both tools: same process and type; for memory and module indicators
+    also the same address (the tools print kernel addresses with or without sign extension)."""
+    if item.get("indicator_category") == "process":
+        return (item.get("pid"), item.get("indicator_type"))
+    try:
+        address = int(str(item.get("address") or "0"), 16) & 0xFFFFFFFFFFFF
+    except ValueError:
+        address = str(item.get("address"))
+    return (item.get("pid"), item.get("indicator_type"), address)
+
+
+def _merge_findevil_sources(artifact_results: dict[str, dict[str, Any]]) -> None:
+    """An indicator both Kairon's checks and MemProcFS report becomes one row naming both
+    sources (Kairon's description is kept; MemProcFS's when Kairon's is empty)."""
+    kairon = artifact_results.get(KAIRON_FINDEVIL_PLUGIN)
+    memprocfs = artifact_results.get("memprocfs.findevil")
+    if not kairon or not memprocfs:
+        return
+    by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for item in kairon.get("items") or []:
+        item["sources"] = [KAIRON_FINDEVIL_PLUGIN]
+        by_key.setdefault(_findevil_key(item), item)
+    kept = []
+    for item in memprocfs.get("items") or []:
+        match = by_key.get(_findevil_key(item))
+        if match is None:
+            item["sources"] = ["memprocfs.findevil"]
+            kept.append(item)
+            continue
+        if "memprocfs.findevil" not in match["sources"]:
+            match["sources"].append("memprocfs.findevil")
+        if not match.get("description") and item.get("description"):
+            match["description"] = item["description"]
+    merged = len(memprocfs.get("items") or []) - len(kept)
+    if merged:
+        memprocfs["items"] = kept
+        memprocfs["accepted_count"] = max(0, int(memprocfs.get("accepted_count") or 0) - merged)
+        memprocfs.setdefault("warnings", []).append(f"findevil_merged_with_kairon:{merged}")
 
 
 def _index_artifact_results(

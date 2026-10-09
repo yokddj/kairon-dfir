@@ -322,3 +322,57 @@ def test_fail_orphaned_runs_with_fake_session(monkeypatch) -> None:
     assert "memprocfs.findevil" in lost.error_log["message"]
     assert (lost_plugin.status, done_plugin.status) == ("failed", "completed")
     assert alive.status == "running" and _Session.committed
+
+
+# --- One row when both tools report the same indicator ---
+
+
+def test_indicators_reported_by_both_tools_are_merged() -> None:
+    from app.services.memory.execution import _merge_findevil_sources
+
+    common = {"case_id": "c", "evidence_id": "e", "scan_run_id": "r", "plugin_run_id": "p"}
+    kairon = normalize_memprocfs_findevil(
+        [{"PID": 2192, "Process": "svchost.exe", "Type": "PROC_NOLINK", "Address": "0xe009224a0080", "Description": "hidden"}],
+        source_plugin="kairon.findevil", **common,
+    )
+    memprocfs = normalize_memprocfs_findevil(
+        [
+            {"PID": "2192", "Process": "svchost.exe", "Type": "PROC_NOLINK", "Address": "0xffffe009224a0080", "Description": ""},
+            {"PID": "2192", "Process": "svchost.exe", "Type": "PEB_BAD_LDR", "Address": "0x0", "Description": ""},
+        ],
+        source_plugin="memprocfs.findevil", **common,
+    )
+    results = {"kairon.findevil": kairon, "memprocfs.findevil": memprocfs}
+    _merge_findevil_sources(results)
+    assert [(item["indicator_type"], item["sources"]) for item in results["kairon.findevil"]["items"]] == [("PROC_NOLINK", ["kairon.findevil", "memprocfs.findevil"])]
+    assert [(item["indicator_type"], item["sources"]) for item in results["memprocfs.findevil"]["items"]] == [("PEB_BAD_LDR", ["memprocfs.findevil"])]
+    assert results["memprocfs.findevil"]["accepted_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("description", "priority"),
+    [
+        ("Process base address mismatch: PEB.ImageBaseAddress != EPROCESS.SectionBaseAddress (0x140 != 0x7ff67a590000)", "low"),
+        ("Process base address mismatch: PEB.ImageBaseAddress != EPROCESS.SectionBaseAddress (0x400000 != 0x7ff67a590000)", "high"),
+    ],
+)
+def test_process_base_mismatch_with_an_unreadable_peb_is_low(description, priority) -> None:
+    result = normalize_memprocfs_findevil([{"PID": "6640", "Process": "x.exe", "Type": "PROC_BASEADDR", "Address": "0x0", "Description": description}], case_id="c", evidence_id="e", scan_run_id="r", plugin_run_id="p")
+    assert result["items"][0]["review_priority"] == priority
+
+
+def test_api_closes_lost_runs_before_refusing_a_new_one(monkeypatch) -> None:
+    from app.api import routes_memory
+    from app.services.memory import execution
+
+    calls = []
+    monkeypatch.setattr(execution, "fail_orphaned_memory_runs", lambda current, alive: calls.append(current) or 1)
+
+    class _Db:
+        expired = False
+
+        def expire_all(self):
+            _Db.expired = True
+
+    assert routes_memory._close_lost_memory_runs(_Db()) == 1
+    assert calls == [""] and _Db.expired
