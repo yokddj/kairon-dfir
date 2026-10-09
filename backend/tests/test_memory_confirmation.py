@@ -130,20 +130,14 @@ def test_confirm_requires_reason(db: Session) -> None:
         assert exc.value.detail.get("error_code") == "MEMORY_TYPE_CONFIRMATION_REASON_REQUIRED"
 
 
-def test_confirm_requires_authorization(db: Session) -> None:
-    """The confirmation endpoint requires authorization_acknowledged."""
+def test_confirm_needs_no_authorization_checkbox(db: Session) -> None:
+    """Confirming the type needs a reason, not an authorization checkbox."""
     from app.api.routes_evidence import confirm_memory_type
-    from fastapi import HTTPException
     case = _make_case(db)
     ev = _make_evidence(db, case.id)
-    with pytest.raises(HTTPException) as exc:
-        confirm_memory_type(
-            case_id=case.id, evidence_id=ev.id,
-            payload={"reason": "test"}, db=db,
-        )
-    assert exc.value.status_code == 400
-    if isinstance(exc.value.detail, dict):
-        assert exc.value.detail.get("error_code") == "MEMORY_TYPE_CONFIRMATION_AUTHORIZATION_REQUIRED"
+    confirm_memory_type(case_id=case.id, evidence_id=ev.id, payload={"reason": "test"}, db=db)
+    db.refresh(ev)
+    assert ev.operator_override is True
 
 
 def test_confirm_scoped_by_case_and_evidence(db: Session) -> None:
@@ -249,38 +243,26 @@ def test_run_all_allowed_after_confirm(db: Session) -> None:
     assert "selected_profiles" in plan
 
 
-def test_run_all_still_requires_its_own_authorization(db: Session, monkeypatch) -> None:
-    """Run-all requires authorization_acknowledged even after type confirmation."""
+def test_run_all_after_confirm_needs_no_authorization_checkbox(db: Session, monkeypatch) -> None:
+    """Run-all starts after type confirmation without any authorization flag."""
+    from fastapi import HTTPException
     from app.api.routes_evidence import confirm_memory_type
     from app.api.routes_memory import post_run_all_batch
     from app.services.memory import symbol_preparation as sp
-    from fastapi import HTTPException
     case = _make_case(db)
     ev = _make_evidence(db, case.id, detection_status="ambiguous_raw")
-    confirm_memory_type(
-        case_id=case.id, evidence_id=ev.id,
-        payload={"reason": "x", "authorization_acknowledged": True}, db=db,
-    )
-    # Stub the preparation state to be "ready" so the
-    # MEMORY_PREPARATION_NOT_READY gate does not short-circuit
-    # the authorization check.
+    confirm_memory_type(case_id=case.id, evidence_id=ev.id, payload={"reason": "x"}, db=db)
     monkeypatch.setattr(
         sp,
         "resolve_effective_memory_preparation_state",
-        lambda db, *, case_id, evidence_id: {
-            "effective_state": "ready",
-            "preparation_id": "prep-1",
-            "source_of_truth": "stub",
-        },
+        lambda db, *, case_id, evidence_id: {"effective_state": "ready", "preparation_id": "prep-1", "source_of_truth": "stub"},
     )
-    with pytest.raises(HTTPException) as exc:
-        post_run_all_batch(
-            case_id=case.id, evidence_id=ev.id,
-            payload={"mode": "missing_or_failed"}, db=db,
-        )
-    assert exc.value.status_code == 400
-    if isinstance(exc.value.detail, dict):
-        assert exc.value.detail.get("error_code") == "MEMORY_BATCH_AUTHORIZATION_REQUIRED"
+    monkeypatch.setattr("app.api.routes_memory.enqueue_memory_metadata_scan", lambda run_id: f"rq-{run_id}")
+    try:
+        post_run_all_batch(case_id=case.id, evidence_id=ev.id, payload={"mode": "missing_or_failed"}, db=db)
+    except HTTPException as exc:  # the test evidence has no file; only the authorization gate is under test
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        assert detail.get("error_code") != "MEMORY_BATCH_AUTHORIZATION_REQUIRED"
 
 
 # ---------------------------------------------------------------------------

@@ -276,13 +276,8 @@ def create_run_all_batch(
     pushes the run onto the worker's queue.  The callable is injected
     so the batch service can be unit-tested without Redis.
     """
-    if not authorization_acknowledged:
-        raise MemoryBatchError(
-            "MEMORY_BATCH_AUTHORIZATION_REQUIRED",
-            "Authorization acknowledgement is required to start a run-all batch.",
-            status_code=400,
-        )
-
+    # Who may analyse the evidence is decided by case access and the server's memory settings, not
+    # by a per-run checkbox; the flag is kept on the batch for older clients.
     # Reject profile injection early.
     _reject_incompatible_profiles(list(RUN_ALL_PROFILES) + list(RUN_ALL_EXCLUDED_PROFILES))
 

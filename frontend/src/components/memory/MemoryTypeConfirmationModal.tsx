@@ -43,17 +43,15 @@ export function MemoryTypeConfirmationModal({
   busy = false,
   errorMessage,
 }: Props) {
-  const [acknowledged, setAcknowledged] = useState(false);
   const [reason, setReason] = useState("");
   const [touched, setTouched] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const firstInputRef = useRef<HTMLInputElement | null>(null);
+  const firstInputRef = useRef<HTMLTextAreaElement | null>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
 
   // Reset state when the modal opens.
   useEffect(() => {
     if (open) {
-      setAcknowledged(false);
       setReason("");
       setTouched(false);
       previousFocus.current = document.activeElement as HTMLElement | null;
@@ -81,8 +79,7 @@ export function MemoryTypeConfirmationModal({
   if (!open) return null;
 
   const reasonError = touched && reason.trim().length === 0;
-  const checkboxError = touched && !acknowledged;
-  const canSubmit = acknowledged && reason.trim().length > 0 && !busy;
+  const canSubmit = reason.trim().length > 0 && !busy;
 
   async function handleConfirm() {
     setTouched(true);
@@ -110,7 +107,7 @@ export function MemoryTypeConfirmationModal({
         <p className="mt-2 text-muted">
           The file was accepted as a RAW candidate, but Kairon could not confirm
           that it is a memory image. Please review the details below and confirm
-          only if the file is an authorized memory acquisition.
+          only if you know the file is a memory acquisition.
         </p>
 
         <dl className="mt-4 grid gap-2 text-xs" data-testid="memory-type-confirmation-details">
@@ -151,27 +148,10 @@ export function MemoryTypeConfirmationModal({
           known forensic tool).
         </div>
 
-        <label className="mt-4 flex items-start gap-2 text-xs">
-          <input
-            ref={firstInputRef}
-            type="checkbox"
-            checked={acknowledged}
-            onChange={(event) => setAcknowledged(event.target.checked)}
-            data-testid="memory-type-confirmation-checkbox"
-          />
-          <span>
-            I confirm that this file is an authorized memory acquisition.
-          </span>
-        </label>
-        {checkboxError ? (
-          <p className="mt-1 text-[10px] text-rose-200" role="alert">
-            Authorization acknowledgement is required.
-          </p>
-        ) : null}
-
         <label className="mt-3 block text-xs">
           <span className="text-muted">Reason for confirmation</span>
           <textarea
+            ref={firstInputRef}
             value={reason}
             onChange={(event) => setReason(event.target.value)}
             onBlur={() => setTouched(true)}

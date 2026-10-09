@@ -26,11 +26,10 @@ Supported default extensions:
 2. Go to Memory Analysis.
 3. Select Add memory image.
 4. Review upload readiness and analysis readiness.
-5. Select an authorized memory image.
-6. Confirm the privacy and authorization acknowledgement.
-7. Upload with progress and finalization status.
-8. Open Memory Analysis for the uploaded evidence.
-9. Start `metadata_only`, `processes_basic`, or `processes_extended` only when analysis is enabled and authorized.
+5. Select the memory image.
+6. Upload with progress and finalization status.
+7. Open Memory Analysis for the uploaded evidence.
+8. Start the analyses you need (they run only when memory analysis is enabled on the server).
 
 Memory upload and memory analysis are separate steps. Upload may be available while execution is disabled or while the dedicated memory worker is offline.
 
@@ -38,15 +37,9 @@ Memory upload and memory analysis are separate steps. Upload may be available wh
 
 Memory images may contain credentials, personal data, encryption material, browser data, messages, tokens, and other sensitive information. Upload only evidence you own or are explicitly authorized to analyze. Do not commit RAM images, symbols, real Volatility output, credentials, malware samples, screenshots containing evidence, or server-private configuration.
 
-The dedicated Memory Upload page shows this warning and requires an authorization acknowledgement before upload:
+The upload page shows this warning. Who may upload and analyse RAM is decided by login, case access and the server's memory settings; there is no per-upload or per-run authorization checkbox (removed 2026-10: anyone could tick it, so it controlled nothing). Downloading Windows symbols from Microsoft still asks for approval, because it is a connection out of an offline installation.
 
-> Memory images may contain credentials, personal data, encryption material, browser data, access tokens, and other sensitive information. Upload only evidence that you own or are explicitly authorized to analyze.
-
-```text
-I confirm that I own this memory image or am explicitly authorized to upload and analyze it.
-```
-
-This acknowledgement is operational audit context; it is not a legal guarantee.
+If Kairon cannot tell a `.raw` file is memory (raw memory has no header), choose **Memory** under **Manual override** in the upload wizard and tick **Continue with a manual override**.
 
 Memory uploads are classified as `memory_dump`, bypass normal disk ingest, and do not create `NormalizedEvent` rows or disk event-index documents. Results remain isolated in the Memory Analysis workspace and memory index only.
 

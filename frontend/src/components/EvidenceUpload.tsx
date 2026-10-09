@@ -258,7 +258,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   const [detectionPreview, setDetectionPreview] = useState<DetectionPreview | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [latestEvidenceId, setLatestEvidenceId] = useState("");
-  const [memoryAuthorizationAcknowledged, setMemoryAuthorizationAcknowledged] = useState(false);
+  const memoryAuthorizationAcknowledged = true;
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
@@ -574,7 +574,6 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
     setFileIntent(inferredIntent);
     setPendingFile(file);
     setPendingFiles(selectedFiles);
-    setMemoryAuthorizationAcknowledged(false);
     setDetectionPreview(buildDetectionPreview(file, inferredIntent));
     setStatus(`Ready to index: ${selectedFiles.length > 1 ? `${selectedFiles.length} files selected` : file.name}`);
     resetPickers();
@@ -598,10 +597,6 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
     }
     if (pendingFiles.length > 1) {
       await handleUploadFiles(pendingFiles);
-      return;
-    }
-    if (isMemoryImageFile(pendingFile) && !memoryAuthorizationAcknowledged) {
-      setStatus("Confirm authorization before uploading RAM evidence.");
       return;
     }
     await handleUploadFile(pendingFile, fileIntent ?? (isArchiveFile(pendingFile) ? "raw_archive" : "raw_single_file"));
@@ -1045,15 +1040,11 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
               {isMemoryImageFile(pendingFile) ? (
                 <div className="mt-3 rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
                   <p className="font-semibold">Memory image</p>
-                  <p className="mt-1">Memory images may contain credentials, personal data, encryption material, browser data, and other sensitive information. Upload only evidence that you own or are explicitly authorized to analyze.</p>
+                  <p className="mt-1">Memory images may contain credentials, personal data, encryption material, browser data, and other sensitive information. Handle it like any sensitive evidence.</p>
                   <p className="mt-1 text-muted">It will be stored as memory_dump evidence, bypass normal disk ingest, and processing occurs later in Memory Analysis.</p>
                   {memoryUploadLimit > 0 ? <p className="mt-1 text-muted">Configured upload limit: {formatBytes(memoryUploadLimit)}</p> : null}
                   <p className="mt-2 text-muted">For the best experience, use the dedicated Memory Image upload.</p>
                   <button type="button" onClick={() => navigate(`/cases/${caseId}/evidence?add_evidence=1&expected_kind=memory_dump`)} className="mt-2 rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Memory Upload</button>
-                  <label className="mt-3 flex gap-2 text-xs">
-                    <input type="checkbox" checked={memoryAuthorizationAcknowledged} onChange={(event) => setMemoryAuthorizationAcknowledged(event.target.checked)} />
-                    <span>I confirm that I own this memory image or am explicitly authorized to upload and analyze it.</span>
-                  </label>
                 </div>
               ) : null}
             </div>

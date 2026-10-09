@@ -198,7 +198,6 @@ async function reachMemoryPreparationStep(evidence: { id: string; original_filen
   await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], evidence.original_filename));
   await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
   await screen.findByTestId("preflight-report");
-  await userEvent.click(screen.getByRole("checkbox", { name: /authorized to handle this RAM evidence/i }));
   await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
   await screen.findByRole("heading", { name: "Evidence registered" });
 }
@@ -642,6 +641,37 @@ describe("EvidenceIngestionWizard", () => {
     expect(startButton).toBeEnabled();
   });
 
+  it("lets an ambiguous raw image forced to Memory start processing (no authorization checkbox)", async () => {
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+      preflight: readyReport({
+        original_filename: "memoria.raw",
+        status: "blocked",
+        classification: { ...readyReport().classification, category: "unknown" },
+        status_checks: [{ label: "Supported", ok: false, detail: "Only a raw image extension was detected; no disk or memory structure was found." }],
+        diagnostics: [{
+          problem: "Low confidence classification",
+          reason: "We could not confidently determine the evidence type. You can continue with a manual override.",
+          current_configuration: {},
+          required_configuration: {},
+          configuration_key: null,
+          configuration_file: null,
+          how_to_fix: ["Use the Advanced options override to set platform/classification manually"],
+          severity: "recommendation",
+        }],
+      }),
+    }));
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "memoria.raw"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+
+    await userEvent.selectOptions(within(screen.getByTestId("manual-override-panel")).getByRole("combobox"), "memory_dump");
+    await userEvent.click(screen.getByRole("checkbox", { name: /Continue with a manual override/i }));
+    expect(screen.getByRole("button", { name: "Start Processing" })).toBeEnabled();
+    expect(screen.queryByText(/Authorization acknowledgement is required/i)).not.toBeInTheDocument();
+  });
+
   it("promotes each detected file separately in a multi-file auto-detect batch", async () => {
     const archiveFile = new File(["zip-bytes"], "collection.zip", { type: "application/zip" });
     const diskFile = new File(["disk-bytes"], "disk.E01");
@@ -719,7 +749,6 @@ describe("EvidenceIngestionWizard", () => {
     expect(startButton).toBeDisabled();
 
     await userEvent.click(screen.getByRole("checkbox", { name: /Process anyway/i }));
-    await userEvent.click(screen.getByRole("checkbox", { name: /authorized to handle this RAM evidence/i }));
     expect(startButton).toBeEnabled();
   });
 
@@ -999,7 +1028,7 @@ describe("EvidenceIngestionWizard", () => {
     await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-5", { profile: "recommended" }));
   });
 
-  it("memory flow requires authorization acknowledgement before Start Processing is enabled", async () => {
+  it("memory flow needs no authorization checkbox before Start Processing", async () => {
     promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-3", original_filename: "capture.mem", evidence_type: "memory_dump" });
     createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
       preflight: readyReport({ original_filename: "capture.mem", classification: { ...readyReport().classification, category: "memory_dump" }, pipeline_preview: ["Memory Dump", "Evidence Classification", "Memory Registration", "Memory Analysis (manual, after ingestion)"] }),
@@ -1012,10 +1041,8 @@ describe("EvidenceIngestionWizard", () => {
     await screen.findByTestId("preflight-report");
     await screen.findByRole("heading", { name: "Confirm evidence" });
     const startButton = screen.getByRole("button", { name: "Start Processing" });
-    expect(startButton).toBeDisabled();
-
-    await userEvent.click(screen.getByRole("checkbox", { name: /authorized to handle this RAM evidence/i }));
     expect(startButton).toBeEnabled();
+    expect(screen.queryByRole("checkbox", { name: /authorized/i })).not.toBeInTheDocument();
 
     await userEvent.click(startButton);
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ provided_host: "web01", memory_authorization_acknowledged: true })));
@@ -1051,7 +1078,6 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "capture.mem"));
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("checkbox", { name: /authorized to handle this RAM evidence/i }));
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     const card = await screen.findByTestId("memory-evidence-preparation-card");
@@ -1205,10 +1231,7 @@ describe("EvidenceIngestionWizard", () => {
     expect(screen.queryByTestId("host-required-message")).not.toBeInTheDocument();
     expect(screen.getByText(/Assign to host:/).parentElement).toHaveTextContent("WS-01");
     expect(screen.getByText("Ready to process")).toBeInTheDocument();
-    const startButton = screen.getByRole("button", { name: "Start Processing" });
-    expect(startButton).toBeDisabled();
-    await userEvent.click(screen.getByRole("checkbox", { name: /authorized to handle this RAM evidence/i }));
-    expect(startButton).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start Processing" })).toBeEnabled();
   });
 
   it("marks memory evidence ready after entering a new host", async () => {
@@ -1229,7 +1252,6 @@ describe("EvidenceIngestionWizard", () => {
     expect(screen.queryByTestId("host-required-message")).not.toBeInTheDocument();
     expect(screen.getByText(/Assign to host:/).parentElement).toHaveTextContent("MEMHOST-01");
     expect(screen.getByText("Ready to process")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("checkbox", { name: /authorized to handle this RAM evidence/i }));
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     await waitFor(() => expect(createCaseHostMock).toHaveBeenCalledWith("case-1", { host_name: "MEMHOST-01", reason: "Created during evidence ingestion wizard" }));

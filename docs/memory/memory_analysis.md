@@ -83,7 +83,7 @@ The readiness check may call a harmless help/version command with `shell=False`.
 The memory runner is asynchronous. `POST /api/evidences/{evidence_id}/memory/scan` accepts only a named profile:
 
 ```json
-{"profile":"metadata_only","authorization_acknowledged":true}
+{"profile":"metadata_only"}
 ```
 
 Before a real run, the API requires an explicit acknowledgement that the operator owns the memory image or is authorized to analyze it and understands RAM may contain sensitive personal or authentication data. This acknowledgement is recorded as run metadata for audit context; it is not a legal guarantee.
@@ -209,7 +209,6 @@ The runner validates:
 
 - `MEMORY_ANALYSIS_ENABLED=true`
 - `MEMORY_ALLOW_EXTERNAL_TOOL_EXECUTION=true`
-- `authorization_acknowledged=true`
 - Volatility 3 readiness is ready
 - evidence exists and is `memory_dump`
 - evidence resolves to a regular file under trusted storage roots

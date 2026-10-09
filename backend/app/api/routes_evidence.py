@@ -2041,17 +2041,6 @@ def confirm_memory_type(
                 "message": "A non-empty reason is required for the confirmation.",
             },
         )
-    if not bool(payload.get("authorization_acknowledged", False)):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error_code": "MEMORY_TYPE_CONFIRMATION_AUTHORIZATION_REQUIRED",
-                "message": (
-                    "Authorization acknowledgement is required to confirm "
-                    "the evidence type."
-                ),
-            },
-        )
     evidence.operator_override = True
     evidence.operator_override_reason = reason[:512]
     evidence.operator_override_at = utc_now_naive()
@@ -2124,8 +2113,6 @@ def upload_evidence(
             raise HTTPException(status_code=404, detail="Memory Analysis capability is not available on this server.")
         if not settings.memory_upload_enabled:
             raise HTTPException(status_code=403, detail="Memory image upload is disabled by server configuration.")
-        if not memory_authorization_acknowledged:
-            raise HTTPException(status_code=400, detail="Authorization acknowledgement is required before uploading RAM evidence.")
         expected_size = int(getattr(file, "size", 0) or 0)
         if expected_size <= 0:
             raise HTTPException(status_code=400, detail="Memory upload size could not be determined safely.")

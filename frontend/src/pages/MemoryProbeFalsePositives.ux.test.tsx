@@ -197,7 +197,6 @@ describe("Memory probe false positives and probable disk confirmation v1", () =>
     await waitFor(() => screen.getByTestId("memory-type-confirmation-modal"));
     const confirm = screen.getByTestId("memory-type-confirmation-confirm");
     expect(confirm.hasAttribute("disabled")).toBe(true);
-    fireEvent.click(screen.getByTestId("memory-type-confirmation-checkbox"));
     fireEvent.change(screen.getByTestId("memory-type-confirmation-reason"), {
       target: { value: "Known crash dump" },
     });
@@ -209,7 +208,6 @@ describe("Memory probe false positives and probable disk confirmation v1", () =>
     await waitFor(() => screen.getByTestId("memory-probable-disk-confirm-button"));
     fireEvent.click(screen.getByTestId("memory-probable-disk-confirm-button"));
     await waitFor(() => screen.getByTestId("memory-type-confirmation-modal"));
-    fireEvent.click(screen.getByTestId("memory-type-confirmation-checkbox"));
     fireEvent.change(screen.getByTestId("memory-type-confirmation-reason"), {
       target: { value: "Known crash dump" },
     });
@@ -227,7 +225,6 @@ describe("Memory probe false positives and probable disk confirmation v1", () =>
     await waitFor(() => screen.getByTestId("memory-probable-disk-confirm-button"));
     fireEvent.click(screen.getByTestId("memory-probable-disk-confirm-button"));
     await waitFor(() => screen.getByTestId("memory-type-confirmation-modal"));
-    fireEvent.click(screen.getByTestId("memory-type-confirmation-checkbox"));
     fireEvent.change(screen.getByTestId("memory-type-confirmation-reason"), {
       target: { value: "x" },
     });

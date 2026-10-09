@@ -101,7 +101,7 @@ Real RAM analysis requires separately authorized, non-sensitive lab evidence out
 6. Start with `metadata_only`.
 7. Run `processes_basic` or `processes_extended` only when process inventory is needed.
 
-Each scan request must include the authorization acknowledgement. Kairon does not expose plugin checkboxes or command-line controls.
+Kairon does not expose plugin checkboxes or command-line controls. Who may upload and analyse RAM is decided by login, case access and the server's memory settings; there is no per-upload or per-run authorization checkbox (removed 2026-10: anyone could tick it, so it controlled nothing). Downloading Windows symbols from Microsoft still asks for approval, because it is a connection out of an offline installation.
 
 The generic Evidence Upload page remains available for backward compatibility and links users to the dedicated memory upload flow when a memory extension is selected.
 

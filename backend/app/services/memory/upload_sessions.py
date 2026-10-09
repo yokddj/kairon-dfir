@@ -300,7 +300,6 @@ class ChunkedUploadKindPolicy:
 
     is_enabled: Callable[[Any], bool]
     disabled_error: tuple[str, str]
-    requires_authorization_ack: bool
     max_bytes: Callable[[Any], int]
     validate_extension: Callable[[str], str]
     quota_evidence_type: str | None  # Evidence.evidence_type value to sum for a case-quota check; None = no case-quota policy exists for this kind
@@ -345,7 +344,6 @@ _KIND_POLICIES: dict[str, ChunkedUploadKindPolicy] = {
     "memory_dump": ChunkedUploadKindPolicy(
         is_enabled=lambda settings: bool(settings.memory_upload_enabled),
         disabled_error=("MEMORY_UPLOAD_DISABLED", "Memory image upload is disabled by server configuration."),
-        requires_authorization_ack=True,
         max_bytes=lambda settings: int(settings.memory_upload_max_bytes or settings.memory_max_upload_size or 0),
         validate_extension=_allowed_memory_extension,
         quota_evidence_type="memory_dump",
@@ -353,7 +351,6 @@ _KIND_POLICIES: dict[str, ChunkedUploadKindPolicy] = {
     "disk_image": ChunkedUploadKindPolicy(
         is_enabled=lambda settings: bool(settings.disk_image_ingest_enabled),
         disabled_error=("MEMORY_UPLOAD_DISABLED", "Disk image ingestion is disabled by server configuration."),
-        requires_authorization_ack=False,
         # No disk-image-specific upload cap exists in the legacy path either
         # (disk_image_max_bytes is defined but never enforced anywhere) --
         # reuse the same general single-file cap the legacy resumable path
@@ -371,7 +368,6 @@ _KIND_POLICIES: dict[str, ChunkedUploadKindPolicy] = {
         # _allowed_archive_extension below.
         is_enabled=lambda settings: True,
         disabled_error=("ARCHIVE_UPLOAD_DISABLED", "Archive upload is disabled by server configuration."),
-        requires_authorization_ack=False,
         max_bytes=lambda settings: int(settings.backend_max_upload_size or 0),
         validate_extension=_allowed_archive_extension,
         quota_evidence_type=None,
@@ -398,8 +394,6 @@ def create_memory_upload_session(
     policy = _KIND_POLICIES[kind]
     if not policy.is_enabled(settings):
         raise MemoryUploadSessionError(*policy.disabled_error)
-    if policy.requires_authorization_ack and not authorization_acknowledged:
-        raise MemoryUploadSessionError("MEMORY_UPLOAD_AUTHORIZATION_REQUIRED", "Authorization acknowledgement is required before uploading RAM evidence.")
     if expected_size_bytes <= 0:
         raise MemoryUploadSessionError("MEMORY_UPLOAD_INVALID_SIZE", "Expected upload size must be greater than zero.")
     max_bytes = policy.max_bytes(settings)
@@ -535,8 +529,6 @@ def create_memory_upload_session_from_staged_file(
     settings = get_settings()
     if not bool(settings.memory_upload_enabled):
         raise MemoryUploadSessionError("MEMORY_UPLOAD_DISABLED", "Memory image upload is disabled by server configuration.")
-    if not authorization_acknowledged:
-        raise MemoryUploadSessionError("MEMORY_UPLOAD_AUTHORIZATION_REQUIRED", "Authorization acknowledgement is required before uploading RAM evidence.")
     if expected_size_bytes <= 0:
         raise MemoryUploadSessionError("MEMORY_UPLOAD_INVALID_SIZE", "Expected upload size must be greater than zero.")
     if not staged_path.is_file() or staged_path.is_symlink():

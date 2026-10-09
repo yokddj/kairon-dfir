@@ -102,8 +102,8 @@ def test_1_run_all_rejected_when_flag_disabled(db: Session) -> None:
     finally:
         settings.memory_run_all_enabled = True
 
-def test_3_run_all_authorization_required_even_when_ready(db: Session, monkeypatch) -> None:
-    """Even when preparation is ready, authorization_acknowledged is still required."""
+def test_3_run_all_needs_no_authorization_checkbox_when_ready(db: Session, monkeypatch) -> None:
+    """When preparation is ready, run-all starts without an authorization flag."""
     from app.api.routes_memory import post_run_all_batch
     case = _make_case(db)
     ev = _make_evidence(db, case.id)
@@ -117,15 +117,12 @@ def test_3_run_all_authorization_required_even_when_ready(db: Session, monkeypat
             "source_of_truth": "stub",
         },
     )
-    with pytest.raises(HTTPException) as exc:
-        post_run_all_batch(
-            case_id=case.id,
-            evidence_id=ev.id,
-            payload={"mode": "missing_or_failed"},
-            db=db,
-        )
-    assert exc.value.status_code == 400
-    assert exc.value.detail["error_code"] == "MEMORY_BATCH_AUTHORIZATION_REQUIRED"
+    monkeypatch.setattr("app.api.routes_memory.enqueue_memory_metadata_scan", lambda run_id: f"rq-{run_id}")
+    try:
+        post_run_all_batch(case_id=case.id, evidence_id=ev.id, payload={"mode": "missing_or_failed"}, db=db)
+    except HTTPException as exc:  # the test evidence has no file; only the authorization gate is under test
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        assert detail.get("error_code") != "MEMORY_BATCH_AUTHORIZATION_REQUIRED"
 
 
 def test_4_run_all_proceeds_when_flag_enabled_and_preparation_ready(
