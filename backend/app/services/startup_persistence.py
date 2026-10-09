@@ -22,6 +22,13 @@ LOLBIN_RE = re.compile(r"\b(?:rundll32|regsvr32|mshta|wmic|schtasks|powershell|p
 DEFENDER_CONFIG_RE = re.compile(r"defender|exclusion|disablerealtimemonitoring|spynetreporting|tamper|realtime", re.IGNORECASE)
 CREATE_PERSISTENCE_RE = re.compile(r"\b(?:schtasks\s+/create|sc(?:\.exe)?\s+create|new-service|set-itemproperty|reg(?:\.exe)?\s+add|wmic\s+.*(?:consumer|filter|binding))\b", re.IGNORECASE)
 BENIGN_SYSTEM_RE = re.compile(r"\\(?:windows\\system32|windows\\syswow64|program files(?: \(x86\))?)\\", re.IGNORECASE)
+# Task and service commands often name system folders through environment variables; expanded
+# before scoring so "%windir%\system32\rundll32.exe" counts as the system binary it is.
+_SYSTEM_FOLDER_VARIABLES = (
+    (re.compile(r"%(?:windir|systemroot)%", re.IGNORECASE), r"C:\Windows"),
+    (re.compile(r"%programfiles\(x86\)%", re.IGNORECASE), r"C:\Program Files (x86)"),
+    (re.compile(r"%programfiles%", re.IGNORECASE), r"C:\Program Files"),
+)
 
 SOURCE_QUERIES: list[dict[str, Any]] = [
     {"source": "scheduled_tasks", "artifact_types": ["scheduled_task", "scheduled_tasks", "windows_event"], "queries": ["schtasks", "scheduled task", "TaskCache"], "limit": 40},
@@ -470,6 +477,8 @@ def _classify_command_type(command: str) -> str:
 
 def _score_item(item_type: str, text: str, path: str | None, name: str | None, source: str) -> tuple[int, list[str]]:
     haystack = " ".join(str(part or "") for part in (text, path, name, source))
+    for pattern, folder in _SYSTEM_FOLDER_VARIABLES:
+        haystack = pattern.sub(lambda _match, folder=folder: folder, haystack)
     reasons: list[str] = []
     score = 10
     if item_type in {"scheduled_task", "service", "run_key", "startup_folder", "wmi", "winlogon", "ifeo", "powershell_profile"}:
