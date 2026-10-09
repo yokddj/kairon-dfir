@@ -926,6 +926,7 @@ def post_run_all_batch(
 
     _require_case(db, case_id)
     _require_evidence_for_case(db, case_id, evidence_id)
+    _close_lost_memory_runs(db)
     if not bool(getattr(get_settings(), "memory_run_all_enabled", False)):
         raise HTTPException(
             status_code=409,
@@ -2260,6 +2261,22 @@ def get_memory_runs(
     return query.order_by(MemoryScanRun.created_at.desc()).all()
 
 
+def _close_lost_memory_runs(db: Session) -> int:
+    """Close runs a dead worker left "running" (see execution.fail_orphaned_memory_runs) before
+    an earlier run blocks a new one: otherwise only the next job the worker starts closes them."""
+    from app.services.memory.execution import fail_orphaned_memory_runs
+    from app.workers.tasks import _rq_job_is_alive
+
+    try:
+        closed = fail_orphaned_memory_runs("", _rq_job_is_alive)
+    except Exception:  # noqa: BLE001 -- housekeeping never blocks the request
+        logger.warning("could not check for memory runs left by a lost worker", exc_info=True)
+        return 0
+    if closed:
+        db.expire_all()
+    return closed
+
+
 @router.post("/evidences/{evidence_id}/memory/scan", response_model=MemoryStartScanResponse, status_code=status.HTTP_202_ACCEPTED)
 def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None = None, case_id: str = Query(...), db: Session = Depends(get_db)) -> MemoryStartScanResponse:
     profile = (payload.profile if payload else "metadata_only") or "metadata_only"
@@ -2385,6 +2402,8 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
             },
         )
     existing = active_run_for_evidence(db, evidence.id, profile)
+    if existing and _close_lost_memory_runs(db):
+        existing = active_run_for_evidence(db, evidence.id, profile)
     if existing:
         raise HTTPException(status_code=409, detail=f"An active metadata analysis run already exists for this memory evidence: {existing.id}")
 

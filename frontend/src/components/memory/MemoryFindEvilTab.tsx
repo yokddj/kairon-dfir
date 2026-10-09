@@ -22,6 +22,7 @@ type FindEvilRow = {
   address?: string | null;
   description?: string | null;
   source_plugin?: string | null;
+  sources?: string[] | null;
 };
 
 // Who reported the indicator: Kairon's own checks over Volatility's output, or MemProcFS FindEvil.
@@ -218,7 +219,9 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
                         <span className="break-all">{row.description || (row.address && row.address !== "0x0" ? row.address : "—")}</span>
                       </td>
                       <td className="max-w-[360px] px-2 py-1 text-muted">{reported(row.explanation)}</td>
-                      <td className="px-2 py-1 text-muted" data-testid="findevil-source">{SOURCE_LABEL[String(row.source_plugin)] ?? reported(row.source_plugin)}</td>
+                      <td className="px-2 py-1 text-muted" data-testid="findevil-source">
+                        {(row.sources?.length ? row.sources : [row.source_plugin]).map((source) => SOURCE_LABEL[String(source)] ?? reported(source)).join(" + ")}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

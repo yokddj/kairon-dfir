@@ -1640,6 +1640,18 @@ FINDEVIL_TYPES: dict[str, tuple[str, str, str]] = {
     "PE_PATCHED": ("low", "module", "Executable page of a module differs from the file on disk: hooking or patching, also done by Windows and JIT runtimes."),
 }
 FINDEVIL_PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+# "Process base address mismatch: PEB.ImageBaseAddress != EPROCESS.SectionBaseAddress (0x140 != 0x7ff6...)"
+_FINDEVIL_BASEADDR_VALUES = re.compile(r"\((0x[0-9a-fA-F]+)\s*!=\s*(0x[0-9a-fA-F]+)\)")
+
+
+def _findevil_unreadable_peb_base(description: str | None) -> bool:
+    """PROC_BASEADDR where the PEB value cannot be an image base (images load at 64 KB-aligned
+    addresses): the PEB page was not read correctly, which says nothing about hollowing."""
+    match = _FINDEVIL_BASEADDR_VALUES.search(description or "")
+    if not match:
+        return False
+    peb_base = int(match.group(1), 16)
+    return peb_base < 0x10000 or peb_base % 0x10000 != 0
 
 
 def _findevil_type_info(indicator_type: str) -> tuple[str, str, str]:
@@ -1683,6 +1695,9 @@ def normalize_memprocfs_findevil(
         override = str(_lookup(row, "Priority", "priority") or "").strip().lower()
         if override in FINDEVIL_PRIORITY_ORDER:
             priority = override
+        if indicator_type == "PROC_BASEADDR" and _findevil_unreadable_peb_base(description):
+            priority = "low"
+            explanation = "Image base in the PEB is not a valid image address, so the PEB was probably not read correctly; on its own this is not a sign of process hollowing."
         identity = _identity_pid_offset(pid, indicator_type, address, description, index)
         items.append({
             "document_id": _document_id(prefix="memory_findevil", case_id=case_id, run_id=scan_run_id, identity=identity),

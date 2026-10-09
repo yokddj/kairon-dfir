@@ -106,7 +106,7 @@ Supported profiles:
 
 ### Find Evil
 
-The **Find Evil** tab lists indicators from two sources; the **Source** column says which.
+The **Find Evil** tab lists indicators from two sources; the **Source** column says which (both, when the two tools report the same indicator: same process and type, and for memory and module indicators the same address).
 
 - **Kairon**: checks over standard Volatility output, so they work on any image Volatility can read. They encode how Windows normally looks, nothing specific to a case:
   - processes found by scanning memory (`psscan`) but missing from the kernel's list while still having threads and no exit time (`PROC_NOLINK`: hidden), and processes that had already exited (`PROC_TERMINATED`, low);
@@ -125,7 +125,7 @@ The list is sorted by priority and can be filtered by priority, type and PID. Li
 
 How it runs: Kairon's checks run first (a few minutes on a 4 GB image); a source plugin that fails only removes its own checks. MemProcFS's library is then loaded in a separate process with the same containment as Volatility (own session, timeout, cancellation, output cap), with the Microsoft symbol server disabled, so it works offline. It needs 64-bit Windows 10 or later; on other images it is reported as unsupported for that build. On a 4 GB Windows 11 image it takes about a minute. MemProcFS 5.19's `vmm.so` is rebuilt in the image from the release's source with the patches in `docker/memory-worker/patches/`: on Windows 11+ images its DNS cache lookup could loop forever (an inner loop reused the outer loop's index), which kept the forensic scan at 90 % and FindEvil from finishing (seen on a Windows 11 24H2 crash dump, which now finishes in about 30 seconds). If a scan still stops making progress, a watchdog stops it after 10 minutes, it is reported as failed with that reason, and the tab shows Kairon's indicators with a note that part of Find Evil did not finish.
 
-If the memory worker dies while an analysis runs (killed, restarted, out of memory), the next analysis it starts closes that run as failed (`WORKER_LOST`) instead of leaving it running forever.
+If the memory worker dies while an analysis runs (killed, restarted, out of memory, or the host went to sleep), the run is closed as failed (`WORKER_LOST`) when the next analysis starts or is requested from the app, instead of staying "running" forever and blocking a new run.
 
 ### Shell history on Windows
 
