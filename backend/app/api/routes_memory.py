@@ -831,6 +831,29 @@ def get_memory_powershell_log(
 
 
 @router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/memprocfs-tables",
+    response_model=None,
+)
+def get_memory_memprocfs_table(
+    case_id: str,
+    evidence_id: str,
+    table: str = Query(default="tasks"),
+    q: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> dict:
+    """One of MemProcFS's forensic inventories (scheduled tasks, services, DNS cache, drivers,
+    devices, Prefetch, Amcache, YARA) from the evidence's active Find Evil run."""
+    from app.services.memory.memprocfs_tables import memprocfs_table
+
+    evidence = db.get(Evidence, evidence_id)
+    if not evidence or evidence.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Evidence not found for this case.")
+    return memprocfs_table(db, case_id=case_id, evidence_id=evidence_id, table=table, q=q, page=page, page_size=page_size)
+
+
+@router.get(
     "/cases/{case_id}/memory/evidences/{evidence_id}/active-result",
     response_model=None,
 )

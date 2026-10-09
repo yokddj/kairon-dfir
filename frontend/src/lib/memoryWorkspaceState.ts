@@ -25,6 +25,7 @@ export type MemoryTab =
   | "find_evil"
   | "shell_history"
   | "timeline"
+  | "memprocfs"
   | "network"
   | "modules"
   | "handles"
@@ -45,6 +46,7 @@ export const MEMORY_TABS: ReadonlyArray<{ key: MemoryTab; label: string; testId:
   { key: "find_evil", label: "Find Evil", testId: "memory-tab-find-evil", routeSegment: "find-evil" },
   { key: "shell_history", label: "Shell History", testId: "memory-tab-shell-history", routeSegment: "shell_history" },
   { key: "timeline", label: "Timeline", testId: "memory-tab-timeline", routeSegment: "timeline" },
+  { key: "memprocfs", label: "MemProcFS", testId: "memory-tab-memprocfs", routeSegment: "memprocfs" },
   { key: "network", label: "Network", testId: "memory-tab-network", routeSegment: "network" },
   { key: "modules", label: "Modules & DLLs", testId: "memory-tab-modules", routeSegment: "modules" },
   { key: "handles", label: "Handles", testId: "memory-tab-handles", routeSegment: "handles" },

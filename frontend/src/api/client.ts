@@ -1051,6 +1051,19 @@ export type MemoryPowerShellLogItem = {
 
 export type MemoryPowerShellLog = { items: MemoryPowerShellLogItem[]; total: number; page: number; page_size: number };
 
+export type MemoryMemProcFSTable = {
+  table: string;
+  tables: { key: string; label: string; group: string; description: string; count: number }[];
+  columns: { key: string; label: string }[];
+  items: Record<string, string>[];
+  total: number;
+  hidden: number;
+  page: number;
+  page_size: number;
+  run: { id: string; status?: string | null; completed_at?: string | null } | null;
+  available: boolean;
+};
+
 export type MemoryActiveResult = {
   case_id: string;
   evidence_id: string;
@@ -6576,6 +6589,13 @@ export const api = {
     if (params.page) query.set("page", String(params.page));
     if (params.page_size) query.set("page_size", String(params.page_size));
     return request<MemoryPowerShellLog>(`/cases/${caseId}/memory/evidences/${evidenceId}/powershell-log?${query.toString()}`);
+  },
+  getMemoryMemProcFSTable: (caseId: string, evidenceId: string, params: { table: string; q?: string; page?: number; page_size?: number }) => {
+    const query = new URLSearchParams({ table: params.table });
+    if (params.q) query.set("q", params.q);
+    if (params.page) query.set("page", String(params.page));
+    if (params.page_size) query.set("page_size", String(params.page_size));
+    return request<MemoryMemProcFSTable>(`/cases/${caseId}/memory/evidences/${evidenceId}/memprocfs-tables?${query.toString()}`);
   },
   getMemoryAnalysisCatalogue: (caseId: string, evidenceId: string) =>
     request<MemoryAnalysisCatalogue>(`/cases/${caseId}/memory/evidences/${evidenceId}/catalogue`),

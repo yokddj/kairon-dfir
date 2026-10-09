@@ -226,7 +226,7 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "profile": "find_evil",
         "family": "find_evil",
         "title": "Find Evil",
-        "description": "Indicators to review: hidden or masquerading processes, unexpected parents, suspicious command lines, injected code and unlinked modules (Kairon's checks over Volatility), plus MemProcFS FindEvil's when its scan finishes: patched modules, suspicious threads and Defender detections still in memory.",
+        "description": "Indicators to review: hidden or masquerading processes, unexpected parents, suspicious command lines, injected code and unlinked modules (Kairon's checks over Volatility), plus MemProcFS FindEvil's when its scan finishes: patched modules, suspicious threads and Defender detections still in memory. The same scan adds MemProcFS's timelines to the Timeline and its inventories (scheduled tasks, services, DNS cache, drivers, Amcache...) to the MemProcFS tab.",
         # Kairon's checks run pslist, psscan, cmdline, malfind and ldrmodules (a few minutes on a
         # 4 GB image); MemProcFS's forensic scan adds about a minute when it finishes.
         "cost_label": "Medium",

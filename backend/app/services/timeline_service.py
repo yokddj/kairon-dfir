@@ -96,6 +96,7 @@ TIMELINE_QUICK_FILTERS = [
     {"id": "network", "label": "Network", "params": {"event_category": ["network"]}},
     {"id": "cloud_usb", "label": "Cloud / USB", "params": {"artifact_type": ["cloud", "cloud_sync", "usb"]}},
     {"id": "deleted_files", "label": "Deleted files", "params": {"event_type": ["file_deleted"]}},
+    {"id": "memory_volatility", "label": "Memory (Volatility)", "params": {"artifact_type": ["volatility"]}},
     {"id": "memory_memprocfs", "label": "Memory (MemProcFS)", "params": {"artifact_type": ["memprocfs"]}},
     {"id": "key_events", "label": "Key events", "params": {"key_events_only": True}},
 ]
@@ -1974,6 +1975,123 @@ def _filter_timeline_source_category(rows: list[dict[str, Any]], params: dict[st
     return [row for row in rows if str(row.get("source_category") or (row.get("raw") or {}).get("source_category") or "") == category]
 
 
+# Filters only the events index understands: with any of them set, Volatility's memory events
+# (which carry none of these fields) are left out rather than shown unfiltered.
+_EVENT_ONLY_FILTERS = ("file_path", "domain", "ip", "hash", "url", "severity", "finding_id", "process_node_id", "platform", "key_events_only", "risk_min")
+_VOLATILITY_EVENT_CATEGORY = {"processes": "process", "network": "network", "suspicious": "memory", "shell": "process"}
+# How many Volatility events one Timeline page merges at most.
+_MAX_MEMORY_TIMELINE_ROWS = 5000
+
+
+def _volatility_timeline_rows(db: Session, case_id: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Dated Volatility events (process start/exit, network connections, suspicious memory, timed
+    shell commands) of the case's memory images, as lightweight Timeline rows. They live in the
+    memory index, not the events index, so search_events_v2 never returns them."""
+    from app.services.investigation_memory import _evidence_host_name, memory_evidences
+    from app.services.memory.evidence_timeline import VOLATILITY_ARTIFACT_TYPES, VOLATILITY_KINDS, _volatility_items
+
+    if wants_non_memory_source(params) or any(params.get(key) for key in _EVENT_ONLY_FILTERS):
+        return []
+    try:
+        evidences = memory_evidences(db, case_id, params.get("evidence_id"))
+    except HTTPException:
+        return []
+    time_from = _parse_time(params.get("time_from")) if params.get("time_from") else None
+    time_to = _parse_time(params.get("time_to")) if params.get("time_to") else None
+    text = str(params.get("q") or "").strip().lower()
+    process_name = str(params.get("process_name") or "").strip().lower()
+    rows: list[dict[str, Any]] = []
+    for evidence in evidences:
+        host = _evidence_host_name(db, evidence)
+        for item in _volatility_items(db, case_id, str(evidence.id), set(VOLATILITY_KINDS)):
+            moment = _parse_time(item["timestamp"])
+            if moment is None or (time_from and moment < time_from) or (time_to and moment > time_to):
+                continue
+            if process_name and str(item.get("process_name") or "").lower() != process_name:
+                continue
+            if text and text not in " ".join(str(item.get(key) or "") for key in ("title", "summary", "process_name", "pid")).lower():
+                continue
+            artifact_type = VOLATILITY_ARTIFACT_TYPES[item["kind"]]
+            row = {
+                "id": f"memory:{item['id']}",
+                "kind": "event",
+                "timestamp": item["timestamp"],
+                "time_bucket": None,
+                "title": item.get("title"),
+                "summary": item.get("summary") or item.get("title"),
+                "artifact_type": artifact_type,
+                "parser": item.get("source"),
+                "event_type": item.get("event_type"),
+                "event_category": _VOLATILITY_EVENT_CATEGORY[item["kind"]],
+                "risk_score": 0,
+                "severity": None,
+                "host": host,
+                "user": None,
+                "evidence_id": str(evidence.id),
+                "source_file": None,
+                "source_category": "Memory",
+                "key_entity": item.get("process_name"),
+                "related_finding_ids": [],
+                "related_process_node_ids": [],
+                "is_key_event": False,
+                "bookmark": None,
+                "data_quality": [],
+                "raw": {
+                    "evidence_id": str(evidence.id),
+                    "case_id": case_id,
+                    "source_category": "Memory",
+                    "memory_run_id": item.get("run_id"),
+                    "artifact": {"type": artifact_type, "parser": item.get("source")},
+                    "process": {"pid": item.get("pid"), "name": item.get("process_name")},
+                },
+            }
+            if _matches_timeline_filters(row, params):
+                rows.append(row)
+    return rows
+
+
+def _merged_lightweight_page(case_id: str, event_params: dict[str, Any], memory_rows: list[dict[str, Any]], *, offset: int, page_size: int, descending: bool, db: Session) -> tuple[int, list[dict[str, Any]], list[str]]:
+    """One page of the events index's timeline merged with Volatility's memory events.
+
+    The memory events are few (hundreds) and all in hand; the events can be hundreds of thousands
+    and are read as one window: the merged page [offset, offset+n) needs event rows from index
+    offset-m to offset+n (m memory events can come before it), plus one row before that window
+    to place the memory events that fall before it. On equal times event rows come first.
+    """
+    warnings: list[str] = []
+
+    def key(row: dict[str, Any]) -> datetime:
+        return _parse_time(str(row.get("timestamp") or "")) or datetime.min.replace(tzinfo=UTC)
+
+    memory_rows = sorted(memory_rows, key=lambda row: (key(row), row["id"]), reverse=descending)
+    if len(memory_rows) > _MAX_MEMORY_TIMELINE_ROWS:
+        warnings.append(f"Showing the first {_MAX_MEMORY_TIMELINE_ROWS} of {len(memory_rows)} memory (Volatility) events in this view. Narrow by host, evidence or time range to reach the rest.")
+        memory_rows = memory_rows[:_MAX_MEMORY_TIMELINE_ROWS]
+    m = len(memory_rows)
+    start = max(0, offset - m - 1)
+    window_params = {**event_params, "cursor": _encode_cursor(start), "page": None, "page_size": page_size + m + 1, "_page_size_limit": page_size + m + 1}
+    total_events, event_rows, event_warnings, _ = search_events_v2(case_id, window_params, db=db)
+    warnings.extend(event_warnings)
+    window = [_compact_event_row_lightweight(row) for row in event_rows if row.get("timestamp")]
+
+    def before(a: datetime, b: datetime) -> bool:
+        return a > b if descending else a < b
+
+    placed: list[tuple[int, int, dict[str, Any]]] = []
+    for index, row in enumerate(window):
+        moment = key(row)
+        placed.append((start + index + sum(1 for memory_row in memory_rows if before(key(memory_row), moment)), 0, row))
+    first = key(window[0]) if window else None
+    for index, row in enumerate(memory_rows):
+        moment = key(row)
+        if start > 0 and first is not None and before(moment, first):
+            continue  # before the window: on an earlier page
+        events_before = start + sum(1 for event_row in window if not before(moment, key(event_row)))
+        placed.append((index + events_before, 1, row))
+    page = [row for position, _, row in sorted(placed, key=lambda item: (item[0], item[1])) if offset <= position < offset + page_size]
+    return total_events + m, page, warnings
+
+
 def build_lightweight_timeline_response(db: Session, case_id: str, params: dict[str, Any]) -> dict[str, Any]:
     mode = str(params.get("mode") or "full")
     sort = str(params.get("sort") or "timestamp_desc")
@@ -1993,8 +2111,12 @@ def build_lightweight_timeline_response(db: Session, case_id: str, params: dict[
         "include_low_confidence_timestamps": False,
         "sort": sort,
     }
-    total, event_rows, warnings, _ = search_events_v2(case_id, event_params, db=db)
-    page_items = [_compact_event_row_lightweight(row) for row in event_rows if row.get("timestamp")]
+    memory_rows = _volatility_timeline_rows(db, case_id, params) if sort in ("timestamp_asc", "timestamp_desc") else []
+    if memory_rows:
+        total, page_items, warnings = _merged_lightweight_page(case_id, event_params, memory_rows, offset=offset, page_size=page_size, descending=sort == "timestamp_desc", db=db)
+    else:
+        total, event_rows, warnings, _ = search_events_v2(case_id, event_params, db=db)
+        page_items = [_compact_event_row_lightweight(row) for row in event_rows if row.get("timestamp")]
     window_from = _parse_time(params.get("time_from")) if params.get("time_from") else None
     window_to = _parse_time(params.get("time_to")) if params.get("time_to") else None
     has_text_query = bool(str(params.get("q") or "").strip())

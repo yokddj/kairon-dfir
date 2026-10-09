@@ -1288,6 +1288,7 @@ export default function ArtifactExplorer() {
                 <option value="defender_config">Defender config</option>
                 <option value="wmi">WMI</option>
                 <option value="command_history">Command evidence</option>
+                <option value="memory">Memory (MemProcFS)</option>
               </select>
               <select value={persistenceRiskMin} onChange={(event) => setPersistenceRiskMin(event.target.value)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm">
                 <option value="">Any risk</option>
