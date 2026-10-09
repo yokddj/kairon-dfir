@@ -244,18 +244,13 @@ def timeline_events(directory: Path, *, case_id: str, evidence_id: str, scan_run
 
 
 def _delete_previous(case_id: str, evidence_id: str) -> int:
-    from app.core.opensearch import get_events_index, get_opensearch_client, index_exists
+    from app.core.opensearch import delete_by_query_and_wait, get_events_index, get_opensearch_client, index_exists
 
     client = get_opensearch_client(timeout_seconds=300)
     index = get_events_index(case_id)
     if not index_exists(client, index):
         return 0
-    response = client.delete_by_query(
-        index=index,
-        body={"query": {"bool": {"filter": [{"term": {"evidence_id": evidence_id}}, {"term": {"artifact.parser": PARSER}}]}}},
-        params={"refresh": "true", "conflicts": "proceed", "ignore_unavailable": "true"},
-    )
-    return int(response.get("deleted") or 0)
+    return delete_by_query_and_wait(client, index, {"bool": {"filter": [{"term": {"evidence_id": evidence_id}}, {"term": {"artifact.parser": PARSER}}]}})
 
 
 def index_memprocfs_timeline(directory: Path, *, case_id: str, evidence_id: str, scan_run_id: str) -> dict[str, Any]:
