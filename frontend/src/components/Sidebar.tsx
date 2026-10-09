@@ -2,6 +2,7 @@ import {
   BookOpen,
   Bot,
   Compass,
+  Cpu,
   Database,
   FileArchive,
   Fingerprint,
@@ -11,6 +12,8 @@ import {
   Home,
   KeyRound,
   LogOut,
+  Network,
+  ShieldCheck,
   Search,
   ShieldAlert,
   SquareTerminal,
@@ -19,10 +22,9 @@ import {
   Waypoints,
 } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { api, type CaseCapabilitiesResponse } from "../api/client";
+import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useAuth } from "../context/AuthContext";
-import { resolveSurfaceIcon } from "../lib/surfaceIcons";
 import { useQuery } from "@tanstack/react-query";
 
 type NavItem = {
@@ -31,6 +33,9 @@ type NavItem = {
   icon: typeof Home;
   requiresCase?: boolean;
   description?: string;
+  // Shown only when the case has evidence of this kind (a workbench id of the capability
+  // registry: "windows", "linux", "memory"). Every view is one click away, with no submenus.
+  workbench?: string;
 };
 
 const INVESTIGATION_ITEMS: NavItem[] = [
@@ -47,11 +52,35 @@ const INVESTIGATION_ITEMS: NavItem[] = [
     description: "Every command found in the case, from disk and memory: process creation and PowerShell events, shell history files, console history and process command lines recovered from memory.",
   },
   {
+    to: "/cases/:caseId/w/execution/stories",
+    label: "Execution Stories",
+    icon: Network,
+    requiresCase: true,
+    workbench: "windows",
+    description: "Execution graph of the case: Windows process trees and what each process did, scoped by host and evidence.",
+  },
+  {
+    to: "/cases/:caseId/l/access/authentication",
+    label: "Linux Authentication",
+    icon: ShieldCheck,
+    requiresCase: true,
+    workbench: "linux",
+    description: "Logins, failed attempts, sudo and SSH activity from Linux authentication logs.",
+  },
+  {
     to: "/cases/:caseId/tables",
     label: "Source Tables",
     icon: Table2,
     requiresCase: true,
     description: "CSV files indexed whole, with all their columns, to sort and filter like Timeline Explorer.",
+  },
+  {
+    to: "/cases/:caseId/m",
+    label: "Memory",
+    icon: Cpu,
+    requiresCase: true,
+    workbench: "memory",
+    description: "Memory images of the case: processes, Find Evil, shell history, network, timeline and the rest of the memory analysis.",
   },
   {
     to: "/cases/:caseId/timeline",
@@ -122,34 +151,6 @@ function SidebarLink({ item, activeCaseId }: { item: NavItem; activeCaseId: stri
   );
 }
 
-// One row per Investigation Surface (Navigation RFC Tier 1 entry point).
-// The row navigates straight to the surface's Surface Home
-// (workbench.overview_route, already case-scoped by the backend) -- no
-// domain/capability depth is rendered here; that lives inside the Surface
-// Home page itself. Default (non-`end`) NavLink matching already marks this
-// row active both on the Surface Home itself and on any deeper route that
-// belongs to that surface (e.g. /w/execution/stories under /w), since
-// overview_route is always a strict path-segment prefix of every route the
-// registry declares for that surface.
-function SurfaceRow({ workbench }: { workbench: CaseCapabilitiesResponse["workbenches"][number] }) {
-  if (!workbench.overview_route) return null;
-  const Icon = resolveSurfaceIcon(workbench.icon);
-  return (
-    <NavLink
-      to={workbench.overview_route}
-      data-testid={`surface-${workbench.id}`}
-      className={({ isActive }) =>
-        `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${
-          isActive ? "bg-accent/10 text-accent shadow-panel" : "text-muted hover:bg-white/5 hover:text-ink"
-        }`
-      }
-    >
-      <Icon size={16} />
-      {workbench.label}
-    </NavLink>
-  );
-}
-
 function NavigationSection({ title, items, activeCaseId }: { title: string; items: NavItem[]; activeCaseId: string }) {
   return (
     <section className="space-y-2">
@@ -172,7 +173,13 @@ export default function Sidebar() {
     staleTime: 15_000,
     refetchOnWindowFocus: false,
   });
-  const workbenches = capabilitiesQuery.data?.workbenches ?? [];
+  // Views that exist only for some evidence (Memory, Execution Stories, Linux Authentication) are
+  // listed once the registry says the case has that evidence; if the registry cannot be read,
+  // they are all listed rather than hidden.
+  const presentWorkbenches = new Set((capabilitiesQuery.data?.workbenches ?? []).map((workbench) => workbench.id));
+  const investigationItems = INVESTIGATION_ITEMS.filter(
+    (item) => !item.workbench || capabilitiesQuery.isError || presentWorkbenches.has(item.workbench),
+  );
 
   return (
     <aside className="hidden min-h-screen w-64 shrink-0 overflow-y-auto border-r border-line/80 bg-panel/70 px-4 py-5 backdrop-blur lg:block">
@@ -197,18 +204,7 @@ export default function Sidebar() {
           Cases
         </NavLink>
 
-        <NavigationSection title="Investigation" items={INVESTIGATION_ITEMS} activeCaseId={activeCaseId} />
-
-        {activeCaseId && capabilitiesQuery.isLoading ? <p className="px-4 text-xs text-muted" role="status">Loading workbenches...</p> : null}
-        {activeCaseId && capabilitiesQuery.isError ? <p className="px-4 text-xs text-danger" role="alert">Capability registry unavailable.</p> : null}
-        {activeCaseId && workbenches.length ? (
-          <section className="space-y-2" aria-label="Investigation Surfaces">
-            <p className="px-4 font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Investigation Surfaces</p>
-            <div className="space-y-1">
-              {workbenches.map((workbench) => <SurfaceRow key={workbench.id} workbench={workbench} />)}
-            </div>
-          </section>
-        ) : null}
+        <NavigationSection title="Investigation" items={investigationItems} activeCaseId={activeCaseId} />
       </nav>
 
       <div className="mt-auto border-t border-line/80 pt-5">
