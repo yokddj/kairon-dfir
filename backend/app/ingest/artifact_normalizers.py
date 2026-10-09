@@ -4220,10 +4220,6 @@ def normalize_netscaler_row(doc: dict, row: dict, *, source_path: str = "", arti
     netscaler_data["ns_version"] = row.get("ns_version", "")
     netscaler_data["ns_build"] = row.get("ns_build", "")
     netscaler_data["message"] = row.get("message", "")
-    netscaler_data["finding_type"] = row.get("finding_type", "")
-    netscaler_data["severity"] = row.get("severity", "")
-    netscaler_data["reasons"] = row.get("reasons") or []
-    netscaler_data["sha256"] = row.get("sha256", "")
     # "set ns hostName <name>" rows (see app.ingest.netscaler.config) carry
     # their own row["hostname"] -- the real host identity, not a filename/
     # path guess -- and take priority over whatever detected_host (the
@@ -4247,9 +4243,6 @@ def normalize_netscaler_row(doc: dict, row: dict, *, source_path: str = "", arti
     doc["event"]["type"] = netscaler_data.get("artifact_type", "netscaler_record")
     doc["event"]["action"] = netscaler_data.get("command_verb", "") or netscaler_data.get("artifact_type", "")
     doc["event"]["message"] = netscaler_data.get("message", "")
-    if netscaler_data.get("severity"):
-        doc["event"]["severity"] = netscaler_data["severity"]
-        doc["event"]["type"] = netscaler_data.get("finding_type") or doc["event"]["type"]
     doc["title"] = netscaler_data.get("message") or "NetScaler config command"
     return doc
 

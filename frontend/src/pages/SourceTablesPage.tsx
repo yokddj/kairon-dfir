@@ -11,6 +11,7 @@ import {
   type SourceTableFilterOp,
   type SourceTableQuery,
 } from "../api/client";
+import EvidenceSourceTablesPanel from "../components/EvidenceSourceTablesPanel";
 import ColumnResizeHandle from "../components/table/ColumnResizeHandle";
 import { useResizableColumns } from "../components/table/useResizableColumns";
 import { InvestigationBreadcrumbs } from "../components/InvestigationContext";
@@ -102,14 +103,15 @@ function SourceTableList({ caseId }: { caseId: string }) {
         <h2 className="text-2xl font-semibold">Source Tables</h2>
       </div>
       <p className="mt-2 max-w-3xl text-sm text-muted">
-        CSV and TSV files indexed whole, with every column they bring, to sort and filter like a spreadsheet. Turn it on in the evidence wizard for every CSV of an
-        upload, or per file from the evidence detail. These rows are separate from Search, so nothing shows up twice.
+        CSV and TSV files indexed whole, with every column they bring, to sort and filter like a spreadsheet. Pick any CSV of the case under{" "}
+        <span className="text-ink">Add a CSV</span> below (or turn it on for a whole upload in the evidence wizard). These rows are separate from Search, so nothing
+        shows up twice.
       </p>
       {query.isLoading ? <p className="mt-6 text-sm text-muted">Loading…</p> : null}
       {query.error ? <p className="mt-6 text-sm text-red-300">{(query.error as Error).message}</p> : null}
       {!query.isLoading && !items.length ? (
         <p className="mt-6 rounded-2xl border border-dashed border-line p-6 text-sm text-muted">
-          No source tables yet. Open an evidence with CSV files and choose <span className="text-ink">Full table</span> on a file.
+          No source tables yet. Choose <span className="text-ink">Full table</span> on a CSV below.
         </p>
       ) : null}
       {items.length ? (
@@ -162,7 +164,28 @@ function SourceTableList({ caseId }: { caseId: string }) {
           </table>
         </div>
       ) : null}
+      <CsvCandidates caseId={caseId} />
     </section>
+  );
+}
+
+// Every CSV/TSV of the case without a table yet, grouped by evidence, one click from a table.
+function CsvCandidates({ caseId }: { caseId: string }) {
+  const evidencesQuery = useQuery({ queryKey: ["case-evidences", caseId], queryFn: () => api.listEvidences(caseId) });
+  const artifactsQuery = useQuery({ queryKey: ["case-artifacts", caseId], queryFn: () => api.listArtifacts(caseId) });
+  const withCsv = new Set((artifactsQuery.data ?? []).filter((artifact) => /\.(csv|tsv)$/i.test(artifact.source_path)).map((artifact) => artifact.evidence_id));
+  const evidences = (evidencesQuery.data ?? []).filter((evidence) => withCsv.has(evidence.id));
+  if (!evidences.length) return null;
+  return (
+    <div className="mt-8" data-testid="source-table-add">
+      <h3 className="text-lg font-semibold text-ink">Add a CSV</h3>
+      <p className="mt-1 text-sm text-muted">CSV and TSV files of the case that have no table yet.</p>
+      <div className="mt-3 space-y-3">
+        {evidences.map((evidence) => (
+          <EvidenceSourceTablesPanel key={evidence.id} caseId={caseId} evidenceId={evidence.id} evidenceName={evidence.original_filename} onlyMissing />
+        ))}
+      </div>
+    </div>
   );
 }
 

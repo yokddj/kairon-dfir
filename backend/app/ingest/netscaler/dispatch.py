@@ -1,7 +1,7 @@
 """NetScaler parser dispatch helpers -- mirrors app.ingest.linux.dispatch's
-shape (one registry entry per parser key, routed by module+function) so a
-second file type (snmpd.conf, ssh host keys, ...) can be added the same
-way later without a new dispatch mechanism.
+shape (one registry entry per parser key, routed by module+function) so
+another NetScaler file type can be added the same way without a new
+dispatch mechanism.
 """
 from __future__ import annotations
 
@@ -30,11 +30,6 @@ class NetscalerParserTarget:
 
 NETSCALER_PARSER_TARGETS: dict[str, NetscalerParserTarget] = {
     "netscaler_config_raw": NetscalerParserTarget("netscaler_config_raw", "config", "parse_ns_conf"),
-    "netscaler_webshell_scan_raw": NetscalerParserTarget("netscaler_webshell_scan_raw", "compromise_indicators", "scan_logonpoint_custom_file"),
-    "netscaler_httpd_conf_raw": NetscalerParserTarget("netscaler_httpd_conf_raw", "compromise_indicators", "parse_httpd_conf_for_tampering"),
-    "netscaler_ns_log_raw": NetscalerParserTarget("netscaler_ns_log_raw", "compromise_indicators", "parse_ns_log_for_exploitation"),
-    "netscaler_httpaccess_vpn_log_raw": NetscalerParserTarget("netscaler_httpaccess_vpn_log_raw", "compromise_indicators", "parse_httpaccess_vpn_log_for_payloads"),
-    "netscaler_deb_hash_raw": NetscalerParserTarget("netscaler_deb_hash_raw", "compromise_indicators", "check_deb_hash", binary=True),
 }
 
 
