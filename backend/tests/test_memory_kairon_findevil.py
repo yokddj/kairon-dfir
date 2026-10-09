@@ -201,6 +201,8 @@ def test_memprocfs_child_gives_up_on_a_stalled_scan(monkeypatch, capsys) -> None
             _Lib.closed = True
 
     clock = {"now": 0.0}
+    monkeypatch.setattr(child._Watchdog, "start", lambda self: None)  # checks run from the loop here
+    monkeypatch.setattr(child, "_die_with_parent", lambda: None)
     monkeypatch.setattr(child, "_load", lambda library: _Lib())
     monkeypatch.setattr(child, "_read", lambda lib, handle, path, limit: b"90")
     monkeypatch.setattr(child.time, "monotonic", lambda: clock["now"])
@@ -219,6 +221,31 @@ def test_memprocfs_child_gives_up_on_a_stalled_scan(monkeypatch, capsys) -> None
     assert clock["now"] < 120  # gave up after the stall window, not after the whole scan timeout
     assert closed_at_exit == [False]  # left without VMMDLL_Close, which would wait forever
     assert "stopped making progress at 90%" in capsys.readouterr().err
+
+
+def test_memprocfs_watchdog_thread_ends_a_child_stuck_in_native_code(tmp_path) -> None:
+    """The main thread never comes back from the library; the watchdog thread still ends it."""
+    import subprocess
+    import sys
+    import textwrap
+
+    script = tmp_path / "stuck.py"
+    script.write_text(textwrap.dedent("""
+        import time
+        from app.services.memory import memprocfs_findevil as child
+        watchdog = child._Watchdog(scan_timeout=1, stall_timeout=600)
+        watchdog.start()
+        time.sleep(60)  # stands in for a MemProcFS call that never returns
+    """))
+    started = __import__("time").monotonic()
+    import os
+    from pathlib import Path
+
+    backend = str(Path(__file__).resolve().parents[1])
+    done = subprocess.run([sys.executable, str(script)], capture_output=True, timeout=30, cwd=backend, env={**os.environ, "PYTHONPATH": backend})
+    assert done.returncode == 5
+    assert __import__("time").monotonic() - started < 20
+    assert b"did not finish in time" in done.stderr
 
 
 # --- Shell history: windows.cmdscan rows and duplicates of windows.consoles ---
