@@ -192,15 +192,13 @@ describe("Ambiguous memory confirmation and run-all connectivity v1", () => {
     expect(details.textContent).toContain("XP-LAPTOP");
   });
 
-  it("submit button is disabled until checkbox + reason are both provided", async () => {
+  it("submit button is disabled until a reason is given", async () => {
     renderPage();
     await waitFor(() => screen.getByTestId("memory-header-confirm-button"));
     fireEvent.click(screen.getByTestId("memory-header-confirm-button"));
     await waitFor(() => screen.getByTestId("memory-type-confirmation-modal"));
     const confirm = screen.getByTestId("memory-type-confirmation-confirm");
     expect(confirm.hasAttribute("disabled")).toBe(true);
-    // Check the checkbox
-    fireEvent.click(screen.getByTestId("memory-type-confirmation-checkbox"));
     expect(confirm.hasAttribute("disabled")).toBe(true);
     // Add a reason
     fireEvent.change(screen.getByTestId("memory-type-confirmation-reason"), {
@@ -214,7 +212,6 @@ describe("Ambiguous memory confirmation and run-all connectivity v1", () => {
     await waitFor(() => screen.getByTestId("memory-header-confirm-button"));
     fireEvent.click(screen.getByTestId("memory-header-confirm-button"));
     await waitFor(() => screen.getByTestId("memory-type-confirmation-modal"));
-    fireEvent.click(screen.getByTestId("memory-type-confirmation-checkbox"));
     fireEvent.change(screen.getByTestId("memory-type-confirmation-reason"), {
       target: { value: "Captured with WinPmem" },
     });
@@ -229,17 +226,17 @@ describe("Ambiguous memory confirmation and run-all connectivity v1", () => {
     });
   });
 
-  it("does NOT call the API when reason or checkbox is empty", async () => {
+  it("does NOT call the API when the reason is empty", async () => {
     renderPage();
     await waitFor(() => screen.getByTestId("memory-header-confirm-button"));
     fireEvent.click(screen.getByTestId("memory-header-confirm-button"));
     await waitFor(() => screen.getByTestId("memory-type-confirmation-modal"));
-    // Try to submit without checking
     fireEvent.change(screen.getByTestId("memory-type-confirmation-reason"), {
-      target: { value: "test reason" },
+      target: { value: "   " },
     });
     fireEvent.click(screen.getByTestId("memory-type-confirmation-confirm"));
     expect(confirmMemoryTypeMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("memory-type-confirmation-checkbox")).toBeNull();
   });
 
   it("modal hides technical endpoint paths from the user", () => {
@@ -255,7 +252,6 @@ describe("Ambiguous memory confirmation and run-all connectivity v1", () => {
     await waitFor(() => screen.getByTestId("memory-header-confirm-button"));
     fireEvent.click(screen.getByTestId("memory-header-confirm-button"));
     await waitFor(() => screen.getByTestId("memory-type-confirmation-modal"));
-    fireEvent.click(screen.getByTestId("memory-type-confirmation-checkbox"));
     fireEvent.change(screen.getByTestId("memory-type-confirmation-reason"), {
       target: { value: "x" },
     });

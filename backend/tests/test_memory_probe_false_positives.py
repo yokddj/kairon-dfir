@@ -351,18 +351,18 @@ def test_probable_disk_confirmation_requires_reason(db: Session) -> None:
     assert exc.value.status_code == 400
 
 
-def test_probable_disk_confirmation_requires_authorization(db: Session) -> None:
-    """The confirm endpoint requires authorization for probable_disk too."""
+def test_probable_disk_confirmation_needs_a_reason_not_a_checkbox(db: Session) -> None:
+    """Confirming probable_disk needs a reason; no authorization checkbox."""
     from app.api.routes_evidence import confirm_memory_type
     from fastapi import HTTPException
     case = _make_case(db)
     ev = _make_evidence(db, case.id, detection_status="probable_disk")
     with pytest.raises(HTTPException) as exc:
-        confirm_memory_type(
-            case_id=case.id, evidence_id=ev.id,
-            payload={"reason": "x"}, db=db,
-        )
+        confirm_memory_type(case_id=case.id, evidence_id=ev.id, payload={"reason": "  "}, db=db)
     assert exc.value.status_code == 400
+    confirm_memory_type(case_id=case.id, evidence_id=ev.id, payload={"reason": "x"}, db=db)
+    db.refresh(ev)
+    assert ev.operator_override is True
 
 
 def test_confirmation_does_not_create_run(db: Session) -> None:

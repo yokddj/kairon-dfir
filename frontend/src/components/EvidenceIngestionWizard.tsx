@@ -283,7 +283,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [manualOverrideAccepted, setManualOverrideAccepted] = useState(false);
   const [forcedRoutes, setForcedRoutes] = useState<Record<string, ForcedRoute>>({});
   const [wrongRouteAccepted, setWrongRouteAccepted] = useState<Record<string, boolean>>({});
-  const [memoryAuthorizationAcknowledged, setMemoryAuthorizationAcknowledged] = useState(false);
+  // Uploading and analysing RAM needs no extra checkbox: case access already decides who may.
+  const memoryAuthorizationAcknowledged = true;
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [selectionAdvancedOpen, setSelectionAdvancedOpen] = useState(false);
   const [processingMode, setProcessingMode] = useState<ProcessingMode>("recommended");
@@ -432,7 +433,6 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setManualOverrideAccepted(false);
     setForcedRoutes({});
     setWrongRouteAccepted({});
-    setMemoryAuthorizationAcknowledged(false);
     setAdvancedOpen(false);
     setSelectionAdvancedOpen(false);
     setProcessingMode("recommended");
@@ -1105,7 +1105,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     const detected = routeForCategory(report.classification.category);
     return forced && detected && forced !== detected && [forced, detected].includes("disk_image") && [forced, detected].includes("memory_dump") && !wrongRouteAccepted[report.token];
   });
-  const canStartProcessing = !startMutation.isPending && !(hasMemoryEvidence && !memoryAuthorizationAcknowledged) && hostAssignmentBlockingReason === null && !overrideBlocking && !wrongRouteBlocking;
+  const canStartProcessing = !startMutation.isPending && hostAssignmentBlockingReason === null && !overrideBlocking && !wrongRouteBlocking;
   const selectedHostName = hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE
     ? caseHosts.find((h) => h.id === hostChoice)?.display_name || "Selected host"
     : null;
@@ -1772,13 +1772,6 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
               </div>
             ) : readyToProcess ? (
               <p className="mt-4 text-sm font-semibold text-mint">Ready to process</p>
-            ) : null}
-
-            {hasMemoryEvidence ? (
-              <label className="mt-4 flex items-start gap-2 rounded-2xl border border-amber/40 bg-amber/10 p-4 text-sm text-ink">
-                <input type="checkbox" className="mt-1" checked={memoryAuthorizationAcknowledged} onChange={(event) => setMemoryAuthorizationAcknowledged(event.target.checked)} />
-                I am authorized to handle this RAM evidence and understand it may contain highly sensitive data.
-              </label>
             ) : null}
 
             <details className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen((event.target as HTMLDetailsElement).open)}>

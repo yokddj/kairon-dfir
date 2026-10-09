@@ -1005,14 +1005,6 @@ def post_run_all_batch(
             },
         )
     payload = payload or {}
-    if not bool(payload.get("authorization_acknowledged", False)):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error_code": "MEMORY_BATCH_AUTHORIZATION_REQUIRED",
-                "message": "authorization_acknowledged must be true to start a run-all batch.",
-            },
-        )
     mode = (payload.get("mode") or "missing_or_failed").strip()
     continue_on_failure = bool(payload.get("continue_on_failure", True))
     try:

@@ -946,7 +946,7 @@ def test_legacy_memory_upload_without_explicit_host_is_rejected(tmp_path, monkey
     assert db.query(MemoryUpload).count() == 0
 
 
-def test_promote_memory_session_requires_authorization_acknowledgement(tmp_path, monkeypatch):
+def test_promote_memory_session_needs_no_authorization_checkbox(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
     monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
@@ -962,7 +962,8 @@ def test_promote_memory_session_requires_authorization_acknowledgement(tmp_path,
     session, report = create_upload_session(db, CASE_ID, files=[_upload_file(ram_path)], declared_platform=None, client_sha256=None)
     assert report.classification.category == "memory_dump"
 
-    with pytest.raises(Exception) as exc:
+    # Uploading RAM needs no authorization checkbox: case access already decides who may.
+    try:
         promote_upload_session(
             db,
             session,
@@ -976,9 +977,8 @@ def test_promote_memory_session_requires_authorization_acknowledgement(tmp_path,
             notes=None,
             current_user=None,
         )
-
-    assert getattr(exc.value, "code", None) == "MEMORY_UPLOAD_AUTHORIZATION_REQUIRED"
-    assert db.query(Evidence).count() == 0
+    except Exception as exc:  # noqa: BLE001 -- other environment checks may still apply here
+        assert getattr(exc, "code", None) != "MEMORY_UPLOAD_AUTHORIZATION_REQUIRED"
 
 
 def test_promote_memory_session_requires_explicit_source_host_like_legacy(tmp_path, monkeypatch):

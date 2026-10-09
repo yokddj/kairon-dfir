@@ -767,23 +767,18 @@ def test_arbitrary_profile_injection_rejected(db: Session) -> None:
 # ---------- 22. Authorization is required ----------
 
 
-def test_authorization_required(db: Session) -> None:
+def test_no_authorization_checkbox_needed(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
-
-    def fake_enqueue(run_id: str) -> str:
-        return f"rq-{run_id}"
-
-    with pytest.raises(MemoryBatchError) as excinfo:
-        create_run_all_batch(
-            db,
-            case_id=case.id,
-            evidence_id=ev.id,
-            mode="rerun_all",
-            authorization_acknowledged=False,
-            continue_on_failure=True,
-            enqueue_fn=fake_enqueue,
-        )
-    assert excinfo.value.code == "MEMORY_BATCH_AUTHORIZATION_REQUIRED"
+    result = create_run_all_batch(
+        db,
+        case_id=case.id,
+        evidence_id=ev.id,
+        mode="rerun_all",
+        authorization_acknowledged=False,
+        continue_on_failure=True,
+        enqueue_fn=lambda run_id: f"rq-{run_id}",
+    )
+    assert result["batch"].status == "running"
 
 
 def test_missing_preparation_does_not_block_run_all(db: Session) -> None:

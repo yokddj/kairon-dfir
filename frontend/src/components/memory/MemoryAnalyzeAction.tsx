@@ -36,18 +36,14 @@ type Props = {
   volatilityBackend: MemoryBackendStatus | null;
 };
 
-function AuthorizationCopy(): string {
-  return "I confirm that I own this memory image or am explicitly authorized to analyze it, and I understand that RAM may contain sensitive personal or authentication data.";
-}
-
 function ProfileCopy({ profile }: { profile: Profile }): string {
   if (profile === "processes_basic") {
-    return "This will analyze the selected authorized memory image using the externally configured Volatility 3 backend and the windows.info, windows.pslist, windows.pstree, and windows.cmdline plugins.";
+    return "This will analyze the selected memory image using the externally configured Volatility 3 backend and the windows.info, windows.pslist, windows.pstree, and windows.cmdline plugins.";
   }
   if (profile === "processes_extended") {
     return "This also runs windows.psscan, which may return additional process structures requiring analyst interpretation.";
   }
-  return "This will analyze the selected authorized memory image using the externally configured Volatility 3 backend and the windows.info metadata plugin.";
+  return "This will analyze the selected memory image using the externally configured Volatility 3 backend and the windows.info metadata plugin.";
 }
 
 export function MemoryAnalyzeAction({
@@ -85,7 +81,6 @@ export function MemoryAnalyzeAction({
 
   function handleRun() {
     if (!evidence) return;
-    if (!window.confirm(AuthorizationCopy())) return;
     if (!window.confirm(ProfileCopy({ profile }))) return;
     startMutation.mutate({ evidenceId: evidence.id, profile });
   }
@@ -99,7 +94,7 @@ export function MemoryAnalyzeAction({
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Analyze memory</h3>
           <p className="mt-1 text-xs text-muted">
-            Pick an analysis profile and confirm authorization. The selected profile runs against the active memory evidence.
+            Pick an analysis profile. The selected profile runs against the active memory evidence.
           </p>
         </div>
         <div className="flex flex-wrap gap-2 text-[10px]">

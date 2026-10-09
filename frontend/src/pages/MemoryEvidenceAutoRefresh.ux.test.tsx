@@ -222,8 +222,6 @@ describe("Memory evidence auto-refresh", () => {
     const modal = await screen.findByTestId("memory-type-confirmation-modal");
     expect(modal).toBeInTheDocument();
 
-    const checkbox = screen.getByTestId("memory-type-confirmation-checkbox");
-    fireEvent.click(checkbox);
     const reasonInput = screen.getByTestId("memory-type-confirmation-reason");
     fireEvent.change(reasonInput, { target: { value: "This is a valid memory image" } });
     const modalConfirmBtn = screen.getByTestId("memory-type-confirmation-confirm");
