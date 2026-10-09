@@ -22,4 +22,6 @@ The image also installs MemProcFS's Linux release binaries, used for the FindEvi
 - Archives: `MemProcFS_files_and_binaries_v5.19.0-linux_x64-20261005.tar.gz` (SHA-256 `2ec75bba2a243525a16be22d1ea6863c9fcd4de694c07e4896d4029017c43ea5`) and `…-linux_aarch64-20261005.tar.gz` (SHA-256 `03554471c1702d73f2b83c22e2483b0e110b04399fc399c07fc4f7a47827c3a5`), from the project's GitHub release; the build checks the hash before unpacking.
 - License: GNU Affero General Public License v3.0; bundled components keep their own licenses (listed in `license_info_all.txt`). All are copied to `/licenses/memprocfs/`.
 
-Kairon does not vendor or modify MemProcFS in this repository; it loads the unmodified library at run time in a separate process.
+- Modified file: `vmm.so` is rebuilt from the source of that release (commit `2e85ff7edc3772e24bce28bdc4cccb744a8b2456`, archive SHA-256 `8916c442d1a7de667aebaa6c34e69a43325e474e003da89a6881f3961a4b2048`) with the patches in `docker/memory-worker/patches/` applied: `memprocfs-netdns-lookup-loop.patch` fixes a loop that never ends while locating the DNS cache on Windows 11+ (an inner loop reused the outer loop's index), which kept the forensic scan at 90 % and FindEvil from finishing. The patches are the complete source of the changes, under the same AGPL-3.0 license. Every other file is the unmodified release.
+
+Kairon does not vendor MemProcFS source in this repository; the library is loaded at run time in a separate process.

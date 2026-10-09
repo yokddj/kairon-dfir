@@ -8,6 +8,10 @@ ARG MEMPROCFS_TAG=v5.19
 ARG MEMPROCFS_BUILD=20261005
 ARG MEMPROCFS_SHA256_AMD64=2ec75bba2a243525a16be22d1ea6863c9fcd4de694c07e4896d4029017c43ea5
 ARG MEMPROCFS_SHA256_ARM64=03554471c1702d73f2b83c22e2483b0e110b04399fc399c07fc4f7a47827c3a5
+# vmm.so is rebuilt from the source of that same release with docker/memory-worker/patches applied
+# (a fix for a lookup that never ends on Windows 11+, see the patch). Pinned by commit and SHA-256.
+ARG MEMPROCFS_SOURCE_COMMIT=2e85ff7edc3772e24bce28bdc4cccb744a8b2456
+ARG MEMPROCFS_SOURCE_SHA256=8916c442d1a7de667aebaa6c34e69a43325e474e003da89a6881f3961a4b2048
 ARG TARGETARCH
 ARG KAIRON_COMMIT=unknown
 ARG BUILD_DATE=unknown
@@ -19,7 +23,7 @@ LABEL org.opencontainers.image.title="Kairon optional Volatility memory worker" 
       org.opencontainers.image.licenses="Kairon project license: see repository LICENSE; bundled-at-build dependency: Volatility 3, Volatility Software License 1.0" \
       org.opencontainers.image.version="${BUILD_DATE}" \
       org.kairon.volatility3.version="${VOLATILITY3_VERSION}" \
-      org.kairon.memprocfs.version="${MEMPROCFS_VERSION}"
+      org.kairon.memprocfs.version="${MEMPROCFS_VERSION}+kairon-patches"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -56,6 +60,22 @@ RUN set -eu; \
     cp /opt/memprocfs/LICENSE.txt /opt/memprocfs/license_*.txt /licenses/memprocfs/; \
     chmod -R a+rX /opt/memprocfs; \
     test -f /opt/memprocfs/vmm.so
+
+# Rebuild vmm.so from the release's source with Kairon's patches (it links against the release's
+# leechcore.so). Remove this step, and the patch, once a MemProcFS release includes the fix.
+COPY docker/memory-worker/patches /build/memprocfs-patches
+RUN set -eu; \
+    url="https://github.com/ufrisk/MemProcFS/archive/${MEMPROCFS_SOURCE_COMMIT}.tar.gz"; \
+    python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], '/tmp/memprocfs-src.tgz')" "$url"; \
+    echo "${MEMPROCFS_SOURCE_SHA256}  /tmp/memprocfs-src.tgz" | sha256sum -c -; \
+    mkdir -p /tmp/memprocfs-src; \
+    tar -xzf /tmp/memprocfs-src.tgz -C /tmp/memprocfs-src --strip-components=1; \
+    cd /tmp/memprocfs-src; \
+    for patch in /build/memprocfs-patches/*.patch; do patch -p1 --forward < "$patch"; done; \
+    cp /opt/memprocfs/leechcore.so vmm/; \
+    make -C vmm -j"$(nproc)" >/tmp/memprocfs-build.log 2>&1 || { tail -40 /tmp/memprocfs-build.log; exit 1; }; \
+    install -m 0755 files/vmm.so /opt/memprocfs/vmm.so; \
+    cd /; rm -rf /tmp/memprocfs-src /tmp/memprocfs-src.tgz /tmp/memprocfs-build.log /build/memprocfs-patches
 
 RUN addgroup --system --gid 10001 kairon \
     && adduser --system --uid 10001 --ingroup kairon --home /home/kairon kairon \

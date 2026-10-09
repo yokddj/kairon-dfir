@@ -53,6 +53,7 @@
 ### Fixed
 
 - Memory Find Evil no longer hangs a whole analysis batch when MemProcFS's forensic scan stops making progress (seen at 90 % on a Windows 11 24H2 crash dump): after 10 minutes without progress it gives up with that reason instead of waiting for the worker to be killed 80 minutes later, and leaves without the MemProcFS shutdown call that never returned.
+- Memory Find Evil: MemProcFS's forensic scan no longer stays at 90 % on Windows 11+ images. Its DNS cache lookup looped forever (an inner loop reused the outer loop's index); the memory-worker image now rebuilds MemProcFS 5.19's `vmm.so` from source with a one-line patch (`docker/memory-worker/patches/`). On the Windows 11 24H2 dump that hung, the scan finishes in about 30 seconds with 132 indicators, including Defender detections still in memory.
 - MemProcFS's Find Evil child is ended by a watchdog thread even when a call into the native library never returns, and dies with the worker that started it, so a stuck scan can neither block the analysis nor keep running on its own.
 - Memory runs left "running" by a worker that died are closed as failed (`WORKER_LOST`) by the next analysis, instead of showing as running forever.
 

@@ -1612,6 +1612,8 @@ FINDEVIL_TYPES: dict[str, tuple[str, str, str]] = {
     "AV_DETECT": ("high", "antivirus", "Antivirus detection event still in memory (Windows Defender)."),
     "PROC_NOLINK": ("high", "process", "Process missing from the kernel's active process list: hidden (unlinked), or exiting when memory was captured."),
     "PROC_PARENT": ("high", "process", "Well-known Windows process with an unexpected parent process."),
+    "PROC_BASEADDR": ("high", "process", "Image base address in the process's PEB differs from the kernel's section base: a sign of process hollowing."),
+    "TIME_CHANGE": ("medium", "system", "A process started more than a minute before the System process: the system clock was changed."),
     "PEB_MASQ": ("high", "process", "Process image path in user memory differs from the kernel's: possible masquerading."),
     "PE_INJECT": ("high", "module", "Executable module image found in private memory: possible injected module."),
     "NOIMAGE_RWX": ("high", "memory", "Writable and executable memory not backed by a file: typical of injected code."),
