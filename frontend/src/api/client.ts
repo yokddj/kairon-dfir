@@ -1037,6 +1037,20 @@ export type MemoryEvidenceTimeline = {
   kinds: { key: string; producer: string; label: string; default: boolean }[];
 };
 
+export type MemoryPowerShellLogItem = {
+  id: string;
+  timestamp: string;
+  event_id?: number | null;
+  channel?: string | null;
+  pid?: number | null;
+  command?: string | null;
+  host_application?: string | null;
+  script_block_id?: string | null;
+  part?: string | null;
+};
+
+export type MemoryPowerShellLog = { items: MemoryPowerShellLogItem[]; total: number; page: number; page_size: number };
+
 export type MemoryActiveResult = {
   case_id: string;
   evidence_id: string;
@@ -6555,6 +6569,13 @@ export const api = {
     if (params.cursor) query.set("cursor", params.cursor);
     if (params.page_size) query.set("page_size", String(params.page_size));
     return request<MemoryEvidenceTimeline>(`/cases/${caseId}/memory/evidences/${evidenceId}/timeline?${query.toString()}`);
+  },
+  getMemoryPowerShellLog: (caseId: string, evidenceId: string, params: { q?: string; page?: number; page_size?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.q) query.set("q", params.q);
+    if (params.page) query.set("page", String(params.page));
+    if (params.page_size) query.set("page_size", String(params.page_size));
+    return request<MemoryPowerShellLog>(`/cases/${caseId}/memory/evidences/${evidenceId}/powershell-log?${query.toString()}`);
   },
   getMemoryAnalysisCatalogue: (caseId: string, evidenceId: string) =>
     request<MemoryAnalysisCatalogue>(`/cases/${caseId}/memory/evidences/${evidenceId}/catalogue`),
