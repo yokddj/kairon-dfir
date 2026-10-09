@@ -2582,6 +2582,37 @@ def fetch_event_by_id(case_id: str, event_id: str | None, *, event_index: str | 
     return None
 
 
+def delete_by_query_and_wait(client: OpenSearch, index: str, query: dict, *, timeout_seconds: int = 1800, poll_seconds: float = 1.0) -> int:
+    """Delete the documents matching ``query`` and return how many were deleted.
+
+    Runs as a server-side task that is polled until it finishes. Waiting on the request itself
+    breaks on large deletions: OpenSearch 2.x adds a TASK_RESOURCE_USAGE header for every scroll
+    batch, and past 100 headers Python's HTTP client aborts the response ("got more than 100
+    headers") while the deletion carries on in the background.
+    """
+    started = client.delete_by_query(
+        index=index,
+        body={"query": query},
+        params={"conflicts": "proceed", "wait_for_completion": "false", "ignore_unavailable": "true"},
+    )
+    task_id = started.get("task")
+    if not task_id:
+        return int(started.get("deleted") or 0)
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        status = client.tasks.get(task_id=task_id)
+        if status.get("completed"):
+            response = status.get("response") or {}
+            failures = response.get("failures") or []
+            if status.get("error") or failures:
+                raise RuntimeError(f"delete_by_query on {index} failed: {status.get('error') or failures[:3]}")
+            client.indices.refresh(index=index)
+            return int(response.get("deleted") or 0)
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"delete_by_query on {index} did not finish in {timeout_seconds}s (task {task_id})")
+        time.sleep(poll_seconds)
+
+
 def delete_events_by_evidence(evidence_id: str, case_id: str) -> int:
     client = get_opensearch_client()
     index = get_events_index(case_id)
@@ -2589,12 +2620,7 @@ def delete_events_by_evidence(evidence_id: str, case_id: str) -> int:
         logger.info("Case index %s does not exist while deleting evidence %s events", index, evidence_id)
         return 0
     try:
-        result = client.delete_by_query(
-            index=index,
-            body={"query": {"term": {"evidence_id": evidence_id}}},
-            params={"refresh": "true", "ignore_unavailable": "true"},
-        )
-        deleted = result.get("deleted", 0)
+        deleted = delete_by_query_and_wait(client, index, {"term": {"evidence_id": evidence_id}})
         logger.info("Deleted %s OpenSearch events for evidence %s in case %s", deleted, evidence_id, case_id)
         return deleted
     except Exception as exc:  # noqa: BLE001
