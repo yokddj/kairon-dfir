@@ -389,8 +389,17 @@ def test_build_event_filters_excludes_suspicious_timestamps_for_timeline_only() 
     assert status_filter["bool"]["must_not"][0]["terms"]["timestamp_status"] == ["invalid", "suspicious"]
 
 
+def _hidden_artifact_types(filters: list[dict]) -> list[str]:
+    for item in filters:
+        must_not = item.get("bool", {}).get("must_not") or [{}]
+        hidden = must_not[0].get("terms", {}).get("artifact.type")
+        if hidden:
+            return hidden
+    return []
+
+
 def _has_mft_exclusion(filters: list[dict]) -> bool:
-    return any(item.get("bool", {}).get("must_not") == [{"term": {"artifact.type": "mft"}}] for item in filters)
+    return "mft" in _hidden_artifact_types(filters)
 
 
 def test_build_event_filters_excludes_mft_from_timeline_by_default() -> None:
@@ -412,6 +421,25 @@ def test_build_event_filters_keeps_mft_when_timeline_has_a_text_query() -> None:
 def test_build_event_filters_still_excludes_mft_for_an_empty_or_blank_query() -> None:
     filters = search_service._build_event_filters("case-1", {"timeline_only": True, "q": "   "}, _FakeDb())
     assert _has_mft_exclusion(filters)
+
+
+def test_build_event_filters_hides_memprocfs_ntfs_and_registry_like_mft() -> None:
+    """MemProcFS's NTFS and registry timelines from a memory image run to hundreds of thousands
+    of rows; the other MemProcFS timelines (event logs, tasks, web...) stay visible."""
+    hidden = _hidden_artifact_types(search_service._build_event_filters("case-1", {"timeline_only": True}, _FakeDb()))
+    assert set(hidden) == {"mft", "memprocfs_ntfs", "memprocfs_registry"}
+
+
+def test_build_event_filters_shows_memprocfs_timelines_when_filtered_by_type() -> None:
+    filters = search_service._build_event_filters("case-1", {"timeline_only": True, "artifact_type": ["memprocfs"]}, _FakeDb())
+    assert _hidden_artifact_types(filters) == ["mft"]
+    selected = next(item for item in filters if "artifact.type" in str(item) and "must_not" not in str(item))
+    assert "memprocfs_ntfs" in str(selected) and "memprocfs_eventlog" in str(selected)
+
+
+def test_build_event_filters_shows_only_the_selected_bulky_type() -> None:
+    filters = search_service._build_event_filters("case-1", {"timeline_only": True, "artifact_type": ["memprocfs_registry"]}, _FakeDb())
+    assert set(_hidden_artifact_types(filters)) == {"mft", "memprocfs_ntfs"}
 
 
 def _has_low_value_exclusion(filters: list[dict]) -> bool:

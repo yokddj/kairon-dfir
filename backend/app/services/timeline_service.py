@@ -95,6 +95,7 @@ TIMELINE_QUICK_FILTERS = [
     {"id": "network", "label": "Network", "params": {"event_category": ["network"]}},
     {"id": "cloud_usb", "label": "Cloud / USB", "params": {"artifact_type": ["cloud", "cloud_sync", "usb"]}},
     {"id": "deleted_files", "label": "Deleted files", "params": {"event_type": ["file_deleted"]}},
+    {"id": "memory_memprocfs", "label": "Memory (MemProcFS)", "params": {"artifact_type": ["memprocfs"]}},
     {"id": "key_events", "label": "Key events", "params": {"key_events_only": True}},
 ]
 

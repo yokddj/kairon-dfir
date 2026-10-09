@@ -227,4 +227,22 @@ describe("MemoryShellHistoryTab", () => {
     expect(screen.getAllByTestId("shell-history-source").map((cell) => cell.textContent)).toEqual(["Console screen", "Console history"]);
     expect(screen.getAllByTestId("shell-history-directory").map((cell) => cell.textContent)).toEqual(["C:\\Users\\admin\\Desktop", "—"]);
   });
+  it("names the user and file for commands from a PowerShell history file", async () => {
+    const historyFile = "\\Users\\bob\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt";
+    getMemoryActiveResultMock.mockResolvedValue(
+      activeResult({
+        analysis_state: "analyzed_with_results",
+        active_run: { id: "run-4", profile: "shell_history_basic", status: "completed", started_at: null, completed_at: null },
+        total: 1,
+        items: [
+          { document_id: "d3", pid: null, process_name: "powershell.exe", command: "Get-LocalUser", recovered_from: "psreadline_history", user: "bob", history_file: historyFile },
+        ] as unknown as MemoryActiveResult["items"],
+      }),
+    );
+    renderTab();
+    await waitFor(() => expect(screen.getAllByTestId("shell-history-row")).toHaveLength(1));
+    const source = screen.getByTestId("shell-history-source");
+    expect(source.textContent).toBe("PowerShell history filebob");
+    expect(source.getAttribute("title")).toBe(historyFile);
+  });
 });

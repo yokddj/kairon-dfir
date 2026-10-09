@@ -19,6 +19,7 @@ from app.models.detection_result import DetectionResult
 from app.models.evidence import Evidence
 from app.models.finding import Finding, FindingSeverity, FindingStatus
 from app.models.case_host import CaseHost
+from app.services.memory.memprocfs_timeline import ARTIFACT_TYPES as MEMPROCFS_ARTIFACT_TYPES, BULK_ARTIFACT_TYPES as MEMPROCFS_BULK_ARTIFACT_TYPES
 from app.services.event_markings import event_marking_filter_ids, marking_map_for_events, serialize_marking
 from app.services.host_identity import expand_host_filter, is_invalid_host_value, normalize_host_alias, resolve_canonical_host
 from app.services.investigation_memory import (
@@ -720,6 +721,9 @@ def _artifact_type_values(values: list[str] | None) -> list[str]:
             expanded.extend(["shellbag", "userassist", "recentdocs", "runmru", "opensavemru"])
         elif text in {"shellbag", "userassist", "recentdocs", "runmru", "opensavemru"}:
             expanded.append("user_activity")
+        elif text == "memprocfs":
+            # Every timeline MemProcFS's forensic scan recovered from a memory image.
+            expanded.extend(MEMPROCFS_ARTIFACT_TYPES)
     return sorted(set(expanded))
 
 
@@ -814,8 +818,7 @@ def _build_event_filters(case_id: str, params: dict[str, Any], db: Session | Non
         )
         selected_artifact_types = set(_artifact_type_values(_dedupe(params.get("artifact_type"))))
         if (
-            "mft" not in selected_artifact_types
-            and "filesystem" not in selected_artifact_types
+            "filesystem" not in selected_artifact_types
             and not params.get("include_filesystem_timeline", False)
             and not has_text_query
         ):
@@ -826,8 +829,11 @@ def _build_event_filters(case_id: str, params: dict[str, Any], db: Session | Non
             # deliberate query, and MFT is often exactly what such a search
             # is looking for -- excluding it here would make "search for
             # this file" silently miss the one artifact type built to
-            # answer it.
-            filters.append({"bool": {"must_not": [{"term": {"artifact.type": "mft"}}]}})
+            # answer it. MemProcFS's NTFS and registry timelines from a memory
+            # image are just as bulky and are hidden the same way.
+            hidden = [value for value in ("mft", *MEMPROCFS_BULK_ARTIFACT_TYPES) if value not in selected_artifact_types]
+            if hidden:
+                filters.append({"bool": {"must_not": [{"terms": {"artifact.type": hidden}}]}})
         if not params.get("include_low_confidence_timestamps", False):
             filters.append({"bool": {"must_not": [{"term": {"timestamp_precision": "unknown"}}]}})
     domain = str(params.get("domain") or "").strip()

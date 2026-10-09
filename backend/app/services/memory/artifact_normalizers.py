@@ -1514,6 +1514,85 @@ def normalize_windows_consoles(
 
 
 # ---------------------------------------------------------------------------
+# shell_history -> memory_shell_history (PowerShell history files)
+#   kairon.psreadline recovers PSReadLine's <host>_history.txt from the
+#   file cache (app.services.memory.kairon_psreadline): one row per command,
+#   in file order, with the user whose profile holds the file. No process
+#   owns the file, so pid stays None, and the file keeps no timestamps.
+# ---------------------------------------------------------------------------
+
+
+def normalize_psreadline_history(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "kairon.psreadline",
+    max_records: int = 200000,
+) -> dict[str, Any]:
+    rows = _rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    dropped = 0
+    for index, row in enumerate(rows):
+        if len(items) >= max_records:
+            warnings.append("psreadline_max_records_reached")
+            dropped += len(rows) - index
+            break
+        command = _str_or_none(_lookup(row, "Command", "command"), MAX_OBJECT_NAME_LENGTH)
+        if not command:
+            dropped += 1
+            continue
+        path = _str_or_none(_lookup(row, "Path", "path"), MAX_OBJECT_NAME_LENGTH)
+        user = _str_or_none(_lookup(row, "User", "user"), MAX_NAME_LENGTH)
+        line = _int_or_none(_lookup(row, "Line", "line"))
+        identity = _identity_pid_offset((path or "").lower(), line, command)
+        items.append({
+            "document_id": _document_id(prefix="memory_shell_history", case_id=case_id, run_id=scan_run_id, identity=identity),
+            "document_type": "memory_shell_history",
+            "case_id": case_id,
+            "evidence_id": evidence_id,
+            "scan_run_id": scan_run_id,
+            "plugin_run_id": plugin_run_id,
+            "platform": "windows",
+            "pid": None,
+            "process_entity_id": None,
+            "process_name": "powershell.exe",
+            "command": _scrub_paths(command),
+            "command_time": None,
+            "sequence": len(items),
+            "working_directory": None,
+            "user": user,
+            "history_file": _scrub_paths(path),
+            "history_line": line,
+            "recovered_from": "psreadline_history",
+            "source_plugin": source_plugin,
+            "source_record_index": index,
+            "confidence": "recovered_from_file",
+            "provenance": _provenance(
+                case_id=case_id,
+                evidence_id=evidence_id,
+                scan_run_id=scan_run_id,
+                plugin_run_id=plugin_run_id,
+                source_plugin=source_plugin,
+            ),
+            "normalization_version": NORMALIZATION_VERSION,
+            "unresolved_process_reference": False,
+        })
+    return {
+        "items": items,
+        "warnings": warnings,
+        "raw_count": len(rows),
+        "accepted_count": len(items),
+        "dropped_count": dropped,
+        "conflicts": 0,
+        "normalization_version": NORMALIZATION_VERSION,
+    }
+
+
+# ---------------------------------------------------------------------------
 # files -> memory_file_object
 #   windows.filescan walks pool allocations for _FILE_OBJECT structures
 #   image-wide and reports only Offset + Name -- unlike windows.consoles,

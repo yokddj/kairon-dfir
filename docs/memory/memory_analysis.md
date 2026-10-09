@@ -98,7 +98,7 @@ Supported profiles:
 - `handles_basic`: `windows.handles`
 - `kernel_basic`: `windows.modules`, `windows.driverscan`
 - `suspicious_memory`: `windows.malfind`, `windows.vadinfo`
-- `shell_history_basic`: `windows.consoles` and `windows.cmdscan` on Windows, `linux.bash` on Linux
+- `shell_history_basic`: `windows.consoles`, `windows.cmdscan` and the PowerShell history file (`kairon.psreadline`: `windows.filescan` + `windows.dumpfiles`) on Windows, `linux.bash` on Linux
 - `files_basic`: `windows.filescan`
 - `find_evil`: Kairon's checks (`windows.pslist`, `windows.psscan`, `windows.cmdline`, `windows.malfind`, `windows.ldrmodules`) and MemProcFS FindEvil (Windows)
 
@@ -141,9 +141,30 @@ The **Shell History** tab has two lists:
 
 `windows.cmdscan` finds the same command-history lists by scanning conhost's memory for them instead of following its console structures, so it still recovers typed commands on builds `windows.consoles` has no layout for (on Windows 11 24H2 `windows.consoles` only reports "Console Information Not Found"). A command both plugins recover is listed once.
 
+- **PowerShell history file**: PSReadLine (PowerShell's line editor since Windows 10) appends every command typed at an interactive prompt to `%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\<host>_history.txt` (`ConsoleHost_history.txt` for `powershell.exe`/`pwsh.exe`; other hosts such as VS Code have their own). The file outlives the session, so it holds commands from earlier sessions too. `kairon.psreadline` looks for these files with `windows.filescan` and, when Windows still has them cached, recovers them with `windows.dumpfiles`; each command is listed in file order (oldest first) with the user whose profile holds the file (the file path is the Source tooltip). Pages no longer cached are skipped, so a partly cached file gives the commands that were. No file cached is a normal result (PowerShell not used interactively, or evicted), not a failure.
+
+  To check it on a test machine: open PowerShell, type a few commands (`whoami`, `Get-LocalUser`, `ipconfig /all`), keep the window open or read the file once (`Get-Content (Get-PSReadLineOption).HistorySavePath`) so it is in the file cache, take a memory image (DumpIt, WinPmem, a VM snapshot), upload it and run Shell History: the commands appear with Source **PowerShell history file**.
+
 There is no time for these commands. On Windows builds that Volatility's console support does not cover (for example Windows 10 1803, build 17134), the plugin is reported as unsupported for that build, not as a failed run.
 
 Every command in the case, from disk and memory, is also in **Command History**, in the sidebar.
+
+### MemProcFS timeline in the case Timeline
+
+The forensic scan Find Evil runs also builds MemProcFS's timelines. The ones Volatility has no equivalent for are added to the case **Timeline** as events of the memory evidence (`artifact.parser: memprocfs`):
+
+| `artifact.type` | What |
+| --- | --- |
+| `memprocfs_ntfs` | NTFS records (MFT) still in memory: files created, modified, accessed |
+| `memprocfs_registry` | Registry key last-write times |
+| `memprocfs_eventlog` | Event log records still in memory, with event id, channel, provider and data (searchable as `eventid:`, `channel:`) |
+| `memprocfs_web` | Browser history |
+| `memprocfs_task` | Scheduled tasks: created, changed, last run, completed |
+| `memprocfs_amcache` | Amcache inventory updates |
+| `memprocfs_prefetch` | Prefetch executions |
+| `memprocfs_kernelobject` | Kernel objects created (devices, symbolic links) |
+
+Process, network and thread timelines are not added: the Processes and Network analyses already give them from Volatility. NTFS and registry can run to hundreds of thousands of rows, so the Timeline hides them by default (like MFT from disk) and shows them when filtered by their type or when searching; the **Memory (MemProcFS)** quick filter shows every MemProcFS timeline. A new Find Evil run replaces the evidence's previous MemProcFS events; at most 1,000,000 are indexed per run (NTFS and registry are indexed last, so the cap falls on them). If the forensic scan does not finish, no timeline is added and Find Evil works as before.
 
 Process profiles are disabled by default with `MEMORY_PROCESS_PROFILE_ENABLED=false`.
 
@@ -196,7 +217,7 @@ Configuration:
 - `MEMORY_PLUGIN_TIMEOUT_SECONDS=600`
 - `MEMORY_PLUGIN_OUTPUT_MAX_BYTES=10485760`
 - `MEMORY_WORKER_CONCURRENCY=1`
-- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.cmdscan,windows.filescan,kairon.findevil,memprocfs.findevil,linux.pslist,linux.pstree,linux.sockstat,linux.bash`
+- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.cmdscan,windows.filescan,kairon.findevil,memprocfs.findevil,kairon.psreadline,linux.pslist,linux.pstree,linux.sockstat,linux.bash`
 - `MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,shell_history_basic,files_basic,find_evil`
 - `MEMORY_DEFAULT_PROFILE=metadata_only`
 - `MEMORY_PROCESS_PROFILE_ENABLED=false`
@@ -216,4 +237,4 @@ Command settings are administrator-controlled and require trusted server access 
 
 ## Scope Boundary
 
-The current runner scope is isolated memory analysis only. MemProcFS is used for FindEvil only. It does not add credential extraction, file extraction, memory dumping, process dumping, DLL dumping, malware verdicts, hybrid correlation, or global Search/Timeline integration.
+The current runner scope is isolated memory analysis only. MemProcFS is used for its forensic scan only (FindEvil and the timelines above). It does not add credential extraction, memory dumping, process dumping, DLL dumping, malware verdicts or hybrid correlation; files are recovered only on request and for PowerShell history files.

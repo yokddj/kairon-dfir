@@ -256,11 +256,12 @@ def test_normal_volatility_command_has_no_offline_flag() -> None:
 def test_runner_guardrail_allows_configured_plugins() -> None:
     from app.core.config import Settings
     from app.services.memory.kairon_findevil import KAIRON_FINDEVIL_PLUGIN
+    from app.services.memory.kairon_psreadline import KAIRON_PSREADLINE_PLUGIN
     from app.services.memory.memprocfs_runner import MEMPROCFS_PLUGINS
     from app.services.memory.volatility_runner import ALLOWED_VOLATILITY_PLUGINS
 
     settings = Settings()
 
     # Every configured plugin has a runner that accepts it: Volatility's allowlist, the
-    # MemProcFS runner for memprocfs.* plugins, or Kairon's own Find Evil checks.
-    assert set(settings.allowed_memory_plugins).issubset(ALLOWED_VOLATILITY_PLUGINS | MEMPROCFS_PLUGINS | {KAIRON_FINDEVIL_PLUGIN})
+    # MemProcFS runner for memprocfs.* plugins, or Kairon's own composite plugins.
+    assert set(settings.allowed_memory_plugins).issubset(ALLOWED_VOLATILITY_PLUGINS | MEMPROCFS_PLUGINS | {KAIRON_FINDEVIL_PLUGIN, KAIRON_PSREADLINE_PLUGIN})

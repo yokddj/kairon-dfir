@@ -1,5 +1,9 @@
 """Child process: run MemProcFS's forensic scan on one memory image and print FindEvil as JSON.
 
+With ``--timeline-dir`` the same scan also leaves the timelines Volatility has no equivalent for
+(NTFS, registry, event logs, web, scheduled tasks, Amcache, Prefetch, kernel objects) there as
+MemProcFS's CSV files, for app.services.memory.memprocfs_timeline to index.
+
 Started by app.services.memory.memprocfs_runner with ``python -m``, never imported by the
 worker itself: MemProcFS is a native library parsing untrusted memory, so a crash or a hang
 stays in this process, which the runner can time out and kill as a group.
@@ -42,6 +46,11 @@ _STATUS_SUCCESS = 0
 _DEFAULT_STALL_SECONDS = 600
 _READ_CHUNK = 1024 * 1024
 _MAX_CSV_BYTES = 64 * 1024 * 1024
+# A busy system's registry or NTFS timeline runs to hundreds of MB; the indexer has its own row cap.
+_MAX_TIMELINE_BYTES = 512 * 1024 * 1024
+# \forensic\csv\timeline_<name>.csv files worth keeping. Left out, because Volatility already
+# gives them or they are noise: process (pslist/psscan), net (netscan) and thread creation.
+TIMELINE_FILES = ("ntfs", "registry", "eventlog", "web", "task", "amcache", "prefetch", "kernelobject")
 
 
 def _load(library: str) -> ctypes.CDLL:
@@ -145,6 +154,25 @@ class _Watchdog:
             os._exit(EXIT_FORENSIC_UNAVAILABLE)
 
 
+def _save_timelines(lib: ctypes.CDLL, handle: int, directory: str) -> None:
+    """Copy the forensic scan's timeline CSVs to ``directory``. Best effort: a timeline that cannot
+    be read is left out, and FindEvil is not affected."""
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except OSError as exc:
+        print(f"MemProcFS timelines not saved: {exc}", file=sys.stderr)
+        return
+    for name in TIMELINE_FILES:
+        data = _read(lib, handle, f"\\forensic\\csv\\timeline_{name}.csv", limit=_MAX_TIMELINE_BYTES)
+        if not data:
+            continue
+        try:
+            with open(os.path.join(directory, f"timeline_{name}.csv"), "wb") as handle_out:
+                handle_out.write(data)
+        except OSError as exc:
+            print(f"MemProcFS timeline {name} not saved: {exc}", file=sys.stderr)
+
+
 def findevil_rows(csv_text: str) -> list[dict[str, str]]:
     rows = []
     for record in csv.DictReader(io.StringIO(csv_text)):
@@ -164,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--scan-timeout", type=int, default=1500)
     parser.add_argument("--stall-timeout", type=int, default=_DEFAULT_STALL_SECONDS)
+    parser.add_argument("--timeline-dir", default=None)
     args = parser.parse_args(argv)
     _die_with_parent()
     watchdog = _Watchdog(scan_timeout=args.scan_timeout, stall_timeout=args.stall_timeout)
@@ -195,6 +224,8 @@ def main(argv: list[str] | None = None) -> int:
                 break
             watchdog.check()
             time.sleep(2)
+        if args.timeline_dir:
+            _save_timelines(lib, handle, args.timeline_dir)
         data = _read(lib, handle, "\\forensic\\csv\\findevil.csv", limit=_MAX_CSV_BYTES)
         if data is None:
             print("MemProcFS produced no FindEvil result for this image (FindEvil needs 64-bit Windows 10 or later).", file=sys.stderr)
