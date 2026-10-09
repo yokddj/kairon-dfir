@@ -100,3 +100,12 @@ def test_memory_is_a_default_persistence_source() -> None:
 
     assert "memory" in startup_persistence._active_source_names("", set(), set())
     assert "memory" in startup_persistence._active_source_names("", set(), {"scheduled_task"})
+
+
+def test_system_folder_variables_count_as_system_folders() -> None:
+    from app.services.startup_persistence import _score_item
+
+    windows_task, _ = _score_item("scheduled_task", r"%windir%\system32\rundll32.exe dfdts.dll", r"%windir%\system32\rundll32.exe", "DiskDiagnostic", "memory")
+    user_task, reasons = _score_item("scheduled_task", r"%APPDATA%\x\rundll32.exe evil.dll", "", "Updater", "memory")
+    assert windows_task <= 20
+    assert user_task >= 40 and "common_system_location" not in reasons
