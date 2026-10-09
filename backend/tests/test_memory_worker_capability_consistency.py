@@ -27,7 +27,7 @@ def _settings(*, enabled_plugins: str | None = None):
     object.__setattr__(base, "memory_analysis_enabled", True)
     object.__setattr__(base, "memory_allow_external_tool_execution", True)
     object.__setattr__(base, "memory_process_profile_enabled", True)
-    object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,shell_history_basic,find_evil,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory")
+    object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,shell_history_basic,files_basic,find_evil,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory")
     object.__setattr__(
         base,
         "memory_allowed_plugins",

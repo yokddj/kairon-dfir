@@ -67,6 +67,8 @@ RUN_ALL_PROFILES: tuple[str, ...] = (
     "processes_extended",
     # Commands typed in console windows (windows.consoles) or bash (linux.bash). Cheap: seconds.
     "shell_history_basic",
+    # Every file object Windows references (windows.filescan; Windows only). A few minutes.
+    "files_basic",
     # MemProcFS FindEvil (Windows only; skipped on Linux by the platform gate). About a minute.
     "find_evil",
     "network_basic",

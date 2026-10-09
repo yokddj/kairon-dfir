@@ -328,13 +328,14 @@ def test_files_no_run_is_not_analyzed(db: Session) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Run-all stays unaffected (documented, not modified) -- files_basic is a
-# heavy, image-wide, on-demand-style scan, same reasoning as
-# shell_history_basic staying out of the bulk "run everything" pass.
+# Run all includes files_basic. It was left out as a heavy image-wide scan "like
+# shell_history_basic"; shell history has since joined Run all and runs this same
+# windows.filescan for PowerShell history files, and filescan (minutes on a 4 GB image)
+# is lighter than malfind or vadinfo, which Run all always ran.
 # ---------------------------------------------------------------------------
 
 
-def test_run_all_profiles_does_not_include_files_basic() -> None:
+def test_run_all_profiles_include_files_basic() -> None:
     from app.services.memory.batch import RUN_ALL_PROFILES
 
-    assert "files_basic" not in RUN_ALL_PROFILES
+    assert "files_basic" in RUN_ALL_PROFILES
