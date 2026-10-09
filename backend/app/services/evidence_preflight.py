@@ -459,7 +459,8 @@ def run_preflight(
         format_key = "folder"
     else:
         with timed_phase("preflight.classify", token=token, file_size=file_size):
-            result = classifier.classify(path)
+            # The file being uploaded: worth reading a headerless image for its kernel.
+            result = classifier.classify(path, deep=True)
         classification_category = result.category
         classification_confidence = result.confidence
         classification_reason = result.reason

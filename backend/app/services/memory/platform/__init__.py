@@ -417,6 +417,46 @@ _LINUX_BANNER_SCAN_OVERLAP_BYTES = 256
 _LINUX_BANNER_SCAN_MAX_SECONDS = 20.0
 
 
+# A full read of a large image; reading runs at hundreds of MB/s, so this covers tens of GB.
+_KERNEL_SIGNATURE_SCAN_MAX_SECONDS = 120.0
+
+
+def kernel_signature_probe(canonical_path: Path, *, max_seconds: float = _KERNEL_SIGNATURE_SCAN_MAX_SECONDS) -> MemoryProbeResult | None:
+    """Identify a raw image's OS from the kernel string it holds (app.services.memory.kernel_signatures):
+    no header and no symbols needed, so it works on plain physical-memory acquisitions that
+    Volatility cannot identify offline. None when no kernel (or no clear one) was found."""
+    from app.services.memory.kernel_signatures import LINUX, WINDOWS, identify_kernel, scan_kernel_signatures
+
+    kernel = identify_kernel(scan_kernel_signatures(canonical_path, max_seconds=max_seconds).signatures)
+    if kernel is None:
+        return None
+    if kernel.platform == WINDOWS:
+        return MemoryProbeResult(
+            platform=PlatformFamily.WINDOWS,
+            format="windows_kernel_scan",
+            # ntkrpamp/ntkpamp are the 32-bit PAE kernels.
+            architecture=Architecture.UNKNOWN if "pamp" in kernel.name else Architecture.X64,
+            confidence=ProbeConfidence.MEDIUM,
+            reason=f"windows_kernel_scan:{kernel.name}:{kernel.pdb_guid}:{kernel.pdb_age}",
+        )
+    if kernel.platform == LINUX:
+        return MemoryProbeResult(
+            platform=PlatformFamily.LINUX,
+            format="linux_banner_scan",
+            architecture=Architecture.X64 if "x86_64" in (kernel.banner or "") else Architecture.UNKNOWN,
+            confidence=ProbeConfidence.MEDIUM,
+            reason=f"linux_banner_scan:{kernel.release}",
+            kernel_release=kernel.release,
+            kernel_banner=kernel.banner,
+        )
+    return MemoryProbeResult(
+        platform=PlatformFamily.MACOS,
+        format="macos_kernel_scan",
+        confidence=ProbeConfidence.MEDIUM,
+        reason=f"macos_kernel_scan:{kernel.release}",
+    )
+
+
 def _bounded_linux_banner_scan(canonical_path: Path) -> MemoryProbeResult | None:
     """Scan the image for an embedded Linux kernel banner, with no symbols.
 
@@ -581,6 +621,10 @@ PLATFORM_RESOLVING_FORMATS: dict[str, tuple["PlatformFamily", "Architecture", "P
     "lime": (PlatformFamily.LINUX, Architecture.X64, ProbeConfidence.HIGH),
     "elf_core": (PlatformFamily.LINUX, Architecture.UNKNOWN, ProbeConfidence.MEDIUM),
     "linux_banner_scan": (PlatformFamily.LINUX, Architecture.UNKNOWN, ProbeConfidence.MEDIUM),
+    # Persisted by kernel_signature_probe (and by the upload probe, which runs the same scan): the
+    # Windows kernel's CodeView record or the macOS kernel version string found in a raw image.
+    "windows_kernel_scan": (PlatformFamily.WINDOWS, Architecture.X64, ProbeConfidence.MEDIUM),
+    "macos_kernel_scan": (PlatformFamily.MACOS, Architecture.UNKNOWN, ProbeConfidence.MEDIUM),
     # Persisted by _run_volatility_plugin_bounded (the stage 4 Volatility
     # fallback) on a successful bounded windows.info/linux.pslist probe --
     # missing here meant a raw memory dump with no self-describing magic
@@ -655,8 +699,11 @@ def probe_memory_platform(
                 if hist is not None:
                     family, arch, confidence, reason = hist
 
-    # Stage 4: Volatility bounded fallback (worker process only).
+    # Stage 4: the kernel's own name string, then Volatility (worker process only).
     if family == PlatformFamily.UNKNOWN and use_volatility_fallback:
+        kernel_result = kernel_signature_probe(canonical_path)
+        if kernel_result is not None:
+            return kernel_result
         vol_result = _bounded_volatility_fallback(canonical_path)
         if vol_result is not None:
             return vol_result

@@ -24,6 +24,7 @@ import logging
 import os
 import struct
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -325,11 +326,39 @@ def _is_document(header: bytes) -> bool:
     return False
 
 
-def probe_memory_image(path: str | os.PathLike[str]) -> ProbeResult:
+# Formats persisted to evidence.detected_format; the platform probe resolves each to its OS
+# (app.services.memory.platform.PLATFORM_RESOLVING_FORMATS).
+_KERNEL_SCAN_FORMATS = {"windows": "windows_kernel_scan", "linux": "linux_banner_scan", "macos": "macos_kernel_scan"}
+# Upload classification waits for this at most; the memory worker runs a longer scan later.
+_KERNEL_SCAN_SECONDS = 30.0
+_KERNEL_SCAN_MIN_BYTES = 64 * 1024 * 1024
+
+
+@lru_cache(maxsize=64)
+def _cached_kernel_scan(path: str, size: int, mtime: float):
+    from app.services.memory.kernel_signatures import identify_kernel, scan_kernel_signatures
+
+    return identify_kernel(scan_kernel_signatures(Path(path), max_seconds=_KERNEL_SCAN_SECONDS, max_signatures=8).signatures)
+
+
+def _kernel_in_image(path: Path, size: int):
+    """The kernel found in a headerless image, or None. Only images large enough to be memory are
+    scanned, and each file once per process (several upload steps classify the same file)."""
+    if size < _KERNEL_SCAN_MIN_BYTES:
+        return None
+    try:
+        return _cached_kernel_scan(str(path), size, path.stat().st_mtime)
+    except OSError:
+        return None
+
+
+def probe_memory_image(path: str | os.PathLike[str], *, scan_kernel: bool = False) -> ProbeResult:
     """Classify a file as memory, disk, or other based on its content.
 
     The probe is read-only.  It reads at most ``_HEADER_READ_BYTES`` from
-    the start and ``_FOOTER_READ_BYTES`` from the end of the file.  It
+    the start and ``_FOOTER_READ_BYTES`` from the end of the file, unless
+    ``scan_kernel`` asks it to look through a headerless image for the
+    running kernel's name string (bounded by ``_KERNEL_SCAN_SECONDS``).  It
     never runs external commands, never mounts the file, and never
     writes back to the storage.
     """
@@ -485,6 +514,22 @@ def probe_memory_image(path: str | os.PathLike[str]) -> ProbeResult:
             file_size=size,
             extension=suffix,
             can_analyze=True,
+        )
+
+    # No header: a plain physical-memory acquisition looks like this. The running kernel's own name
+    # string (Windows CodeView record, Linux/macOS banner) says whether it is memory, and which OS.
+    kernel = _kernel_in_image(file_path, size) if scan_kernel else None
+    if kernel is not None:
+        return ProbeResult(
+            status=STATUS_PROBABLE_MEMORY,
+            confidence=CONFIDENCE_MEDIUM,
+            detected_format=_KERNEL_SCAN_FORMATS[kernel.platform],
+            reason=f"No header, but the {kernel.description} was found at offset {kernel.offset:#x}: a raw memory image.",
+            detected_evidence_type="memory",
+            file_size=size,
+            extension=suffix,
+            can_analyze=True,
+            details={"kernel_platform": kernel.platform, "kernel_name": kernel.name, "kernel_pdb_guid": kernel.pdb_guid, "kernel_pdb_age": kernel.pdb_age, "kernel_release": kernel.release, "kernel_offset": kernel.offset},
         )
 
     # The .img extension on a large unstructured file is ambiguous.

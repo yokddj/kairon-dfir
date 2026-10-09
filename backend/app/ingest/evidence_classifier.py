@@ -74,7 +74,10 @@ class EvidenceClassifier:
             return path.suffix.lower().lstrip(".")
         return None
 
-    def classify(self, path: Path) -> ClassificationResult:
+    def classify(self, path: Path, *, deep: bool = False) -> ClassificationResult:
+        """``deep`` also looks inside a headerless image for a kernel (reads the whole image, up to
+        a time bound) -- for the single file an analyst is uploading, not for every file of a
+        collection, which must stay a bounded header read."""
         if not path.is_file():
             return ClassificationResult(EvidenceCategory.UNKNOWN, reason="not a file")
 
@@ -96,7 +99,7 @@ class EvidenceClassifier:
                 metadata={"container_format": "archive", "entry_count": len(entries)},
             )
 
-        memory_probe = probe_memory_image(path)
+        memory_probe = probe_memory_image(path, scan_kernel=deep)
         if memory_probe.status in {STATUS_CONFIRMED_MEMORY, STATUS_PROBABLE_MEMORY}:
             return ClassificationResult(
                 EvidenceCategory.MEMORY_DUMP,
