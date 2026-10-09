@@ -215,6 +215,99 @@ function LaunchedCommands({ caseId, evidenceId }: { caseId: string; evidenceId?:
   );
 }
 
+// PowerShell's own event log records (4104 script blocks, 4103 command invocations, 400/800 engine
+// starts) that MemProcFS's forensic scan (Find Evil) recovered from memory. Unlike console history,
+// each one has the time PowerShell logged it.
+function PowerShellEventLog({ caseId, evidenceId }: { caseId: string; evidenceId?: string }) {
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const pageSize = 50;
+  const query = useQuery({
+    queryKey: ["memory-powershell-log", caseId, evidenceId, page, search],
+    queryFn: () => api.getMemoryPowerShellLog(caseId, evidenceId || "", { q: search || undefined, page, page_size: pageSize }),
+    enabled: Boolean(caseId && evidenceId),
+    refetchOnWindowFocus: false,
+  });
+  const items = query.data?.items ?? [];
+  const total = query.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  return (
+    <section className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel" data-testid="shell-history-powershell-log">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div className="max-w-3xl">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">PowerShell event log</h3>
+          <p className="mt-1 text-xs text-muted">
+            PowerShell's own event log records still in memory, recovered by MemProcFS's forensic scan (Find Evil): script blocks
+            (4104), command invocations (4103) and engine starts with their command line (400, 800). Each has the time
+            PowerShell logged it. They are only there when PowerShell logging recorded them.
+          </p>
+        </div>
+        <input
+          value={search}
+          onChange={(event) => { setSearch(event.target.value); setPage(1); }}
+          placeholder="Filter commands"
+          aria-label="Filter PowerShell commands"
+          className="w-64 rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm"
+          data-testid="shell-history-powershell-search"
+        />
+      </header>
+      {query.isLoading ? <p className="mt-3 text-xs text-muted">Loading…</p> : null}
+      {query.error instanceof Error ? (
+        <p className="mt-3 rounded-2xl border border-rose-400/30 bg-rose-500/10 p-3 text-xs text-rose-200">{query.error.message}</p>
+      ) : null}
+      {!query.isLoading && !query.error && items.length === 0 ? (
+        <p className="mt-3 rounded-2xl border border-line bg-abyss/40 p-3 text-xs text-muted" data-testid="shell-history-powershell-empty">
+          {search ? "No PowerShell record matches this filter." : "No PowerShell event log record was found in this memory image (or Find Evil has not run yet)."}
+        </p>
+      ) : null}
+      {!query.isLoading && !query.error && items.length > 0 ? (
+        <>
+          <p className="mt-3 text-xs text-muted" data-testid="shell-history-powershell-summary">
+            {total} record{total === 1 ? "" : "s"} · page {page} of {totalPages}
+          </p>
+          <div className="mt-2 max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
+            <table className="w-full min-w-[860px] divide-y divide-line text-xs" data-testid="shell-history-powershell-table">
+              <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted">
+                <tr>
+                  <th className="px-2 py-1">Time</th>
+                  <th className="px-2 py-1">Event</th>
+                  <th className="px-2 py-1">PID</th>
+                  <th className="px-2 py-1">Command</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {items.map((item) => (
+                  <tr key={item.id} data-testid="shell-history-powershell-row">
+                    <td className="whitespace-nowrap px-2 py-1 text-muted">{item.timestamp.replace("T", " ").slice(0, 19)}</td>
+                    <td className="whitespace-nowrap px-2 py-1 text-muted" title={item.channel || undefined}>
+                      {reported(item.event_id)}
+                      {item.part ? <span className="block text-[10px]">part {item.part}</span> : null}
+                    </td>
+                    <td className="px-2 py-1 text-muted">{reported(item.pid)}</td>
+                    <td className="px-2 py-1" title={item.host_application || undefined}>
+                      <CommandCell command={item.command} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-3 flex items-center justify-end text-xs">
+            <MemoryPaginationControls
+              page={page}
+              totalPages={totalPages}
+              onPage={setPage}
+              prevTestId="shell-history-powershell-prev-page"
+              nextTestId="shell-history-powershell-next-page"
+            />
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 export function MemoryShellHistoryTab({ caseId, evidenceId, runOptions, selectedRunId, onSelectRunId }: Props) {
   const [page, setPage] = useState(1);
   const [pidFilter, setPidFilter] = useState("");
@@ -370,6 +463,7 @@ export function MemoryShellHistoryTab({ caseId, evidenceId, runOptions, selected
           </>
         ) : null}
       </section>
+      <PowerShellEventLog caseId={caseId} evidenceId={evidenceId} />
       <LaunchedCommands caseId={caseId} evidenceId={evidenceId} />
     </div>
   );

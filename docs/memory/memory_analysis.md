@@ -147,6 +147,8 @@ The **Shell History** tab has two lists:
 
 There is no time for these commands. On Windows builds that Volatility's console support does not cover (for example Windows 10 1803, build 17134), the plugin is reported as unsupported for that build, not as a failed run.
 
+**PowerShell event log** (also in the Shell History tab): PowerShell's own event log records still in memory, recovered by MemProcFS's forensic scan when Find Evil runs: script blocks (4104, with their part number when PowerShell split a long block), command invocations (4103) and engine and pipeline records with the host's command line (400, 403, 600, 800). Unlike the console sources, each has the time PowerShell logged it. They exist only when PowerShell logging recorded them (4104 needs script block logging, on by default only for suspicious blocks; 4103 needs module logging).
+
 Every command in the case, from disk and memory, is also in **Command History**, in the sidebar.
 
 ### MemProcFS timeline in the case Timeline

@@ -242,3 +242,54 @@ def memory_evidence_timeline(
         "counts": counts,
         "kinds": [{"key": key, "producer": producer, "label": label, "default": key in DEFAULT_KINDS} for key, (producer, label) in KINDS.items()],
     }
+
+
+def memory_powershell_log(case_id: str, evidence_id: str, *, q: str | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:
+    """PowerShell's own event log records MemProcFS found in this memory image (script blocks,
+    command invocations, engine starts), oldest first. Unlike console history they carry the time
+    PowerShell logged them."""
+    from app.core.opensearch import get_events_index, get_opensearch_client
+
+    page = max(1, int(page))
+    size = max(1, min(int(page_size), 200))
+    filters: list[dict[str, Any]] = [
+        {"term": {"case_id": case_id}},
+        {"term": {"evidence_id": evidence_id}},
+        {"term": {"artifact.parser": MEMPROCFS_PARSER}},
+        {"exists": {"field": "powershell.command"}},
+    ]
+    query = (q or "").strip()
+    if query:
+        from app.core.opensearch import search_text_substring_clause
+
+        filters.append(search_text_substring_clause(f"*{query}*"))
+    body = {
+        "query": {"bool": {"filter": filters}},
+        "from": (page - 1) * size,
+        "size": size,
+        "track_total_hits": True,
+        "sort": [{"@timestamp": {"order": "asc"}}, {"event_id": {"order": "asc"}}],
+    }
+    try:
+        response = get_opensearch_client().search(index=get_events_index(case_id), body=body, params={"ignore_unavailable": "true"})
+    except Exception:  # noqa: BLE001 -- no events index yet: nothing recovered
+        return {"items": [], "total": 0, "page": page, "page_size": size}
+    items = []
+    for hit in response.get("hits", {}).get("hits", []):
+        source = hit.get("_source") or {}
+        powershell = source.get("powershell") or {}
+        windows = source.get("windows") or {}
+        process = source.get("process") or {}
+        number, total = powershell.get("message_number"), powershell.get("message_total")
+        items.append({
+            "id": source.get("event_id") or hit.get("_id"),
+            "timestamp": source.get("@timestamp"),
+            "event_id": windows.get("event_id"),
+            "channel": windows.get("channel"),
+            "pid": int(process["pid"]) if str(process.get("pid") or "").isdigit() else None,
+            "command": powershell.get("command"),
+            "host_application": powershell.get("host_application"),
+            "script_block_id": powershell.get("script_block_id"),
+            "part": f"{number}/{total}" if number and total and str(total) != "1" else None,
+        })
+    return {"items": items, "total": int((response.get("hits", {}).get("total") or {}).get("value") or 0), "page": page, "page_size": size}

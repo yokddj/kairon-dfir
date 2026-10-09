@@ -54,6 +54,27 @@ _WEB = re.compile(r"browser:\[(?P<browser>[^\]]*)\]\s*type:\[(?P<type>[^\]]*)\]\
 _TASK = re.compile(r"^(?P<name>.*?) - \[(?P<command>.*?) :: (?P<arguments>.*?)\] \((?P<user>[^()]*)\)$", re.S)
 _AMCACHE_PATH = re.compile(r":\s+(?P<path>[a-z]:\\.+)$", re.I)
 _MAX_TEXT = 4096
+# Event log rows carry whole PowerShell script blocks.
+_MAX_EVENTLOG_TEXT = 32768
+# PowerShell's own event log records with a command in them: 4104 script block text, 4103 command
+# invocation (Operational log); 400/403/600/800 engine and pipeline records (Windows PowerShell log),
+# which name the host's command line.
+POWERSHELL_EVENT_IDS = (4104, 4103, 400, 403, 600, 800)
+# "Key=Value; Key=Value": a value can itself contain "; ", so split only where a key follows.
+_EVENT_DATA_FIELD = re.compile(r";\s+(?=[A-Za-z][A-Za-z0-9_]*=)")
+# Inside a field's text: "HostApplication=..." (400/403/600/800) or "Host Application = ..." (4103's
+# ContextInfo), and "CommandLine=..." (800), one per line.
+_HOST_APPLICATION = re.compile(r"Host ?Application\s*=\s*(?P<value>[^\r\n]*)")
+_COMMAND_LINE = re.compile(r"CommandLine\s*=\s*(?P<value>[^\r\n]*)")
+
+
+def _line_value(pattern: re.Pattern[str], text: str) -> str | None:
+    match = pattern.search(text or "")
+    if not match:
+        return None
+    # A flattened record continues with "; NextKey=..." on the same line.
+    value = _EVENT_DATA_FIELD.split(match["value"])[0].strip()
+    return value or None
 
 
 def _timestamp(value: str) -> str | None:
@@ -77,6 +98,39 @@ def _file_fields(path: str) -> dict[str, Any]:
     return {"path": path, "name": name or None, "extension": extension, "parent_path": path.rsplit("\\", 1)[0] or None}
 
 
+def event_data_fields(data: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for part in _EVENT_DATA_FIELD.split(data):
+        key, separator, value = part.partition("=")
+        if separator and key.strip():
+            fields[key.strip()] = value.strip()
+    return fields
+
+
+def powershell_fields(provider: str, channel: str, event_id: int, data: str) -> dict[str, Any] | None:
+    """The command a PowerShell event log record names, as the case's powershell.* fields, or None
+    when the record is not PowerShell's or names no command."""
+    if event_id not in POWERSHELL_EVENT_IDS or "powershell" not in f"{provider} {channel}".lower():
+        return None
+    fields = event_data_fields(data)
+    result: dict[str, Any] = {}
+    if event_id == 4104:
+        command = fields.get("ScriptBlockText")
+        result = {"script_block_text": command, "script_block_id": fields.get("ScriptBlockId"), "path": fields.get("Path") or None, "message_number": fields.get("MessageNumber"), "message_total": fields.get("MessageTotal")}
+    elif event_id == 4103:
+        command = fields.get("Payload")
+        result = {"payload": command, "context_info": fields.get("ContextInfo")}
+        result["host_application"] = _line_value(_HOST_APPLICATION, fields.get("ContextInfo") or "")
+    else:
+        host = _line_value(_HOST_APPLICATION, data)
+        command = (_line_value(_COMMAND_LINE, data) if event_id == 800 else None) or host
+        result = {"host_application": host}
+    if not command:
+        return None
+    result["command"] = command
+    return {key: value for key, value in result.items() if value not in (None, "")}
+
+
 def _details(timeline: str, action: str, text: str) -> tuple[str, str, str, dict[str, Any]]:
     """(event.category, event.type, message, extra fields) for one timeline row."""
     verb = _ACTIONS.get(action, action.lower() or "seen")
@@ -91,9 +145,15 @@ def _details(timeline: str, action: str, text: str) -> tuple[str, str, str, dict
         if match:
             event_id = int(match["event"])
             data = (match["data"] or "").strip()
-            windows = {"event_id": event_id, "provider": match["provider"], "channel": match["channel"], "record_id": match["record"], "level": match["level"], "event_data_summary": data[:_MAX_TEXT]}
+            windows = {"event_id": event_id, "provider": match["provider"], "channel": match["channel"], "record_id": match["record"], "level": match["level"], "event_data_summary": data[:_MAX_EVENTLOG_TEXT]}
             message = f"{match['channel'] or match['log']} event {event_id}" + (f": {data}" if data else "")
-            return "windows_event", f"event_id_{event_id}", message, {"windows": windows, "event": {"provider": match["provider"], "channel": match["channel"]}}
+            extra: dict[str, Any] = {"windows": windows, "event": {"provider": match["provider"], "channel": match["channel"]}}
+            powershell = powershell_fields(match["provider"], match["channel"], event_id, data)
+            if powershell:
+                extra["powershell"] = powershell
+                extra["process"] = {"name": "powershell.exe"}
+                message = f"PowerShell event {event_id}: {powershell['command']}"
+            return "windows_event", f"event_id_{event_id}", message, extra
         return "windows_event", "windows_event", f"Event log record: {text}", {}
     if timeline == "web":
         match = _WEB.search(text)
@@ -128,14 +188,14 @@ def timeline_event(row: dict[str, str], *, timeline: str, case_id: str, evidence
     """One indexed event for a row of MemProcFS's timeline_<timeline>.csv, or None for a row
     without a usable time."""
     timestamp = _timestamp(row.get("Time") or "")
-    text = (row.get("Text") or "").strip()[:_MAX_TEXT]
+    text = (row.get("Text") or "").strip()[: _MAX_EVENTLOG_TEXT if timeline == "eventlog" else _MAX_TEXT]
     if not timestamp or not text:
         return None
     action = (row.get("Action") or "").strip().upper()
     category, event_type, message, extra = _details(timeline, action, text)
     label = TIMELINES.get(timeline, timeline)
     source = f"\\forensic\\csv\\timeline_{timeline}.csv"
-    event: dict[str, Any] = {"category": category, "type": event_type, "action": _ACTIONS.get(action, action.lower() or None), "severity": "info", "message": message[:_MAX_TEXT]}
+    event: dict[str, Any] = {"category": category, "type": event_type, "action": _ACTIONS.get(action, action.lower() or None), "severity": "info", "message": message[:_MAX_EVENTLOG_TEXT]}
     event.update(extra.pop("event", {}))
     document: dict[str, Any] = {
         "event_id": _event_id(evidence_id, timeline, row),
@@ -154,14 +214,14 @@ def timeline_event(row: dict[str, str], *, timeline: str, case_id: str, evidence
         "memory": {"plugin": MEMORY_PLUGIN},
         "memprocfs": {"scan_run_id": scan_run_id, "timeline": timeline, "action": action, "value32": row.get("Value32"), "value64": row.get("Value64")},
         "raw_summary": text,
-        "search_text": message[:_MAX_TEXT],
+        "search_text": message[:_MAX_EVENTLOG_TEXT],
         "risk_score": 0,
         "tags": ["memory", "memprocfs"],
         **extra,
     }
     pid = (row.get("PID") or "").strip()
     if pid.isdigit() and int(pid) > 0:
-        document["process"] = {"pid": pid}
+        document.setdefault("process", {})["pid"] = pid
     return document
 
 
