@@ -52,7 +52,7 @@ Intentional compatibility redirects remain in `App.tsx` for shipped legacy URLs.
 
 Owner: `frontend/src/components/Sidebar.tsx`.
 
-The sidebar fetches the capability registry for the active case, renders fixed top-level investigation/case-tool groups, then renders platform workbenches from registry `workbenches`, `domains` and visible capabilities. Workbench headings use registry `overview_route`.
+The sidebar is one flat **Investigation** list, with no submenus and no per-surface section (the former "Investigation Surfaces" rows were removed in 2026-10: their views were either already in the list -- Command History, Artifact Views for persistence and packages -- or are now in it directly). Three entries exist only for some evidence and are shown when the registry's `workbenches` say the case has it: **Memory** (`memory`, placed above Timeline), **Execution Stories** (`windows`) and **Linux Authentication** (`linux`). While the registry loads they are hidden; if it cannot be read they are all shown rather than hidden. The surface home pages (`/w`, `/l`, `/m`) still exist for breadcrumbs and the case overview's links.
 
 ## Overview
 

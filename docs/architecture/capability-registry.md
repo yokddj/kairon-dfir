@@ -33,15 +33,9 @@ If memory evidence still has `effective_platform = "memory"`, the registry uses 
 
 ## Sidebar Generation
 
-The sidebar consumes `GET /api/cases/{case_id}/capabilities` for all workbench content. It no longer owns platform logic, workbench visibility, capability visibility, or capability ordering.
+The sidebar is one flat **Investigation** list, with no submenus and no per-surface section (the former "Investigation Surfaces" rows were removed in 2026-10: their views were either already in the list -- Command History, Artifact Views for persistence and packages -- or are now in it directly). Three entries exist only for some evidence and are shown when the registry's `workbenches` say the case has it: **Memory** (`memory`, placed above Timeline), **Execution Stories** (`windows`) and **Linux Authentication** (`linux`). While the registry loads they are hidden; if it cannot be read they are all shown rather than hidden. The surface home pages (`/w`, `/l`, `/m`) still exist for breadcrumbs and the case overview's links.
 
-Frontend responsibilities:
-
-- Render the fixed shell groups: `Investigation` and `Case Tools`.
-- Render registry-provided `workbenches`, `domains`, and visible `capabilities` generically.
-- Respect `nav.order` and backend-provided workbench/domain grouping.
-- Preserve each capability's declared `route` unchanged, with `:caseId` substitution and `:evidenceId` substitution when the analyst is already in a memory evidence context.
-- Show loading, failure, and capability state indicators without deciding whether a platform or capability should exist.
+The sidebar reads `GET /api/cases/{case_id}/capabilities` only for that: which workbenches the case has. Workbench Overviews, breadcrumbs and Search still render the registry's workbenches, domains and capabilities generically.
 
 Backend responsibilities:
 

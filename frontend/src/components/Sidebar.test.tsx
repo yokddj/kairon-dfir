@@ -4,13 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import Sidebar from "./Sidebar";
-import { resolveSurfaceIcon } from "../lib/surfaceIcons";
 import type { CaseCapabilitiesResponse } from "../api/client";
-
-vi.mock("../lib/surfaceIcons", async () => {
-  const actual = await vi.importActual<typeof import("../lib/surfaceIcons")>("../lib/surfaceIcons");
-  return { ...actual, resolveSurfaceIcon: vi.fn(actual.resolveSurfaceIcon) };
-});
 
 const getCaseCapabilitiesMock = vi.fn();
 const logoutMock = vi.fn();
@@ -67,10 +61,6 @@ function registry(workbenches: CaseCapabilitiesResponse["workbenches"] = []): Ca
   };
 }
 
-function svgClass(row: HTMLElement) {
-  return row.querySelector("svg")?.getAttribute("class") ?? "";
-}
-
 function renderSidebar(initialEntry = "/cases/case-1/overview") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -102,137 +92,76 @@ describe("registry-driven sidebar", () => {
     expect(screen.queryByText("Technical Tools")).not.toBeInTheDocument();
   });
 
-  it("renders exactly one row per surface, in the order the backend returns", async () => {
+  it("lists every view in one flat list, with no Investigation Surfaces section", async () => {
     getCaseCapabilitiesMock.mockResolvedValue(registry([
       workbench({ id: "memory", label: "Memory", kind: "evidence_domain", icon: "cpu", overview_route: "/cases/case-1/m" }),
       workbench({ id: "windows", label: "Windows", icon: "hard-drive", overview_route: "/cases/case-1/w" }),
       workbench({ id: "linux", label: "Linux", icon: "shield-check", overview_route: "/cases/case-1/l" }),
     ]));
-
     renderSidebar();
 
-    const surfaces = await screen.findByRole("region", { name: "Investigation Surfaces" });
-    const rows = within(surfaces).getAllByTestId(/^surface-/);
-    expect(rows.map((row) => row.getAttribute("data-testid"))).toEqual(["surface-memory", "surface-windows", "surface-linux"]);
-  });
-
-  it("resolves label, icon and href for a surface entirely from the registry payload", async () => {
-    getCaseCapabilitiesMock.mockResolvedValue(registry([
-      workbench({ id: "windows", label: "Windows", icon: "hard-drive", overview_route: "/cases/case-1/w" }),
-    ]));
-
-    renderSidebar();
-
-    const row = await screen.findByTestId("surface-windows");
-    expect(row).toHaveTextContent("Windows");
-    expect(row).toHaveAttribute("href", "/cases/case-1/w");
-    expect(svgClass(row)).toContain("lucide-hard-drive");
-  });
-
-  it("delegates icon resolution to the shared surfaceIcons module (not a local copy)", async () => {
-    vi.mocked(resolveSurfaceIcon).mockClear();
-    getCaseCapabilitiesMock.mockResolvedValue(registry([workbench({ id: "windows", icon: "hard-drive" })]));
-
-    renderSidebar();
-    await screen.findByTestId("surface-windows");
-
-    expect(resolveSurfaceIcon).toHaveBeenCalledWith("hard-drive");
-  });
-
-  it("marks the surface row active when the URL is exactly its Surface Home", async () => {
-    getCaseCapabilitiesMock.mockResolvedValue(registry([workbench({ overview_route: "/cases/case-1/l" })]));
-
-    renderSidebar("/cases/case-1/l");
-
-    expect(await screen.findByTestId("surface-linux")).toHaveAttribute("aria-current", "page");
-  });
-
-  it("marks the surface row active when the URL is a deep route under that surface", async () => {
-    getCaseCapabilitiesMock.mockResolvedValue(registry([workbench({ overview_route: "/cases/case-1/l" })]));
-
-    renderSidebar("/cases/case-1/l/access/authentication");
-
-    expect(await screen.findByTestId("surface-linux")).toHaveAttribute("aria-current", "page");
-  });
-
-  it("does not mark the surface row active for an unrelated route", async () => {
-    getCaseCapabilitiesMock.mockResolvedValue(registry([workbench({ overview_route: "/cases/case-1/l" })]));
-
-    renderSidebar("/cases/case-1/w");
-
-    expect(await screen.findByTestId("surface-linux")).not.toHaveAttribute("aria-current", "page");
-  });
-
-  it("falls back to a safe generic icon for an unrecognized icon identifier, without deriving anything from the surface id", async () => {
-    getCaseCapabilitiesMock.mockResolvedValue(registry([
-      workbench({ id: "windows", label: "Windows", icon: "some-icon-not-in-the-map" }),
-    ]));
-
-    renderSidebar();
-
-    const row = await screen.findByTestId("surface-windows");
-    expect(svgClass(row)).toContain("lucide-layers");
-    expect(svgClass(row)).not.toContain("lucide-hard-drive");
-  });
-
-  it("falls back to the safe generic icon when icon is null", async () => {
-    getCaseCapabilitiesMock.mockResolvedValue(registry([workbench({ icon: null })]));
-
-    renderSidebar();
-
-    const row = await screen.findByTestId("surface-linux");
-    expect(svgClass(row)).toContain("lucide-layers");
-  });
-
-  it("renders an unknown future surface generically, with no Sidebar changes required", async () => {
-    getCaseCapabilitiesMock.mockResolvedValue(registry([
-      workbench({ id: "cloud", label: "Cloud", kind: "platform", icon: "cloud", overview_route: "/cases/case-1/cl", capability_ids: ["cloud.sync.activity"] }),
-    ]));
-
-    renderSidebar();
-
-    const row = await screen.findByTestId("surface-cloud");
-    expect(row).toHaveTextContent("Cloud");
-    expect(row).toHaveAttribute("href", "/cases/case-1/cl");
-    // "cloud" is not in the frontend's icon map yet -- must degrade safely,
-    // never invent a workbench-id-specific icon for it.
-    expect(svgClass(row)).toContain("lucide-layers");
-  });
-
-  it("renders no tree roles or tree controls -- the expandable Workbench/Domain/Capability tree is gone", async () => {
-    getCaseCapabilitiesMock.mockResolvedValue(registry([
-      workbench({ id: "linux", capability_ids: ["linux.access.authentication"], domains: [{ id: "access", capability_ids: ["linux.access.authentication"], record_count: 1 }] }),
-    ]));
-
-    renderSidebar();
-    await screen.findByTestId("surface-linux");
-
-    expect(screen.queryByRole("tree")).not.toBeInTheDocument();
-    expect(screen.queryByRole("treeitem")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Filter capabilities")).not.toBeInTheDocument();
-    expect(screen.queryByText("Authentication")).not.toBeInTheDocument();
-    expect(screen.queryByText("Access")).not.toBeInTheDocument();
-  });
-
-  it("shows loading state while the registry request is pending", () => {
-    getCaseCapabilitiesMock.mockReturnValue(new Promise(() => {}));
-    renderSidebar();
-    expect(screen.getByRole("status")).toHaveTextContent("Loading workbenches");
-  });
-
-  it("shows API failure without inventing surfaces", async () => {
-    getCaseCapabilitiesMock.mockRejectedValue(new Error("boom"));
-    renderSidebar();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Capability registry unavailable");
+    const investigation = screen.getByText("Investigation").closest("section")!;
+    await within(investigation).findByRole("link", { name: "Memory" });
+    const labels = within(investigation).getAllByRole("link").map((link) => link.textContent);
+    expect(labels).toEqual([
+      "Overview", "Evidence", "Host Information", "Search", "Artifact Views", "Command History", "Execution Stories",
+      "Linux Authentication", "Source Tables", "Memory", "Timeline", "Incident Timeline", "Detections", "Findings", "Reports",
+    ]);
+    expect(screen.queryByText("Investigation Surfaces")).not.toBeInTheDocument();
     expect(screen.queryByTestId(/^surface-/)).not.toBeInTheDocument();
   });
 
-  it("renders an empty registry with only the fixed sections", async () => {
+  it("links straight to the evidence-specific views", async () => {
+    getCaseCapabilitiesMock.mockResolvedValue(registry([
+      workbench({ id: "memory" }),
+      workbench({ id: "windows" }),
+      workbench({ id: "linux" }),
+    ]));
+    renderSidebar();
+
+    expect(await screen.findByRole("link", { name: "Memory" })).toHaveAttribute("href", "/cases/case-1/m");
+    expect(screen.getByRole("link", { name: "Execution Stories" })).toHaveAttribute("href", "/cases/case-1/w/execution/stories");
+    expect(screen.getByRole("link", { name: "Linux Authentication" })).toHaveAttribute("href", "/cases/case-1/l/access/authentication");
+  });
+
+  it("shows only the views the case has evidence for", async () => {
+    getCaseCapabilitiesMock.mockResolvedValue(registry([workbench({ id: "memory" })]));
+    renderSidebar();
+
+    expect(await screen.findByRole("link", { name: "Memory" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Execution Stories" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Linux Authentication" })).not.toBeInTheDocument();
+  });
+
+  it("marks Memory active on any memory route", async () => {
+    getCaseCapabilitiesMock.mockResolvedValue(registry([workbench({ id: "memory" })]));
+    renderSidebar("/cases/case-1/m/ev-1/timeline");
+
+    expect(await screen.findByRole("link", { name: "Memory" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Timeline" })).not.toHaveAttribute("aria-current", "page");
+  });
+
+  it("hides evidence-specific views while the registry loads", () => {
+    getCaseCapabilitiesMock.mockReturnValue(new Promise(() => {}));
+    renderSidebar();
+    expect(screen.getByRole("link", { name: "Timeline" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Memory" })).not.toBeInTheDocument();
+  });
+
+  it("lists every evidence-specific view when the registry cannot be read, rather than hiding them", async () => {
+    getCaseCapabilitiesMock.mockRejectedValue(new Error("boom"));
+    renderSidebar();
+    expect(await screen.findByRole("link", { name: "Memory" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Execution Stories" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Linux Authentication" })).toBeInTheDocument();
+  });
+
+  it("renders an empty registry with only the views every case has", async () => {
     getCaseCapabilitiesMock.mockResolvedValue(registry());
     renderSidebar();
     await screen.findByText("Investigation");
     expect(screen.getByRole("link", { name: "Artifact Views" })).toBeInTheDocument();
-    expect(screen.queryByTestId(/^surface-/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Memory" })).not.toBeInTheDocument();
   });
 
   it("does not call the registry endpoint when no case is active", () => {
@@ -240,6 +169,6 @@ describe("registry-driven sidebar", () => {
     activeCaseState.activeCase = null;
     renderSidebar();
     expect(getCaseCapabilitiesMock).not.toHaveBeenCalled();
-    expect(screen.queryByTestId(/^surface-/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Memory" })).not.toBeInTheDocument();
   });
 });
