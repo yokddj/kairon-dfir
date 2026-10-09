@@ -1,0 +1,23 @@
+MemProcFS 5.19: the Windows 11+ DNS hash table lookup never ends.
+
+VmmNetDns_LookupHashTable (vmm/modules/m_sys_netdns.c) checks each large heap allocation of
+the DNS cache service as a candidate hash table. The inner loop that validates a candidate
+reuses the outer loop's index `i`, so when a candidate fails early the outer loop goes back to
+an earlier allocation and checks the same candidates forever. The forensic scan waits for the
+DNS module's CSV/JSON logging, stays at 90 % and never writes findevil.csv. Seen on a Windows 11
+24H2 (build 26100) crash dump with the symbol server disabled; with this change the scan
+finishes in under 30 seconds. Applied by docker/memory-worker/Dockerfile.
+
+--- a/vmm/modules/m_sys_netdns.c
++++ b/vmm/modules/m_sys_netdns.c
+@@ -306,8 +306,8 @@
+                     if(VmmReadAlloc(H, pProcess, peAlloc->va, (PBYTE*)&pvaT, peAlloc->cb, 0)) {
+                         fResult = TRUE;
+                         c = (peAlloc->cb / 16) - 2; // number of entries in the hash table.
+-                        for(i = 0; i < c; i++) {
+-                            if(!VMM_UADDR64_8(pvaT[i])) {
++                        for(DWORD j = 0; j < c; j++) {
++                            if(!VMM_UADDR64_8(pvaT[j])) {
+                                 fResult = FALSE;
+                                 break;
+                             }

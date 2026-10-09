@@ -16,7 +16,10 @@ or redistributing a Kairon DFIR image or artifact that bundles them.
   and are not vendored in this repository.
 - MemProcFS (Ulf Frisk, https://github.com/ufrisk/MemProcFS) is
   downloaded from its pinned release during the memory-worker Docker
-  build (SHA-256 checked) and used unmodified for Find Evil. It is
+  build (SHA-256 checked) and used for Find Evil. Its vmm.so is rebuilt
+  from the release's source with the patches in
+  docker/memory-worker/patches/ (a fix for a lookup that never ends on
+  Windows 11+); see docker/memory-worker/THIRD_PARTY_NOTICES.md. It is
   licensed under AGPL-3.0; its bundled components carry their own
   licenses (license_*.txt in the release, copied to
   /licenses/memprocfs in the image). Its built-in Elastic YARA rules
