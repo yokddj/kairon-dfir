@@ -166,6 +166,10 @@ The forensic scan Find Evil runs also builds MemProcFS's timelines. The ones Vol
 
 Process, network and thread timelines are not added: the Processes and Network analyses already give them from Volatility. NTFS and registry can run to hundreds of thousands of rows, so the Timeline hides them by default (like MFT from disk) and shows them when filtered by their type or when searching; the **Memory (MemProcFS)** quick filter shows every MemProcFS timeline. A new Find Evil run replaces the evidence's previous MemProcFS events; at most 1,000,000 are indexed per run (NTFS and registry are indexed last, so the cap falls on them). If the forensic scan does not finish, no timeline is added and Find Evil works as before.
 
+### Timeline tab
+
+Each memory evidence has a **Timeline** tab (next to Shell History) with only that image's events, in time order: process starts and exits and network connections from Volatility (the active Processes and Network runs, plus suspicious memory with its process's start time and shell commands that carry a time), merged with the MemProcFS timelines above. Chips filter by type and show how many events each has; NTFS and registry start off. Text search covers the event, the process name and the PID. Pages follow a cursor, so the last page of 200,000 events loads as fast as the first. The case **Timeline** has the same events next to the rest of the case.
+
 Process profiles are disabled by default with `MEMORY_PROCESS_PROFILE_ENABLED=false`.
 
 Kairon selects the backend and plugins server-side. Each plugin runs sequentially with this argv shape:

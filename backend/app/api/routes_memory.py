@@ -785,6 +785,31 @@ def _memory_capability_readiness(analysis_plan, backend: dict, storage_readiness
 
 
 @router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/timeline",
+    response_model=None,
+)
+def get_memory_evidence_timeline(
+    case_id: str,
+    evidence_id: str,
+    kinds: str | None = Query(default=None, description="Comma-separated event kinds; default: all but NTFS and registry."),
+    q: str | None = Query(default=None),
+    order: str = Query(default="asc", pattern="^(asc|desc)$"),
+    cursor: str | None = Query(default=None),
+    page_size: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+) -> dict:
+    """This memory image's own timeline: Volatility's dated events (active runs) and MemProcFS's
+    forensic timelines, merged in time order, paged by cursor."""
+    from app.services.memory.evidence_timeline import memory_evidence_timeline
+
+    evidence = db.get(Evidence, evidence_id)
+    if not evidence or evidence.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Evidence not found for this case.")
+    selected = None if kinds is None else [item.strip() for item in kinds.split(",") if item.strip()]
+    return memory_evidence_timeline(db, case_id=case_id, evidence_id=evidence_id, kinds=selected, q=q, order=order, cursor=cursor, page_size=page_size)
+
+
+@router.get(
     "/cases/{case_id}/memory/evidences/{evidence_id}/active-result",
     response_model=None,
 )

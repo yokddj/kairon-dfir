@@ -1011,6 +1011,32 @@ export type MemoryFamilyState =
   | "failed"
   | "historical_override_invalid";
 
+export type MemoryEvidenceTimelineItem = {
+  id: string;
+  timestamp: string;
+  producer: "volatility" | "memprocfs" | string;
+  kind: string;
+  kind_label: string;
+  event_type?: string | null;
+  title?: string | null;
+  summary?: string | null;
+  pid?: number | null;
+  process_name?: string | null;
+  source?: string | null;
+  run_id?: string | null;
+};
+
+export type MemoryEvidenceTimeline = {
+  items: MemoryEvidenceTimelineItem[];
+  next_cursor: string | null;
+  page_size: number;
+  order: "asc" | "desc";
+  selected_kinds: string[];
+  total: number;
+  counts: Record<string, number>;
+  kinds: { key: string; producer: string; label: string; default: boolean }[];
+};
+
 export type MemoryActiveResult = {
   case_id: string;
   evidence_id: string;
@@ -6516,6 +6542,19 @@ export const api = {
       }
     }
     return request<MemoryActiveResult>(`/cases/${caseId}/memory/evidences/${evidenceId}/active-result?${query.toString()}`);
+  },
+  getMemoryEvidenceTimeline: (
+    caseId: string,
+    evidenceId: string,
+    params: { kinds?: string[]; q?: string; order?: "asc" | "desc"; cursor?: string | null; page_size?: number } = {},
+  ) => {
+    const query = new URLSearchParams();
+    if (params.kinds) query.set("kinds", params.kinds.join(","));
+    if (params.q) query.set("q", params.q);
+    if (params.order) query.set("order", params.order);
+    if (params.cursor) query.set("cursor", params.cursor);
+    if (params.page_size) query.set("page_size", String(params.page_size));
+    return request<MemoryEvidenceTimeline>(`/cases/${caseId}/memory/evidences/${evidenceId}/timeline?${query.toString()}`);
   },
   getMemoryAnalysisCatalogue: (caseId: string, evidenceId: string) =>
     request<MemoryAnalysisCatalogue>(`/cases/${caseId}/memory/evidences/${evidenceId}/catalogue`),
