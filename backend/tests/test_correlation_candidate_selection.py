@@ -30,3 +30,14 @@ def test_disk_correlation_candidates_are_taken_newest_first(monkeypatch) -> None
     sort = client.bodies[0]["sort"]
     assert sort == [{"@timestamp": {"order": "desc", "missing": "_last"}}]
     assert client.bodies[0]["size"] == timeline.DISK_CANDIDATE_LIMIT
+
+
+def test_memprocfs_events_are_not_disk_correlation_candidates(monkeypatch) -> None:
+    """MemProcFS timeline events sit in the events index but come from the memory image itself;
+    taken as disk events they were listed twice in the Timeline and correlated with themselves."""
+    client = _CapturingClient()
+    monkeypatch.setattr(timeline, "get_opensearch_client", lambda: client)
+
+    timeline._fetch_disk_docs("case-1")
+
+    assert {"term": {"artifact.parser": "memprocfs"}} in client.bodies[0]["query"]["bool"]["must_not"]

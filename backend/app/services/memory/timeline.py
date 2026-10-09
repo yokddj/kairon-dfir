@@ -213,7 +213,9 @@ def _fetch_disk_docs(case_id: str, *, source_parser: str | None = None) -> list[
     # in time, so every pair was rejected as "incompatible timestamps" and the
     # correlation engine returned zero matches on any case with more than
     # DISK_CANDIDATE_LIMIT events predating the capture.
-    body = {"query": {"bool": {"filter": filters, "should": should, "minimum_should_match": 1}}, "size": DISK_CANDIDATE_LIMIT, "track_total_hits": True, "sort": [{"@timestamp": {"order": "desc", "missing": "_last"}}]}
+    # MemProcFS timeline events live in the events index but come from a memory image, not disk.
+    must_not = [{"term": {"artifact.parser": "memprocfs"}}]
+    body = {"query": {"bool": {"filter": filters, "must_not": must_not, "should": should, "minimum_should_match": 1}}, "size": DISK_CANDIDATE_LIMIT, "track_total_hits": True, "sort": [{"@timestamp": {"order": "desc", "missing": "_last"}}]}
     try:
         response = get_opensearch_client().search(index=get_events_index(), body=body, params={"ignore_unavailable": "true"})
     except Exception:

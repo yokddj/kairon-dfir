@@ -37,6 +37,7 @@ from app.services.investigation_memory import (
 )
 from app.services.indicator_resolution import extract_and_resolve_indicators
 from app.services.search_service import (
+    _artifact_type_values,
     _dedupe,
     _format_event_result,
     _format_finding_result,
@@ -365,7 +366,8 @@ def _matches_timeline_filters(item: dict[str, Any], params: dict[str, Any]) -> b
     if kind and str(item.get("kind") or "").lower() != kind:
         return False
 
-    artifact_types = {str(value).strip().lower() for value in params.get("artifact_type") or [] if str(value).strip()}
+    # Same aliases as the OpenSearch filter ("memprocfs" -> every memprocfs_* type, ...).
+    artifact_types = set(_artifact_type_values([str(value) for value in params.get("artifact_type") or []]))
     if artifact_types and str(item.get("artifact_type") or "").strip().lower() not in artifact_types:
         return False
 

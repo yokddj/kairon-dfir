@@ -175,3 +175,11 @@ def test_timeline_quick_filter_selects_every_memprocfs_timeline() -> None:
 
     quick = next(item for item in timeline_service.TIMELINE_QUICK_FILTERS if item["id"] == "memory_memprocfs")
     assert set(memprocfs_timeline.ARTIFACT_TYPES) <= set(search_service._artifact_type_values(quick["params"]["artifact_type"]))
+
+
+def test_full_timeline_filter_understands_the_memprocfs_alias() -> None:
+    from app.services import timeline_service
+
+    item = {"kind": "event", "artifact_type": "memprocfs_eventlog"}
+    assert timeline_service._matches_timeline_filters(item, {"artifact_type": ["memprocfs"]})
+    assert not timeline_service._matches_timeline_filters({"kind": "event", "artifact_type": "mft"}, {"artifact_type": ["memprocfs"]})
