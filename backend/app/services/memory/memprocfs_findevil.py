@@ -51,6 +51,14 @@ _MAX_TIMELINE_BYTES = 512 * 1024 * 1024
 # \forensic\csv\timeline_<name>.csv files worth keeping. Left out, because Volatility already
 # gives them or they are noise: process (pslist/psscan), net (netscan) and thread creation.
 TIMELINE_FILES = ("ntfs", "registry", "eventlog", "web", "task", "amcache", "prefetch", "kernelobject")
+# \forensic\csv\<name>.csv inventories shown as tables (app.services.memory.memprocfs_tables). Left
+# out: what Volatility's own tabs already list (process, threads, modules, handles, net, files).
+TABLE_FILES = (
+    "tasks", "services", "drivers", "devices", "prefetch", "netdns", "yara",
+    "amcache_applications", "amcache_files", "amcache_shortcuts", "amcache_driver_binaries",
+    "amcache_driver_packages", "amcache_device_containers", "amcache_devices_pnp",
+)
+_MAX_TABLE_BYTES = 64 * 1024 * 1024
 
 
 def _load(library: str) -> ctypes.CDLL:
@@ -155,22 +163,23 @@ class _Watchdog:
 
 
 def _save_timelines(lib: ctypes.CDLL, handle: int, directory: str) -> None:
-    """Copy the forensic scan's timeline CSVs to ``directory``. Best effort: a timeline that cannot
-    be read is left out, and FindEvil is not affected."""
+    """Copy the forensic scan's timeline and inventory CSVs to ``directory``. Best effort: a file
+    that cannot be read is left out, and FindEvil is not affected."""
     try:
         os.makedirs(directory, exist_ok=True)
     except OSError as exc:
         print(f"MemProcFS timelines not saved: {exc}", file=sys.stderr)
         return
-    for name in TIMELINE_FILES:
-        data = _read(lib, handle, f"\\forensic\\csv\\timeline_{name}.csv", limit=_MAX_TIMELINE_BYTES)
+    files = [(f"timeline_{name}.csv", _MAX_TIMELINE_BYTES) for name in TIMELINE_FILES] + [(f"{name}.csv", _MAX_TABLE_BYTES) for name in TABLE_FILES]
+    for filename, limit in files:
+        data = _read(lib, handle, f"\\forensic\\csv\\{filename}", limit=limit)
         if not data:
             continue
         try:
-            with open(os.path.join(directory, f"timeline_{name}.csv"), "wb") as handle_out:
+            with open(os.path.join(directory, filename), "wb") as handle_out:
                 handle_out.write(data)
         except OSError as exc:
-            print(f"MemProcFS timeline {name} not saved: {exc}", file=sys.stderr)
+            print(f"MemProcFS {filename} not saved: {exc}", file=sys.stderr)
 
 
 def findevil_rows(csv_text: str) -> list[dict[str, str]]:

@@ -32,10 +32,11 @@ SOURCE_QUERIES: list[dict[str, Any]] = [
     {"source": "wmi", "artifact_types": ["wmi", "windows_event"], "queries": ["EventConsumer", "EventFilter", "CommandLineEventConsumer", "__EventFilter"], "limit": 35},
     {"source": "defender_config", "artifact_types": ["defender", "windows_event"], "queries": ["DisableRealtimeMonitoring", "Exclusion", "SpyNetReporting", "Tamper Defender"], "limit": 35},
 ]
-DEFAULT_SOURCE_NAMES = {"scheduled_tasks", "services", "registry_autoruns", "startup_folders"}
+# "memory": scheduled tasks and services MemProcFS's forensic scan inventoried in a memory image.
+DEFAULT_SOURCE_NAMES = {"scheduled_tasks", "services", "registry_autoruns", "startup_folders", "memory"}
 TYPE_SOURCE_HINTS = {
-    "scheduled_task": {"scheduled_tasks"},
-    "service": {"services"},
+    "scheduled_task": {"scheduled_tasks", "memory"},
+    "service": {"services", "memory"},
     "run_key": {"registry_autoruns", "autoruns"},
     "runonce": {"registry_autoruns", "autoruns"},
     "startup_folder": {"startup_folders"},
@@ -110,6 +111,11 @@ def list_startup_persistence_items(db: Session, case_id: str, params: dict[str, 
 
     if "command_history" in active_sources:
         fetched.extend(_command_history_candidates(case_id, host_filter))
+    if "memory" in active_sources:
+        try:
+            fetched.extend(_memory_inventory_items(db, case_id, host_filter, q))
+        except Exception as exc:  # noqa: BLE001
+            source_errors.append(f"memory: {exc}")
 
     deduped = _dedupe_items(fetched)
     # Structural filters (what kind of entry, whether it is enabled) scope the
@@ -311,6 +317,71 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
         "timeline_url": _timeline_url(case_id, host, row.get("@timestamp") or row.get("timestamp"), command or path or name),
         "raw": row,
     }
+
+
+def _memory_inventory_items(db: Session, case_id: str, host_filter: list[str], q: str) -> list[dict[str, Any]]:
+    """Scheduled tasks and services from the MemProcFS inventories of each memory evidence's active
+    Find Evil run (app.services.memory.memprocfs_tables)."""
+    from app.services.investigation_memory import _evidence_host_name, memory_evidences
+    from app.services.memory.memprocfs_tables import TABLES_BY_KEY, active_find_evil_run, table_rows
+
+    wanted_hosts = {normalize_host_alias(host).lower() for host in host_filter if host}
+    query = q.lower()
+    items: list[dict[str, Any]] = []
+    for evidence in memory_evidences(db, case_id):
+        host = normalize_host_alias(_evidence_host_name(db, evidence) or "")
+        if wanted_hosts and host.lower() not in wanted_hosts:
+            continue
+        run, directory = active_find_evil_run(db, case_id, str(evidence.id))
+        if directory is None:
+            continue
+        for table, item_type in (("tasks", "scheduled_task"), ("services", "service")):
+            rows, _hidden = table_rows(directory, TABLES_BY_KEY[table])
+            for row in rows:
+                if item_type == "scheduled_task":
+                    name, command, path = row.get("TaskName", ""), " ".join(part for part in (row.get("CommandLine"), row.get("Parameters")) if part and part != "---"), row.get("CommandLine", "")
+                    user, first_seen, last_modified, start_type = row.get("User", ""), row.get("TimeCreate") or row.get("TimeReg"), row.get("TimeMostRecent") or row.get("TimeLastRun"), ""
+                else:
+                    name, command, path = row.get("ServiceName", ""), row.get("DriverpathOrCmdline") or row.get("ImagePath", ""), row.get("ImagePath", "")
+                    user, first_seen, last_modified, start_type = row.get("User", ""), None, None, row.get("StartType", "")
+                if not name:
+                    continue
+                if query and query not in " ".join((name, command, path, user)).lower():
+                    continue
+                risk_score, risk_reasons = _score_item(item_type, command, path, name, "memory")
+                items.append({
+                    "id": _stable_id(case_id, f"memory_{table}", f"{evidence.id}:{row.get('GUID') or row.get('TaskPath') or name}"),
+                    "case_id": case_id,
+                    "evidence_id": str(evidence.id),
+                    "host": host,
+                    "type": item_type,
+                    "name": name,
+                    "command_or_target": command or "-",
+                    "path": path or "",
+                    "user": user or "",
+                    "enabled": None,
+                    "start_type": start_type or "",
+                    "trigger": "",
+                    "source_artifact": "memory_memprocfs",
+                    "source_event_id": "",
+                    "first_seen": _memory_time(first_seen),
+                    "last_modified": _memory_time(last_modified),
+                    "risk_score": risk_score,
+                    "risk_reasons": risk_reasons,
+                    "indicator_resolution": (extract_indicators({"source": {"name": name, "command_or_target": command, "path": path}}).get("indicators") or [])[:10],
+                    "related_events": [],
+                    "confidence": "high",
+                    "search_url": _search_url(case_id, host, command or path or name),
+                    "timeline_url": _timeline_url(case_id, host, _memory_time(last_modified), command or path or name),
+                    "raw": {"memprocfs_table": table, "memory_run_id": (run or {}).get("id"), **row},
+                })
+    return items
+
+
+def _memory_time(value: str | None) -> str | None:
+    """MemProcFS writes "YYYY-MM-DD HH:MM:SS" in UTC."""
+    text = str(value or "").strip()
+    return f"{text.replace(' ', 'T')}Z" if len(text) == 19 and text[4] == "-" else None
 
 
 def _command_history_candidates(case_id: str, host_filter: list[str]) -> list[dict[str, Any]]:

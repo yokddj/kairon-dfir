@@ -37,7 +37,7 @@ Kairon DFIR is intended for trusted labs and controlled, self-hosted deployments
 - Case-scoped Search, Timeline, Command History, Execution Story, Incident Timeline, Findings, and Markdown Reports.
 - Sigma and YARA detections, analyst-triggered rather than an always-on background scan. See [docs/rules/rules_sigma_yara.md](docs/rules/rules_sigma_yara.md).
 - An optional AI assistant, scoped to the open case, that answers questions with read-only lookups over the same data the analyst can open; it is off until an administrator configures a model provider. See [docs/operations/ai-assistant.md](docs/operations/ai-assistant.md).
-- A Preview Memory Analysis capability for authorized RAM evidence, isolated from global Search/Timeline/Detections/Findings/Reports/SIEM; actual Volatility/MemProcFS analysis execution is opt-in per deployment. See [docs/memory/memory_analysis.md](docs/memory/memory_analysis.md).
+- A Preview Memory Analysis capability for authorized RAM evidence, with its own worker, run tables and memory index; what it finds reaches the case Timeline (Volatility's dated events and MemProcFS's timelines), Search, Command History and Persistence (MemProcFS's scheduled tasks and services); Detections, Findings (except those created by hand), Reports and SIEM export do not read memory results. Actual Volatility/MemProcFS analysis execution is opt-in per deployment. See [docs/memory/memory_analysis.md](docs/memory/memory_analysis.md).
 - Evidence SHA-256, integrity checks, and custody events. See [docs/evidence/evidence-integrity.md](docs/evidence/evidence-integrity.md).
 
 ## Linux Support

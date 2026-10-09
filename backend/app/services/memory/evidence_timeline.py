@@ -34,6 +34,13 @@ VOLATILITY_KINDS: dict[str, str] = {
     "suspicious": "Suspicious memory",
     "shell": "Shell command",
 }
+# artifact_type of these events in the case Timeline (timeline_service merges them into its view).
+VOLATILITY_ARTIFACT_TYPES: dict[str, str] = {
+    "processes": "memory_process",
+    "network": "memory_network",
+    "suspicious": "memory_suspicious",
+    "shell": "memory_shell",
+}
 KINDS: dict[str, tuple[str, str]] = {
     **{key: ("volatility", label) for key, label in VOLATILITY_KINDS.items()},
     **{key: ("memprocfs", label) for key, label in MEMPROCFS_TIMELINES.items()},

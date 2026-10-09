@@ -148,8 +148,9 @@ def test_child_saves_only_the_timelines_volatility_does_not_give(tmp_path: Path,
     monkeypatch.setattr(memprocfs_findevil, "_read", fake_read)
     memprocfs_findevil._save_timelines(None, 1, str(tmp_path / "out"))
     saved = sorted(path.name for path in (tmp_path / "out").iterdir())
-    assert saved == sorted(f"timeline_{name}.csv" for name in memprocfs_findevil.TIMELINE_FILES if name != "prefetch")
-    assert not any(name in " ".join(read_paths) for name in ("timeline_process", "timeline_net", "timeline_thread"))
+    expected = [f"timeline_{name}.csv" for name in memprocfs_findevil.TIMELINE_FILES] + [f"{name}.csv" for name in memprocfs_findevil.TABLE_FILES]
+    assert saved == sorted(name for name in expected if "prefetch" not in name)
+    assert not any(name in " ".join(read_paths) for name in ("timeline_process", "timeline_net", "timeline_thread", "handles.csv", "modules.csv", "threads.csv"))
     assert set(memprocfs_findevil.TIMELINE_FILES) == set(memprocfs_timeline.TIMELINES)
 
 

@@ -507,7 +507,7 @@
     "timeline_supported": false,
     "host_aware": true,
     "multi_host_supported": true,
-    "limitations": ["Memory workflow is isolated from global Search/Timeline/Detections/Reports", "Volatility 3 is optional and not bundled", "Supported execution profiles are intentionally limited"],
+    "limitations": ["Memory results reach the case Timeline, Search, Command History and Persistence, but not Detections or Reports", "Volatility 3 is optional and not bundled", "Supported execution profiles are intentionally limited"],
     "test_coverage": "partial",
     "docs_url": "docs/memory_analysis.md",
     "notes": "Memory has dedicated views and indexes; it is not treated as ordinary artifact ingest."

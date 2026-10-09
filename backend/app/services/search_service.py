@@ -721,6 +721,9 @@ def _artifact_type_values(values: list[str] | None) -> list[str]:
             expanded.extend(["shellbag", "userassist", "recentdocs", "runmru", "opensavemru"])
         elif text in {"shellbag", "userassist", "recentdocs", "runmru", "opensavemru"}:
             expanded.append("user_activity")
+        elif text == "volatility":
+            # Dated Volatility events of memory images (process start/exit, network, ...).
+            expanded.extend(("memory_process", "memory_network", "memory_suspicious", "memory_shell"))
         elif text == "memprocfs":
             # Every timeline MemProcFS's forensic scan recovered from a memory image.
             expanded.extend(MEMPROCFS_ARTIFACT_TYPES)

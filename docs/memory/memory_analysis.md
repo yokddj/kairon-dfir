@@ -27,7 +27,7 @@ This version includes isolated Volatility 3 profiles:
 - `windows.malfind`
 - `windows.vadinfo`
 
-It does not run YARA, dump memory regions, dump processes, dump DLLs, extract credentials, run registry plugins, perform timeline integration, or create malware findings from memory plugins. MemProcFS remains readiness-only.
+It does not dump memory regions, processes or DLLs, extract credentials or create malware findings from memory plugins. Files are recovered from memory only on request and for PowerShell history files. MemProcFS runs its forensic scan as part of Find Evil (FindEvil, timelines, inventories and its built-in YARA rules); see the sections below. The list above is the original metadata profile set; the full plugin list is under Profiles.
 
 The Memory capability itself is mounted by default (`memory_enabled=true`), but plugin execution against a memory image is disabled by default, behind two independent gates:
 
@@ -166,7 +166,30 @@ The forensic scan Find Evil runs also builds MemProcFS's timelines. The ones Vol
 | `memprocfs_prefetch` | Prefetch executions |
 | `memprocfs_kernelobject` | Kernel objects created (devices, symbolic links) |
 
+The same Find Evil run also saves MemProcFS's inventories (see **MemProcFS tab** below).
+
 Process, network and thread timelines are not added: the Processes and Network analyses already give them from Volatility. NTFS and registry can run to hundreds of thousands of rows, so the Timeline hides them by default (like MFT from disk) and shows them when filtered by their type or when searching; the **Memory (MemProcFS)** quick filter shows every MemProcFS timeline. A new Find Evil run replaces the evidence's previous MemProcFS events; at most 1,000,000 are indexed per run (NTFS and registry are indexed last, so the cap falls on them). If the forensic scan does not finish, no timeline is added and Find Evil works as before.
+
+### Volatility's events in the case Timeline
+
+The case **Timeline** also shows the dated events Volatility finds in each memory image, from the active run of each analysis: process starts and exits (Processes), network connections (Network), suspicious memory with its process's start time (Suspicious Memory) and shell commands that carry a time (bash on Linux). They are labelled **Memory** with types `memory_process`, `memory_network`, `memory_suspicious` and `memory_shell`; the **Memory (Volatility)** quick filter shows only them. They follow the Timeline's time range, text search, host, evidence, type and event-type filters; a filter only disk events have (file path, domain, IP, hash, URL, severity, risk) leaves them out. They stay in the memory index and are merged into each page as it is built, so paging stays exact.
+
+### MemProcFS tab
+
+The **MemProcFS** tab of a memory evidence lists the inventories MemProcFS's forensic scan reads, beyond what Volatility's tabs show. They are saved by the Find Evil run (a run from before they were collected has none: run Find Evil again):
+
+| Group | Table | What |
+| --- | --- | --- |
+| Persistence | Scheduled tasks | Every registered task: command, arguments, account, created, last run, completed |
+| Persistence | Services | Services in the Service Control Manager's memory: account, start type, state, image path or command line |
+| Network | DNS cache | Names the DNS client had resolved; entries read from freed memory (unreadable names or answers) are hidden and counted |
+| Execution | Prefetch, Amcache files, Amcache applications, Amcache shortcuts | Programs that ran or were inventoried, with path, publisher, version, run count and times |
+| System | Drivers, Devices, Amcache drivers, Amcache driver packages, Amcache device containers, Amcache PnP devices | Driver and device objects in kernel memory and Amcache's driver and device inventory |
+| Detection | YARA matches | Matches of MemProcFS's built-in YARA rules in process and kernel memory |
+
+Each table can be filtered by text; hovering a row shows all its columns. Process, thread, module, handle and network lists are not repeated here: Volatility's tabs have them.
+
+The scheduled tasks and services also appear in the case's **Persistence** view (source **Memory (MemProcFS)**), scored like the disk sources: commands in user-writable folders, script launchers and encoded PowerShell rank first, Windows' own tasks last.
 
 ### Timeline tab
 
