@@ -124,6 +124,10 @@ _WINDOWS: tuple[CapabilityPluginSpec, ...] = (
     # so it still recovers commands on Windows builds windows.consoles has no layout for (it only
     # reports "Console Information Not Found" on Windows 11 24H2).
     CapabilityPluginSpec(MemoryCapability.SHELL_HISTORY, PlatformFamily.WINDOWS, FRAMEWORK_VOLATILITY3, "windows.cmdscan", depends_on=(MemoryCapability.IDENTIFICATION,), presentation_family="memory_shell_history"),
+    # PowerShell's own history file (PSReadLine's ConsoleHost_history.txt), recovered with
+    # windows.filescan + windows.dumpfiles when Windows still has it cached
+    # (app.services.memory.kairon_psreadline): commands from earlier sessions too.
+    CapabilityPluginSpec(MemoryCapability.SHELL_HISTORY, PlatformFamily.WINDOWS, FRAMEWORK_VOLATILITY3, "kairon.psreadline", depends_on=(MemoryCapability.IDENTIFICATION,), presentation_family="memory_shell_history"),
     # windows.filescan walks pool allocations for _FILE_OBJECT structures
     # image-wide -- every file Windows currently has any object reference
     # to (open handle, cached section, mapped image), not just ones an

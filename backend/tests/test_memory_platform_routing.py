@@ -405,7 +405,7 @@ def test_shell_history_basic_windows_producers_are_consoles_and_cmdscan() -> Non
     (which warms the symbol/ISF cache) always runs first."""
     from app.services.memory.capability_registry import MemoryCapability
 
-    assert resolved_plugins_for_capability(PlatformFamily.WINDOWS, MemoryCapability.SHELL_HISTORY) == ["windows.info", "windows.consoles", "windows.cmdscan"]
+    assert resolved_plugins_for_capability(PlatformFamily.WINDOWS, MemoryCapability.SHELL_HISTORY) == ["windows.info", "windows.consoles", "windows.cmdscan", "kairon.psreadline"]
 
 
 # ---------------------------------------------------------------------------

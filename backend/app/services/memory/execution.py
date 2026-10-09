@@ -41,6 +41,7 @@ from app.services.memory.artifact_normalizers import (
     normalize_windows_consoles,
     normalize_windows_filescan,
     normalize_memprocfs_findevil,
+    normalize_psreadline_history,
     normalize_windows_netscan,
     normalize_windows_privileges,
     normalize_windows_vadinfo,
@@ -53,7 +54,9 @@ from app.services.memory.storage import memory_run_dir, relative_to_data_dir, wr
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
 from app.services.memory.volatility_runner import VolatilityRunnerError, probe_windows_symbol_identity, run_plugin
 from app.services.memory.kairon_findevil import KAIRON_FINDEVIL_PLUGIN, run_kairon_findevil
-from app.services.memory.memprocfs_runner import MEMPROCFS_PLUGINS, run_findevil
+from app.services.memory.kairon_psreadline import KAIRON_PSREADLINE_PLUGIN, run_kairon_psreadline
+from app.services.memory.memprocfs_runner import MEMPROCFS_PLUGINS, TIMELINE_DIRNAME as MEMPROCFS_TIMELINE_DIRNAME, run_findevil
+from app.services.memory.memprocfs_timeline import index_memprocfs_timeline
 from app.services.memory import volatility_runner
 from app.services.memory.symbol_control import record_symbol_requirement
 from app.services.memory.analysis_plan import MemoryAnalysisPlan, build_memory_analysis_plan
@@ -105,6 +108,7 @@ ARTIFACT_PLUGIN_NORMALIZER = {
     "windows.filescan": "memory_file_object",
     "kairon.findevil": "memory_findevil",
     "memprocfs.findevil": "memory_findevil",
+    "kairon.psreadline": "memory_shell_history",
 }
 ARTIFACT_PLUGIN_LIMITS = {
     # Per-plugin guard-rails to keep offline execution bounded.
@@ -155,6 +159,8 @@ ARTIFACT_PLUGIN_LIMITS = {
     "memprocfs.findevil": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     # Kairon's checks run pslist, psscan, cmdline, malfind and ldrmodules (a few minutes on a
     # 4 GB image); each source plugin keeps its own bound inside this one.
+    # windows.filescan, then windows.dumpfiles on the PowerShell history files it finds.
+    "kairon.psreadline": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "kairon.findevil": {"timeout_seconds": 2400, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
 }
 
@@ -772,6 +778,8 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     _merge_findevil_sources(artifact_results)
                     artifact_indexing = _index_artifact_results(run.case_id, artifact_results, db, run)
                     indexing["artifacts"] = artifact_indexing
+                if (output_dir / MEMPROCFS_TIMELINE_DIRNAME).is_dir():
+                    indexing["memprocfs_timeline"] = _index_memprocfs_timeline(run, output_dir / MEMPROCFS_TIMELINE_DIRNAME)
                 _recount_plugin_states(run)
                 skipped_count = sum(1 for item in run.plugin_runs if str(item.status or "").startswith("skipped_"))
                 run.status = "completed" if run.plugins_failed == 0 and skipped_count == 0 else "completed_with_errors"
@@ -922,6 +930,8 @@ def _normalize_artifact_payload(
         return normalize_windows_consoles(payload, source_plugin=plugin, **common)
     if plugin == "windows.filescan":
         return normalize_windows_filescan(payload, source_plugin=plugin, **common)
+    if plugin == KAIRON_PSREADLINE_PLUGIN:
+        return normalize_psreadline_history(payload, source_plugin=plugin, **common)
     if plugin in ("memprocfs.findevil", KAIRON_FINDEVIL_PLUGIN):
         return normalize_memprocfs_findevil(payload, source_plugin=plugin, **common)
     return {
@@ -997,6 +1007,16 @@ def _resolve_raw_output_path(relative_path: str | None) -> Path | None:
         if candidate.is_file():
             return candidate
     return candidates[0] if candidates else None
+
+
+def _index_memprocfs_timeline(run: MemoryScanRun, directory: Path) -> dict[str, Any]:
+    """Index the timelines MemProcFS's forensic scan saved next to FindEvil. Saved even when
+    FindEvil itself had nothing to report; a failure here never affects the run's other results."""
+    try:
+        return index_memprocfs_timeline(directory, case_id=run.case_id, evidence_id=run.evidence_id, scan_run_id=run.id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memprocfs timeline indexing failed", extra={"run_id": run.id, "error": _sanitize_message(exc)})
+        return {"indexed": 0, "error": _sanitize_message(exc)}
 
 
 def _drop_repeated_console_commands(artifact_results: dict[str, dict[str, Any]]) -> None:
@@ -1169,6 +1189,15 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
         )
     elif plugin == KAIRON_FINDEVIL_PLUGIN:
         result = run_kairon_findevil(
+            evidence_path,
+            output_dir,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+            plugin_timeout=plugin_execution_timeout_seconds,
+            cancellation_check=cancellation_requested,
+        )
+    elif plugin == KAIRON_PSREADLINE_PLUGIN:
+        result = run_kairon_psreadline(
             evidence_path,
             output_dir,
             timeout_seconds=timeout_seconds,

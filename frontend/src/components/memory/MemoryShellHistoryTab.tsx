@@ -20,15 +20,19 @@ type ShellHistoryRow = {
   working_directory?: string | null;
   recovered_from?: string | null;
   source_plugin?: string | null;
+  user?: string | null;
+  history_file?: string | null;
   scan_run_id?: string | null;
 };
 
 // Where a Windows command was recovered from (windows.consoles / windows.cmdscan): conhost's own
 // command history (cmd.exe windows) or the console's screen text after the prompt (PowerShell
-// windows keep their history elsewhere, so the screen is often the only place it survives).
+// windows keep their history elsewhere, so the screen is often the only place it survives), or
+// PowerShell's own history file (PSReadLine), when Windows still had it cached (kairon.psreadline).
 const RECOVERED_FROM_LABEL: Record<string, string> = {
   command_history: "Console history",
   screen: "Console screen",
+  psreadline_history: "PowerShell history file",
 };
 
 function reported(value: unknown): string {
@@ -342,8 +346,9 @@ export function MemoryShellHistoryTab({ caseId, evidenceId, runOptions, selected
                       <td className="px-2 py-1">
                         <CommandCell command={row.command} />
                       </td>
-                      <td className="px-2 py-1 text-muted" data-testid="shell-history-source">
+                      <td className="px-2 py-1 text-muted" data-testid="shell-history-source" title={row.history_file || undefined}>
                         {row.recovered_from ? RECOVERED_FROM_LABEL[row.recovered_from] ?? row.recovered_from : reported(row.source_plugin)}
+                        {row.user ? <span className="block text-[10px]">{row.user}</span> : null}
                       </td>
                     </tr>
                   ))}

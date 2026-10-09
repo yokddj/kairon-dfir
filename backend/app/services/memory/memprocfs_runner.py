@@ -18,6 +18,8 @@ from app.services.memory.volatility_runner import VolatilityRunnerError, Volatil
 
 FINDEVIL_PLUGIN = "memprocfs.findevil"
 MEMPROCFS_PLUGINS = frozenset({FINDEVIL_PLUGIN})
+# Where the child leaves the forensic scan's timeline CSVs, under the run's output directory.
+TIMELINE_DIRNAME = "memprocfs-timeline"
 
 _EXIT_CODES = {
     3: ("MEMPROCFS_UNAVAILABLE", "MemProcFS is not installed in the memory worker."),
@@ -72,6 +74,8 @@ def run_findevil(
         str(evidence_path),
         "--scan-timeout",
         str(scan_timeout),
+        "--timeline-dir",
+        str(Path(work_dir) / TIMELINE_DIRNAME),
     ]
     stdout, stderr, returncode, duration_ms = run_isolated_process(
         argv,

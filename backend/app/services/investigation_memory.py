@@ -492,7 +492,8 @@ def _memory_shell_history_row(case_id: str, evidence: Evidence, result: dict[str
         "artifact_type": "memory_shell_history",
         "source_event_id": command_id,
         "source_file": evidence.original_filename,
-        "user": None,
+        # Known for commands from a PowerShell history file: the profile that holds it.
+        "user": raw.get("user"),
         "process": {"name": process_name, "pid": raw.get("pid") or result.get("pid"), "guid": None, "entity_id": raw.get("process_entity_id"), "command_line": command},
         "parent_process": {"pid": None, "guid": None},
         "process_entity_id": raw.get("process_entity_id"),

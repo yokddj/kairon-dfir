@@ -183,7 +183,7 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "profile": "shell_history_basic",
         "family": "shell_history",
         "title": "Shell History",
-        "description": "Commands typed in shells, recovered from memory: bash history on Linux; on Windows, console command history (windows.consoles and windows.cmdscan) and the prompts still on console screens.",
+        "description": "Commands typed in shells, recovered from memory: bash history on Linux; on Windows, console command history (windows.consoles and windows.cmdscan), the prompts still on console screens, and PowerShell's history file (PSReadLine) when it is still cached in memory.",
         # linux.bash scans every bash/sh/dash process's heap for resident
         # history entries -- it carries the same explicit 1800s timeout as
         # the other full-heap/VAD scan profiles (ARTIFACT_PLUGIN_LIMITS in
