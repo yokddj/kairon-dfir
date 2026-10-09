@@ -11,6 +11,7 @@ import { MEMORY_TABS, useMemoryTab, type MemoryTab } from "../lib/memoryWorkspac
 import { MemoryOverviewTab } from "./memory/MemoryOverviewTab";
 import { MemoryProcessesTab } from "./memory/MemoryProcessesTab";
 import { MemoryShellHistoryTab } from "./memory/MemoryShellHistoryTab";
+import { MemoryTimelineTab } from "./memory/MemoryTimelineTab";
 import { MemoryFindEvilTab } from "./memory/MemoryFindEvilTab";
 import { MemoryGraphTab } from "./memory/MemoryGraphTab";
 import { MemoryArtifactsTab } from "./memory/MemoryArtifactsTab";
@@ -348,6 +349,8 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
             onSelectRunId={setSelectedRunId}
           />
         ) : null}
+
+        {tab === "timeline" && effectiveEvidenceId ? <MemoryTimelineTab caseId={caseId} evidenceId={effectiveEvidenceId} /> : null}
 
         {tab === "graph" ? (
           <MemoryGraphTab
