@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from bisect import bisect_left, bisect_right
 import hashlib
 import json
 import re
@@ -2074,20 +2075,24 @@ def _merged_lightweight_page(case_id: str, event_params: dict[str, Any], memory_
     warnings.extend(event_warnings)
     window = [_compact_event_row_lightweight(row) for row in event_rows if row.get("timestamp")]
 
-    def before(a: datetime, b: datetime) -> bool:
-        return a > b if descending else a < b
+    # Times parsed once; positions by binary search (sign-flipped for newest first, so one
+    # ascending comparison serves both orders).
+    sign = -1 if descending else 1
 
+    def ordinal(row: dict[str, Any]) -> float:
+        return sign * key(row).timestamp()
+
+    memory_keys = [ordinal(row) for row in memory_rows]
+    window_keys = [ordinal(row) for row in window]
     placed: list[tuple[int, int, dict[str, Any]]] = []
     for index, row in enumerate(window):
-        moment = key(row)
-        placed.append((start + index + sum(1 for memory_row in memory_rows if before(key(memory_row), moment)), 0, row))
-    first = key(window[0]) if window else None
+        # Memory rows strictly before this event (on equal times the event comes first).
+        placed.append((start + index + bisect_left(memory_keys, window_keys[index]), 0, row))
     for index, row in enumerate(memory_rows):
-        moment = key(row)
-        if start > 0 and first is not None and before(moment, first):
+        if start > 0 and window_keys and memory_keys[index] < window_keys[0]:
             continue  # before the window: on an earlier page
-        events_before = start + sum(1 for event_row in window if not before(moment, key(event_row)))
-        placed.append((index + events_before, 1, row))
+        # Events at or before this memory row's time.
+        placed.append((index + start + bisect_right(window_keys, memory_keys[index]), 1, row))
     page = [row for position, _, row in sorted(placed, key=lambda item: (item[0], item[1])) if offset <= position < offset + page_size]
     return total_events + m, page, warnings
 
