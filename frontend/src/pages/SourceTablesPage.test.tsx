@@ -9,6 +9,9 @@ import SourceTablesPage from "./SourceTablesPage";
 const listSourceTablesMock = vi.fn();
 const getSourceTableMock = vi.fn();
 const querySourceTableRowsMock = vi.fn();
+const listEvidencesMock = vi.fn();
+const listArtifactsMock = vi.fn();
+const requestSourceTablesMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -16,6 +19,9 @@ vi.mock("../api/client", () => ({
     getSourceTable: (...args: unknown[]) => getSourceTableMock(...args),
     querySourceTableRows: (...args: unknown[]) => querySourceTableRowsMock(...args),
     deleteSourceTable: vi.fn(),
+    listEvidences: (...args: unknown[]) => listEvidencesMock(...args),
+    listArtifacts: (...args: unknown[]) => listArtifactsMock(...args),
+    requestSourceTables: (...args: unknown[]) => requestSourceTablesMock(...args),
     sourceTableColumnValues: vi.fn(),
     exportSourceTable: vi.fn(),
   },
@@ -59,6 +65,9 @@ function renderAt(path: string) {
 
 describe("SourceTablesPage", () => {
   beforeEach(() => {
+    listEvidencesMock.mockReset().mockResolvedValue([]);
+    listArtifactsMock.mockReset().mockResolvedValue([]);
+    requestSourceTablesMock.mockReset().mockResolvedValue({ items: [] });
     listSourceTablesMock.mockReset();
     getSourceTableMock.mockReset();
     querySourceTableRowsMock.mockReset();
@@ -114,5 +123,37 @@ describe("SourceTablesPage", () => {
     expect(screen.queryByRole("button", { name: "PayloadData6" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "EventId" })).toBeInTheDocument();
     expect(screen.getByText(/2\/4 columns/)).toBeInTheDocument();
+  });
+  it("lists the case's CSVs without a table, by evidence, with a Full table button", async () => {
+    listSourceTablesMock.mockResolvedValue({ items: [table] });
+    listEvidencesMock.mockResolvedValue([
+      { id: "ev-1", original_filename: "kape.zip" },
+      { id: "ev-2", original_filename: "memory.dmp" },
+    ]);
+    listArtifactsMock.mockResolvedValue([
+      { evidence_id: "ev-1", name: "out.csv", source_path: "EvtxECmd/out.csv", artifact_type: "evtx_csv" },
+      { evidence_id: "ev-1", name: "mft.csv", source_path: "MFTECmd/mft.csv", artifact_type: "mft" },
+      { evidence_id: "ev-1", name: "Amcache.hve", source_path: "C/Windows/AppCompat/Programs/Amcache.hve", artifact_type: "amcache" },
+    ]);
+    renderAt("/cases/case-1/tables");
+
+    const section = await screen.findByTestId("source-table-add");
+    expect(section.textContent).toContain("kape.zip");
+    expect(section.textContent).toContain("MFTECmd/mft.csv");
+    expect(section.textContent).not.toContain("EvtxECmd/out.csv");
+    expect(section.textContent).not.toContain("memory.dmp");
+    await userEvent.click(screen.getByRole("button", { name: "Full table" }));
+    await waitFor(() => expect(requestSourceTablesMock).toHaveBeenCalledWith("case-1", "ev-1", ["MFTECmd/mft.csv"]));
+  });
+
+  it("hides the section when every CSV already has a table", async () => {
+    listSourceTablesMock.mockResolvedValue({ items: [table] });
+    listEvidencesMock.mockResolvedValue([{ id: "ev-1", original_filename: "kape.zip" }]);
+    listArtifactsMock.mockResolvedValue([{ evidence_id: "ev-1", name: "out.csv", source_path: "EvtxECmd/out.csv", artifact_type: "evtx_csv" }]);
+    renderAt("/cases/case-1/tables");
+    await screen.findByText("out.csv");
+    await waitFor(() => expect(listArtifactsMock).toHaveBeenCalled());
+    expect(screen.queryByText("MFTECmd/mft.csv")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Full table" })).not.toBeInTheDocument();
   });
 });

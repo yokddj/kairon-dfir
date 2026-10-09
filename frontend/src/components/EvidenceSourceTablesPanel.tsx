@@ -16,9 +16,10 @@ const STATUS_TEXT: Record<SourceTable["status"], string> = {
 
 /**
  * The CSV/TSV files of one evidence and their full-column tables (Source Tables).
- * Renders nothing when the evidence has no tabular files.
+ * Renders nothing when the evidence has no tabular files. On the Source Tables page
+ * (``onlyMissing``) it lists just the files without a table yet, under the evidence's name.
  */
-export default function EvidenceSourceTablesPanel({ caseId, evidenceId }: { caseId: string; evidenceId: string }) {
+export default function EvidenceSourceTablesPanel({ caseId, evidenceId, onlyMissing = false, evidenceName }: { caseId: string; evidenceId: string; onlyMissing?: boolean; evidenceName?: string }) {
   const queryClient = useQueryClient();
   const artifactsQuery = useQuery({ queryKey: ["case-artifacts", caseId], queryFn: () => api.listArtifacts(caseId), enabled: Boolean(caseId) });
   const tablesQuery = useQuery({
@@ -45,8 +46,50 @@ export default function EvidenceSourceTablesPanel({ caseId, evidenceId }: { case
   }, [artifactsQuery.data, evidenceId]);
   const tablesByPath = useMemo(() => new Map((tablesQuery.data?.items ?? []).map((table) => [table.source_path, table])), [tablesQuery.data]);
   const missing = files.filter((file) => !tablesByPath.has(file.source_path));
+  // A "*" request (every CSV of the evidence, from the upload wizard) covers them all.
+  const coveredByWildcard = tablesByPath.has("*");
+  const shown = onlyMissing ? (coveredByWildcard ? [] : missing) : files;
 
-  if (!files.length) return null;
+  if (!shown.length) return null;
+
+  if (onlyMissing) {
+    return (
+      <div className="rounded-2xl border border-line" data-testid="source-table-candidates">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-2.5">
+          <p className="text-sm font-medium text-ink">{evidenceName || "Evidence"}</p>
+          {missing.length > 1 ? (
+            <button
+              type="button"
+              disabled={request.isPending}
+              onClick={() => request.mutate(missing.map((file) => file.source_path))}
+              className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 text-xs text-accent disabled:opacity-50"
+            >
+              Full table for all {missing.length}
+            </button>
+          ) : null}
+        </div>
+        {request.error instanceof Error ? <p className="px-4 pt-2 text-sm text-danger">{request.error.message}</p> : null}
+        <ul className="divide-y divide-line">
+          {shown.map((file) => (
+            <li key={file.source_path} className="flex flex-wrap items-center justify-between gap-3 px-4 py-2 text-sm">
+              <div className="min-w-0">
+                <p className="text-ink">{file.name}</p>
+                <p className="break-all text-xs text-muted">{file.source_path}</p>
+              </div>
+              <button
+                type="button"
+                disabled={request.isPending}
+                onClick={() => request.mutate([file.source_path])}
+                className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 text-xs text-accent disabled:opacity-50"
+              >
+                Full table
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
 
   return (
     <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel" data-testid="evidence-source-tables">
