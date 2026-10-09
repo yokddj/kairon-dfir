@@ -39,7 +39,7 @@ Memory images may contain credentials, personal data, encryption material, brows
 
 The upload page shows this warning. Who may upload and analyse RAM is decided by login, case access and the server's memory settings; there is no per-upload or per-run authorization checkbox (removed 2026-10: anyone could tick it, so it controlled nothing). Downloading Windows symbols from Microsoft still asks for approval, because it is a connection out of an offline installation.
 
-If Kairon cannot tell a `.raw` file is memory (raw memory has no header), choose **Memory** under **Manual override** in the upload wizard and tick **Continue with a manual override**.
+A raw memory acquisition (DumpIt or WinPmem `.raw`, `dd` of physical memory, a VM's `.vmem`) has no header. Kairon then looks through the image for the running kernel's own name string, which needs no symbols: the Windows kernel's debug record (`RSDS` + PDB GUID + `ntkrnlmp.pdb`), the Linux banner (`Linux version ...`) or the macOS kernel version (`Darwin Kernel Version ...`). Found, the image is classified as memory of that system; the upload wizard waits up to 30 seconds for this, and the memory worker's platform probe reads up to 120 seconds (tens of GB) before falling back to Volatility. A disk image is never taken for memory this way: disk, partition and file-system structures are checked first. If no kernel is found, choose **Memory** under **Manual override** in the upload wizard and tick **Continue with a manual override**.
 
 Memory uploads are classified as `memory_dump`, bypass normal disk ingest, and do not create `NormalizedEvent` rows or disk event-index documents. Results remain isolated in the Memory Analysis workspace and memory index only.
 

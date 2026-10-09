@@ -569,7 +569,7 @@ def _run_post_registration_automation(
     try:
         from app.services.memory.probe import probe_memory_image as _probe
         from app.core.database import utc_now_naive as _now
-        probe_result = _probe(Path(canonical))
+        probe_result = _probe(Path(canonical), scan_kernel=True)
         evidence.detected_format = probe_result.detected_format
         evidence.detection_status = probe_result.status
         evidence.detection_confidence = probe_result.confidence
