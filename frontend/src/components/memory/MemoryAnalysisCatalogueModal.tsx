@@ -33,7 +33,8 @@ const SECTION_LABELS: Record<Section, string> = {
   unavailable: "Unavailable",
 };
 
-const PROFILE_SECTION: Record<string, Section> = {
+// Every profile of the backend catalogue must be here: an unlisted one is never shown.
+export const PROFILE_SECTION: Record<string, Section> = {
   metadata_only: "quick",
   processes_basic: "quick",
   processes_extended: "quick",
@@ -43,6 +44,7 @@ const PROFILE_SECTION: Record<string, Section> = {
   kernel_basic: "artifacts",
   suspicious_memory: "artifacts",
   shell_history_basic: "artifacts",
+  files_basic: "artifacts",
   find_evil: "artifacts",
 };
 
@@ -50,7 +52,7 @@ function familyHref(caseId: string, evidenceId: string, item: MemoryAnalysisCata
   if (item.family === "processes") return memoryEvidenceRoute(caseId, evidenceId, "processes");
   if (item.family === "system_info") return memoryEvidenceRoute(caseId, evidenceId, "system");
   if (item.family === "raw_observations") return memoryEvidenceRoute(caseId, evidenceId);
-  const map: Record<string, string> = { network: "network", modules: "modules", handles: "handles", drivers: "drivers", kernel_modules: "kernel-modules", suspicious_regions: "suspicious", shell_history: "shell_history", find_evil: "find-evil" };
+  const map: Record<string, string> = { network: "network", modules: "modules", handles: "handles", drivers: "drivers", kernel_modules: "kernel-modules", suspicious_regions: "suspicious", shell_history: "shell_history", files: "files", find_evil: "find-evil" };
   return memoryEvidenceRoute(caseId, evidenceId, map[item.family] || "network");
 }
 

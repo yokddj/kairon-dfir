@@ -102,7 +102,7 @@ Supported profiles:
 - `files_basic`: `windows.filescan`
 - `find_evil`: Kairon's checks (`windows.pslist`, `windows.psscan`, `windows.cmdline`, `windows.malfind`, `windows.ldrmodules`) and MemProcFS FindEvil (Windows)
 
-**Run all** runs every profile above except `files_basic`, in this order: metadata, processes, extended processes, shell history, Find Evil, network, modules, handles, kernel, suspicious memory.
+**Run all** runs every profile above, in this order: metadata, processes, extended processes, shell history, files, Find Evil, network, modules, handles, kernel, suspicious memory.
 
 ### Find Evil
 
