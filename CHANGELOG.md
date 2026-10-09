@@ -53,6 +53,7 @@
 ### Fixed
 
 - Memory Find Evil no longer hangs a whole analysis batch when MemProcFS's forensic scan stops making progress (seen at 90 % on a Windows 11 24H2 crash dump): after 10 minutes without progress it gives up with that reason instead of waiting for the worker to be killed 80 minutes later, and leaves without the MemProcFS shutdown call that never returned.
+- MemProcFS's Find Evil child is ended by a watchdog thread even when a call into the native library never returns, and dies with the worker that started it, so a stuck scan can neither block the analysis nor keep running on its own.
 - Memory runs left "running" by a worker that died are closed as failed (`WORKER_LOST`) by the next analysis, instead of showing as running forever.
 
 - Search: substring matching works again. OpenSearch 2.15's `wildcard` field type returns no hits for a wildcard query with `case_insensitive: true`, even on an exact-case match, and every substring fallback over `search_text` used that flag. So a bare stem never found a file name with its extension (`psexesvc` vs `PSEXESVC.exe`, `Invoke-Mimikatz` vs `Invoke-Mimikatz.ps1`, `comsvcs` vs `comsvcs.dll`), and the *contains* mode found nothing in `search_text`. A new `search_text.wildcard_lc` subfield lowercases through the built-in normalizer and is queried without the flag. Existing case indices get the subfield and are filled in the background on the next backend start, without re-ingesting.

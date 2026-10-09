@@ -24,7 +24,9 @@ import ctypes
 import io
 import json
 import os
+import signal
 import sys
+import threading
 import time
 
 EXIT_LIBRARY_UNAVAILABLE = 3
@@ -75,6 +77,74 @@ def _read(lib: ctypes.CDLL, handle: int, path: str, *, limit: int) -> bytes | No
     return b"".join(chunks)
 
 
+# After the scan, reading findevil.csv and closing MemProcFS get this long before the child stops.
+_FINISH_SECONDS = 120
+
+
+def _die_with_parent() -> None:
+    """Have the kernel kill this process when the worker that started it dies (Linux), so a
+    killed or restarted worker never leaves a MemProcFS scan running on its own."""
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
+    except (OSError, AttributeError):
+        return
+    if os.getppid() == 1:  # the parent was already gone before prctl took effect
+        os._exit(EXIT_FORENSIC_UNAVAILABLE)
+
+
+class _Watchdog:
+    """Ends the process when the scan stalls or runs out of time.
+
+    The checks also run from a thread of their own: MemProcFS calls can block or spin inside the
+    native library and never come back to the loop in main(), and only os._exit() gets out of
+    that (closing MemProcFS waits for the stuck scan's workers and never returns either).
+    """
+
+    def __init__(self, *, scan_timeout: int, stall_timeout: int) -> None:
+        self.started = time.monotonic()
+        self.deadline = self.started + max(1, scan_timeout)
+        self.stall_timeout = max(30, stall_timeout)
+        self.progress = ""
+        self.changed_at = self.started
+        self.result_code: int | None = None
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        threading.Thread(target=self._run, name="memprocfs-watchdog", daemon=True).start()
+
+    def _run(self) -> None:
+        while True:
+            self.check()
+            time.sleep(5)
+
+    def update(self, progress: str) -> None:
+        with self._lock:
+            if progress != self.progress:
+                self.progress, self.changed_at = progress, time.monotonic()
+
+    def finished(self, result_code: int) -> None:
+        """The scan is over and the result is written: allow a short time to close."""
+        with self._lock:
+            self.result_code = result_code
+            self.deadline = time.monotonic() + _FINISH_SECONDS
+
+    def check(self) -> None:
+        now = time.monotonic()
+        with self._lock:
+            result_code, progress = self.result_code, self.progress
+            stalled = result_code is None and now - self.changed_at > self.stall_timeout
+            expired = now > self.deadline
+        if result_code is not None and expired:
+            sys.stdout.flush()
+            os._exit(result_code)
+        if stalled or expired:
+            reason = "stopped making progress" if stalled else "did not finish in time"
+            print(f"MemProcFS's forensic scan {reason} at {progress or '?'}% and cannot finish on this image, so it produced no FindEvil result. Kairon's own Find Evil checks still ran.", file=sys.stderr)
+            sys.stderr.flush()
+            os._exit(EXIT_FORENSIC_UNAVAILABLE)
+
+
 def findevil_rows(csv_text: str) -> list[dict[str, str]]:
     rows = []
     for record in csv.DictReader(io.StringIO(csv_text)):
@@ -95,6 +165,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scan-timeout", type=int, default=1500)
     parser.add_argument("--stall-timeout", type=int, default=_DEFAULT_STALL_SECONDS)
     args = parser.parse_args(argv)
+    _die_with_parent()
+    watchdog = _Watchdog(scan_timeout=args.scan_timeout, stall_timeout=args.stall_timeout)
+    watchdog.start()
 
     try:
         lib = _load(args.library)
@@ -111,37 +184,25 @@ def main(argv: list[str] | None = None) -> int:
         if not lib.VMMDLL_InitializePlugins(handle):
             print("MemProcFS plugins could not be initialised.", file=sys.stderr)
             return EXIT_FORENSIC_UNAVAILABLE
-        deadline = time.monotonic() + max(1, args.scan_timeout)
-        progress = ""
-        changed_at = time.monotonic()
-        stalled = False
-        while time.monotonic() < deadline:
+        while True:
             raw = _read(lib, handle, "\\forensic\\progress_percent.txt", limit=64)
             if raw is None:
                 print("MemProcFS forensic mode is not available for this image.", file=sys.stderr)
                 return EXIT_FORENSIC_UNAVAILABLE
-            current = raw.decode("utf-8", "replace").strip()
-            if current != progress:
-                progress, changed_at = current, time.monotonic()
+            progress = raw.decode("utf-8", "replace").strip()
+            watchdog.update(progress)
             if progress.startswith("100"):
                 break
-            if time.monotonic() - changed_at > max(30, args.stall_timeout):
-                stalled = True
-                break
+            watchdog.check()
             time.sleep(2)
-        else:
-            stalled = True
-        if stalled:
-            print(f"MemProcFS's forensic scan stopped making progress at {progress or '?'}% and cannot finish on this image, so it produced no FindEvil result. Kairon's own Find Evil checks still ran.", file=sys.stderr)
-            sys.stderr.flush()
-            # Closing MemProcFS waits for the stuck scan's workers and never returns; leave
-            # without it (the process exits, which releases everything).
-            os._exit(EXIT_FORENSIC_UNAVAILABLE)
         data = _read(lib, handle, "\\forensic\\csv\\findevil.csv", limit=_MAX_CSV_BYTES)
         if data is None:
             print("MemProcFS produced no FindEvil result for this image (FindEvil needs 64-bit Windows 10 or later).", file=sys.stderr)
+            watchdog.finished(EXIT_FINDEVIL_MISSING)
             return EXIT_FINDEVIL_MISSING
         json.dump(findevil_rows(data.decode("utf-8", "replace")), sys.stdout)
+        sys.stdout.flush()
+        watchdog.finished(0)
         return 0
     finally:
         lib.VMMDLL_Close(handle)
