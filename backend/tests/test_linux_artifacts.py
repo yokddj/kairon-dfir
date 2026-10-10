@@ -1148,6 +1148,28 @@ class TestIdentityParser:
         for entry in results:
             assert "$" not in entry["message"]
 
+    def test_backup_beside_live_file_yields_only_changed_lines(self, tmp_path):
+        # shadow-utils keeps the pre-change copy as group-: parsing it whole listed every
+        # group twice; only the lines the last change touched are its own information.
+        from app.ingest.linux.dispatch import parse_linux_artifact_file
+        etc = tmp_path / "etc"
+        etc.mkdir()
+        (etc / "group").write_text("root:x:0:\nsudo:x:27:php,mail\nusers:x:100:\n")
+        (etc / "group-").write_text("root:x:0:\nsudo:x:27:php\nusers:x:100:\n")
+        live = parse_linux_artifact_file(etc / "group", parser="linux_identity_raw", artifact_type="group", source_path="etc/group")
+        backup = parse_linux_artifact_file(etc / "group-", parser="linux_identity_raw", artifact_type="group", source_path="etc/group-")
+        assert len(live) == 3 and not any(r.get("superseded_backup") for r in live)
+        assert [(r["group_name"], r["members"], r["line_number"]) for r in backup] == [("sudo", ["php"], 2)]
+        assert backup[0]["superseded_backup"] is True
+        assert backup[0]["message"].startswith("Previous version (group-): ")
+
+    def test_backup_without_live_file_is_parsed_whole(self, tmp_path):
+        from app.ingest.linux.dispatch import parse_linux_artifact_file
+        (tmp_path / "passwd-").write_text("root:x:0:0:root:/root:/bin/bash\n")
+        rows = parse_linux_artifact_file(tmp_path / "passwd-", parser="linux_identity_raw", artifact_type="passwd", source_path="etc/passwd-")
+        assert [r["username"] for r in rows] == ["root"]
+        assert not rows[0].get("superseded_backup")
+
 
 class TestSudoersParser:
     @pytest.fixture
