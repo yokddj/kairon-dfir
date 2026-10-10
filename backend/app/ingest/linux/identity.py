@@ -12,15 +12,36 @@ def parse_identity(
     *,
     source_path: str = "",
     username: str | None = None,
+    live_content: str | None = None,
 ) -> list[dict]:
+    """Parse passwd/group/shadow.
+
+    ``live_content`` is the live file next to a shadow-utils backup (``passwd-``, ``group-``,
+    ``shadow-``: the state before the last vipw/useradd/usermod/passwd change). The backup then
+    yields only its lines that differ from the live file, flagged ``superseded_backup``: the
+    unchanged lines would list every account and group a second time, while the changed ones
+    are exactly the previous state of what was modified.
+    """
     path_lower = str(source_path).replace("\\", "/").lower()
     file_name = Path(source_path).name.lower() if source_path else ""
 
+    superseded = live_content is not None and file_name.endswith("-")
+    if superseded:
+        live_lines = {line.strip() for line in live_content.splitlines()}
+        # Blank the unchanged lines rather than dropping them, so line numbers stay true.
+        content = "\n".join("" if line.strip() in live_lines else line for line in content.splitlines())
+
     if "shadow" in path_lower or file_name == "shadow":
-        return _parse_shadow(content, source_path=source_path, username=username)
-    if "group" in path_lower or file_name == "group":
-        return _parse_group(content, source_path=source_path, username=username)
-    return _parse_passwd(content, source_path=source_path, username=username)
+        results = _parse_shadow(content, source_path=source_path, username=username)
+    elif "group" in path_lower or file_name == "group":
+        results = _parse_group(content, source_path=source_path, username=username)
+    else:
+        results = _parse_passwd(content, source_path=source_path, username=username)
+    if superseded:
+        for row in results:
+            row["superseded_backup"] = True
+            row["message"] = f"Previous version ({file_name}): {row['message']}"
+    return results
 
 
 def _parse_passwd(

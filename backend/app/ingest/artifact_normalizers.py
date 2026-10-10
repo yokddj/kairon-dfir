@@ -3723,6 +3723,7 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["password_status"] = row.get("password_status", "")
     linux_data["group_name"] = row.get("group_name", "")
     linux_data["members"] = row.get("members") or []
+    linux_data["superseded_backup"] = bool(row.get("superseded_backup"))
     # Sudoers fields -- consumed by app.services.host_users to resolve
     # effective sudo access (direct user rules and %group rules), the same
     # way group membership is already resolved there.

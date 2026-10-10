@@ -89,6 +89,12 @@ def _parse_linux_artifact_file(path: Path, *, parser: str | None, artifact_type:
         if target.parser == "linux_lastlog_raw":
             passwd_content = _read_linux_passwd_for_artifact(path, source_path)
             return parse_func(path.read_bytes(), source_path=source_path, passwd_content=passwd_content)
+        if target.parser == "linux_identity_raw" and path.name.endswith("-"):
+            # shadow-utils backup (passwd-, group-, shadow-): compared against the live file
+            # beside it so it contributes only what changed; see parse_identity.
+            live = path.with_name(path.name[:-1])
+            live_content = live.read_text(encoding="utf-8", errors="replace") if live.is_file() else None
+            return parse_func(path.read_text(encoding="utf-8", errors="replace"), source_path=source_path, live_content=live_content)
         if target.parser == "linux_timezone_raw":
             # classify_artifact() reports the coarse family ("linux_timezone")
             # as artifact_type for disk-image-sourced candidates, reserving

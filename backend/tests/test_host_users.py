@@ -223,6 +223,19 @@ class TestPasswordAndAccountStatus:
 
 
 class TestGroups:
+    def test_superseded_backup_lines_do_not_feed_the_inventory(self):
+        # group- beside a live group: its changed lines are the previous state, not current membership.
+        rows = parse_identity("sudo:x:27:alice\n", source_path="etc/group-", live_content="sudo:x:27:alice,bob\n")
+        assert rows and rows[0]["superseded_backup"] is True
+        docs = [
+            normalize_row(CASE_ID, EVIDENCE_ID, ART1_ID, row, {
+                "artifact_family": "linux_identity", "artifact_type": "group", "parser": "linux_identity_raw",
+                "name": "group-", "source_path": "etc/group-",
+            })
+            for row in rows
+        ]
+        assert extract_host_user_documents(docs) == []
+
     def test_secondary_group_membership(self):
         db = _db()
         _case(db)

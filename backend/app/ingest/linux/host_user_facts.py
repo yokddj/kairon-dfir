@@ -113,6 +113,9 @@ def extract_linux_host_user_facts(documents: list[dict]) -> list[dict]:
         linux = doc.get("linux") or {}
         family = str(linux.get("artifact_family") or "")
         artifact_type = str(linux.get("artifact_type") or "")
+        if linux.get("superseded_backup"):
+            # Previous state from passwd-/group-/shadow-: it no longer describes the accounts.
+            continue
         if family == ARTIFACT_FAMILY_IDENTITY and artifact_type == "passwd":
             field_rows = _passwd_rows(linux)
         elif family == ARTIFACT_FAMILY_IDENTITY and artifact_type == "shadow":
