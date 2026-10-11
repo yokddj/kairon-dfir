@@ -168,3 +168,15 @@ def test_events_are_paged_and_grouped(monkeypatch):
     assert result["events"]["total"] == 30
     assert len(result["events"]["items"]) == 5
     assert result["events"]["items"][0]["time"] == "2026-08-01T00:00:19Z"
+
+
+def test_a_session_close_after_a_restart_belongs_to_another_process(monkeypatch):
+    docs = [
+        _doc("pam_unix(login:session): session opened for user root by LOGIN(uid=0)", "2026-09-01T10:00:00+00:00", 900, process="login"),
+        _doc("wtmp system boot", "2026-09-02T08:00:00+00:00", 0, process="login", carrier="wtmp", auth_event_type="system_boot"),
+        # Same PID, after the reboot: a different login process.
+        _doc("pam_unix(login:session): session closed for user root", "2026-09-20T10:00:00+00:00", 900, process="login"),
+    ]
+    session = _run(monkeypatch, docs)["sessions"][0]
+    assert session["status"] == "ended_by_restart"
+    assert session["end"] == "2026-09-02T08:00:00Z"
