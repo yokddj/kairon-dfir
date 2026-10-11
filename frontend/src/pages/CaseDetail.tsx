@@ -621,7 +621,18 @@ export default function CaseDetail() {
                         <tr key={item.evidence_id} className={selectedProcessing?.evidence_id === item.evidence_id ? "bg-accent/10" : "bg-panel/40 hover:bg-abyss/40"}>
                           <td className="px-4 py-3"><span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.12em] ${processingStatusClass(item.processing_status)}`}>{item.processing_status.replaceAll("_", " ")}</span></td>
                           <td className="max-w-[240px] truncate px-4 py-3 font-semibold" title={item.filename}>
-                            <button type="button" onClick={() => setSelectedProcessingId(item.evidence_id)} className="text-ink hover:text-accent hover:underline" data-testid={`select-processing-${item.evidence_id}`}>{item.filename}</button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                // A deep link's evidence_id is re-applied whenever the selection differs from
+                                // it, so picking a row drops it; otherwise the selection snaps back.
+                                setSelectedProcessingId(item.evidence_id);
+                                if (searchParams.has("evidence_id")) {
+                                  const next = new URLSearchParams(searchParams);
+                                  next.delete("evidence_id");
+                                  setSearchParams(next, { replace: true });
+                                }
+                              }} className="text-ink hover:text-accent hover:underline" data-testid={`select-processing-${item.evidence_id}`}>{item.filename}</button>
                           </td>
                           <td className="max-w-[160px] truncate px-4 py-3 text-muted" title={item.host || "-"}>{item.host || "-"}</td>
                           <td className="px-4 py-3 font-mono text-xs text-muted">{evidenceTypeLabel(item.evidence_type)}</td>
