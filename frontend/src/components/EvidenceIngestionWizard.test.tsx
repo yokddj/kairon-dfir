@@ -785,6 +785,9 @@ describe("EvidenceIngestionWizard", () => {
       expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", sessionId, expect.objectContaining({ provided_host: "victoria" }));
     }
     expect(promoteEvidenceUploadSessionMock).not.toHaveBeenCalledWith("case-1", "aux", expect.anything());
+    // Both memory images get the preparation step, although the disk image was promoted last.
+    expect(await screen.findByTestId("memory-evidence-preparation-step")).toHaveTextContent("2 memory images registered");
+    expect(screen.getAllByTestId("memory-preparation-item")).toHaveLength(2);
   });
 
   it("blocks auto assignment when batch hostnames disagree and an item has none", async () => {

@@ -222,6 +222,15 @@ describe("CaseDetail Processing Queue", () => {
     expect(within(panel).getByTestId("processing-detail-open-evidence")).toHaveAttribute("href", "/evidences/ev-failed");
   });
 
+  it("lets another row be selected after landing on a deep-linked evidence", async () => {
+    renderPage("/cases/case-1?tab=processing&evidence_id=ev-complete");
+    await screen.findAllByText("complete.zip");
+    expect(within(await screen.findByTestId("processing-detail-panel")).getByTestId("processing-detail-open-evidence")).toHaveAttribute("href", "/evidences/ev-complete");
+
+    await userEvent.click(screen.getByTestId("select-processing-ev-failed"));
+    await waitFor(() => expect(within(screen.getByTestId("processing-detail-panel")).getByTestId("processing-detail-open-evidence")).toHaveAttribute("href", "/evidences/ev-failed"));
+  });
+
   it("no longer renders a View details button -- selecting a row is done by clicking its filename", async () => {
     renderPage();
     await screen.findByText("failed.zip");

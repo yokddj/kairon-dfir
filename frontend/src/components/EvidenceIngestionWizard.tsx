@@ -278,7 +278,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   // Step 6 only: the just-registered memory evidence, shown in a
   // read-only Memory Preparation screen before the wizard hands off to
   // memoryEvidenceRoute (see handleContinueFromPreparation below).
-  const [preparationEvidence, setPreparationEvidence] = useState<Evidence | null>(null);
+  // Every memory image registered by this run of the wizard: one for a single upload, possibly
+  // several for a batch (which may also hold disk images being indexed meanwhile).
+  const [preparationEvidences, setPreparationEvidences] = useState<Evidence[]>([]);
+  const preparationEvidence = preparationEvidences[0] ?? null;
   const [batchItems, setBatchItems] = useState<BatchPreflightItem[]>([]);
   const [manualOverrideAccepted, setManualOverrideAccepted] = useState(false);
   const [forcedRoutes, setForcedRoutes] = useState<Record<string, ForcedRoute>>({});
@@ -459,7 +462,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setResumeFile(null);
     setResumeFileError(null);
     setResumeVerifying(false);
-    setPreparationEvidence(null);
+    setPreparationEvidences([]);
   }
 
   function handleClose() {
@@ -471,7 +474,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     const evidence = preparationEvidence;
     if (!evidence) return;
     handleClose();
-    navigate(memoryEvidenceRoute(caseId, evidence.id));
+    navigate(preparationEvidences.length > 1 ? `/cases/${caseId}?tab=processing` : memoryEvidenceRoute(caseId, evidence.id));
   }
 
   function selectEvidenceFiles(selectedFiles: File[], options: { folderUpload?: boolean } = {}) {
@@ -800,7 +803,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
         void queryClient.invalidateQueries({ queryKey: ["resumable-evidence-uploads", caseId] });
         if (evidence.evidence_type === "memory_dump") {
           notify({ title: "Memory evidence registered", description: `${evidence.original_filename} was uploaded and registered.`, tone: "success" });
-          setPreparationEvidence(evidence);
+          setPreparationEvidences([evidence]);
           setStep(6);
           return;
         }
@@ -987,9 +990,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   });
 
   const startMutation = useMutation({
-    mutationFn: async (): Promise<{ evidence: Evidence; queuedJobs: number | null }> => {
+    mutationFn: async (): Promise<{ evidence: Evidence; queuedJobs: number | null; memoryEvidences?: Evidence[] }> => {
       if (batchItems.length) {
         let lastEvidence: Evidence | null = null;
+        const memoryEvidences: Evidence[] = [];
         let queuedTotal = 0;
         // An explicit choice (existing or new host) is one host for the whole batch: resolved, and
         // for a new host created, once.
@@ -1012,13 +1016,14 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
             full_csv_tables: fullCsvTables && item.preflight.classification.category !== "memory_dump",
           });
           lastEvidence = evidence;
+          if (evidence.evidence_type === "memory_dump") memoryEvidences.push(evidence);
           if (evidence.evidence_type !== "memory_dump" && processingMode !== "skip") {
             const result = await api.runEvidenceIndexingPlan(evidence.id, { profile: processingMode === "custom" ? "fast" : "recommended" });
             queuedTotal += result.queued_jobs.length;
           }
         }
         if (!lastEvidence) throw new Error("No ingestable evidence was selected. Auxiliary files are support files and are not processed as evidence.");
-        return { evidence: lastEvidence, queuedJobs: processingMode === "skip" ? null : queuedTotal };
+        return { evidence: lastEvidence, queuedJobs: processingMode === "skip" ? null : queuedTotal, memoryEvidences };
       }
       if (!session) throw new Error("No upload session is active");
       let evidence = promotedEvidenceRef.current;
@@ -1055,7 +1060,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       });
       return { evidence, queuedJobs: result.queued_jobs.length };
     },
-    onSuccess: ({ evidence, queuedJobs }) => {
+    onSuccess: ({ evidence, queuedJobs, memoryEvidences }) => {
       promotedRef.current = true;
       notify({
         title: queuedJobs === null ? "Evidence saved" : "Indexing started",
@@ -1069,8 +1074,11 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       void queryClient.invalidateQueries({ queryKey: ["case-processing", caseId] });
       void queryClient.invalidateQueries({ queryKey: ["evidences", caseId] });
       void queryClient.invalidateQueries({ queryKey: ["evidence-indexing-plan", evidence.id] });
-      if (evidence.evidence_type === "memory_dump") {
-        setPreparationEvidence(evidence);
+      // Any memory image in the batch gets the preparation step, whichever file came last; disk
+      // images in the same batch keep indexing in the background meanwhile.
+      const memoryToPrepare = memoryEvidences ?? (evidence.evidence_type === "memory_dump" ? [evidence] : []);
+      if (memoryToPrepare.length) {
+        setPreparationEvidences(memoryToPrepare);
         setStep(6);
         return;
       }
@@ -1848,13 +1856,13 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
         {step === 6 && preparationEvidence ? (
           <section className="mt-5" data-testid="memory-evidence-preparation-step">
-            <h2 className="text-xl font-semibold text-ink">Evidence registered</h2>
+            <h2 className="text-xl font-semibold text-ink">{preparationEvidences.length > 1 ? `${preparationEvidences.length} memory images registered` : "Evidence registered"}</h2>
             <p className="mt-1 text-sm text-muted">
-              {preparationEvidence.original_filename} was registered as memory evidence. Kairon's current preparation
-              status for this evidence is shown below.
+              {preparationEvidences.length > 1
+                ? "Each memory image's preparation status is shown below; start its analysis from its own section."
+                : `${preparationEvidence.original_filename} was registered as memory evidence. Kairon's current preparation status for this evidence is shown below.`}
+              {startMutation.data?.memoryEvidences && startMutation.data.queuedJobs ? ` The other evidence in this batch is being indexed in the background (${startMutation.data.queuedJobs} step(s) queued).` : ""}
             </p>
-
-            <MemoryEvidencePreparationCard caseId={caseId} evidenceId={preparationEvidence.id} />
 
             {/* Phase 3A golden path: once Memory Preparation is ready, this
                 is the primary action -- Continue below drops to a secondary
@@ -1876,12 +1884,18 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
               </span>
             </label>
 
-            <MemoryInitialAnalysisAction
-              caseId={caseId}
-              evidenceId={preparationEvidence.id}
-              onBeforeNavigateToResults={handleClose}
-              runFullAnalysis={runFullMemoryAnalysis}
-            />
+            {preparationEvidences.map((memoryEvidence) => (
+              <div key={memoryEvidence.id} className={preparationEvidences.length > 1 ? "mt-5 rounded-2xl border border-line p-4" : ""} data-testid="memory-preparation-item">
+                {preparationEvidences.length > 1 ? <p className="font-semibold text-ink">{memoryEvidence.original_filename}</p> : null}
+                <MemoryEvidencePreparationCard caseId={caseId} evidenceId={memoryEvidence.id} />
+                <MemoryInitialAnalysisAction
+                  caseId={caseId}
+                  evidenceId={memoryEvidence.id}
+                  onBeforeNavigateToResults={handleClose}
+                  runFullAnalysis={runFullMemoryAnalysis}
+                />
+              </div>
+            ))}
 
             <div className="mt-5 flex justify-end">
               <button
