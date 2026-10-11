@@ -3512,81 +3512,181 @@ export type MotwResponse = {
 };
 
 export type LinuxAuthEvent = {
-  id?: string | null;
-  case_id?: string | null;
+  id: string;
   evidence_id?: string | null;
   host_id?: string | null;
-  event_time?: string | null;
-  event_type?: string;
-  authentication_result?: string;
-  service?: string;
+  host?: string;
+  time?: string | null;
+  carrier: string;
+  source_file?: string;
   process?: string;
+  service?: string;
+  pid?: string;
+  kind: string;
+  result: string;
   username?: string;
-  attempted_username?: string;
+  target?: string;
+  by?: string;
   source_ip?: string;
   source_port?: number | null;
-  destination_host?: string;
   terminal?: string;
-  pid?: string | number | null;
-  uid?: string | number | null;
+  method?: string;
+  command?: string;
+  cwd?: string;
   message?: string;
-  source_file?: string;
-  artifact_type?: string;
-  aggregate_failure_count?: number | null;
-  explicit_failure_count?: number;
-  effective_failure_count?: number;
+};
+
+export type LinuxAuthFinding = {
+  id: string;
+  severity: "critical" | "high" | "medium" | "low" | string;
+  kind: string;
+  title: string;
+  detail: string;
+  time?: string | null;
+  account: string;
+  source_ip: string;
+  event_ids: string[];
+};
+
+export type LinuxAuthCoverage = { carrier: string; label: string; events: number; files: number; first?: string | null; last?: string | null };
+
+export type LinuxAuthAccount = {
+  username: string;
+  uid?: number | null;
+  shell: string;
+  kind: "root" | "system" | "human" | "unknown" | string;
+  known_account: boolean;
+  logins: number;
+  failed_attempts: number;
+  methods: string[];
+  sources: { source_ip: string; logins: number }[];
+  first_login?: string | null;
+  last_login?: string | null;
+  last_failure?: string | null;
+  sudo_commands: number;
+  sudo_denied: number;
+  su_to: { target: string; count: number }[];
+  changes: number;
+  lastlog?: { time?: string | null; source_ip?: string; terminal?: string } | null;
+};
+
+export type LinuxAuthSource = {
+  source_ip: string;
+  first_seen?: string | null;
+  last_seen?: string | null;
+  failed_attempts: number;
+  accounts_tried: { username: string; attempts: number }[];
+  accounts_tried_count: number;
+  logins: number;
+  login_accounts: string[];
+  pattern: string;
+  campaigns: number;
+  first_login?: string | null;
+};
+
+export type LinuxAuthCampaign = {
+  id: string;
+  source_ip: string;
+  pattern: string;
+  first_seen?: string | null;
+  last_seen?: string | null;
+  attempts: number;
+  accounts: { username: string; attempts: number }[];
+  account_count: number;
+  services: string[];
+  followed_by_success: boolean;
+  success_account?: string | null;
+  success_time?: string | null;
+  seconds_to_success?: number | null;
+  success_during_campaign: boolean;
+  event_ids: string[];
 };
 
 export type LinuxAuthSession = {
   id: string;
+  kind: string;
   username: string;
   source_ip?: string | null;
   source_port?: number | null;
   service?: string | null;
+  method?: string;
+  terminal?: string;
+  host?: string;
   start?: string | null;
   end?: string | null;
   duration_seconds?: number | null;
   status: string;
-  confidence?: string;
-  evidence_sources?: string[];
+  carriers: string[];
+  event_ids: string[];
 };
 
-export type LinuxAuthBruteForceGroup = {
-  id: string;
-  target_account: string;
+export type LinuxAuthFailureGroup = {
   source_ip: string;
+  username: string;
   service: string;
+  attempts: number;
+  connections: number;
   first_seen?: string | null;
   last_seen?: string | null;
-  explicit_failed_events: number;
-  pam_aggregate_failures: number;
-  effective_attempts: number;
-  distinct_usernames: string[];
-  distinct_source_ips: string[];
-  followed_by_success: boolean;
-  successful_username?: string | null;
-  time_to_success_seconds?: number | null;
-  status: string;
+  event_ids: string[];
+};
+
+export type LinuxAuthPrivilege = {
+  id: string;
+  time?: string | null;
+  tool: string;
+  user: string;
+  target: string;
+  command: string;
+  cwd: string;
+  terminal: string;
+  result: string;
+  reason: string;
+  carrier: string;
+};
+
+export type LinuxAuthAccountChange = {
+  id: string;
+  time?: string | null;
+  action: string;
+  account: string;
+  group: string;
+  by: string;
+  details: Record<string, string>;
+  privileged: boolean;
+  tool: string;
+  carrier: string;
+  message: string;
+  account_kind: string;
 };
 
 export type LinuxAuthenticationInvestigation = {
   case_id: string;
+  truncated: boolean;
   overview: {
     successful_logins: number;
     failed_attempts: number;
-    effective_failed_attempts: number;
-    reconstructed_sessions: number;
-    suspected_brute_force_groups: number;
-    distinct_source_ips: number;
-    last_successful_login?: LinuxAuthEvent | null;
-    lastlog_source_ip_count: number;
-    lastlog_supported: boolean;
+    accounts_with_logins: number;
+    accounts_targeted: number;
+    source_ips: number;
+    attack_campaigns: number;
+    sessions: number;
+    privileged_actions: number;
+    account_changes: number;
+    findings: Partial<Record<string, number>>;
+    first_event?: string | null;
+    last_event?: string | null;
   };
+  coverage: LinuxAuthCoverage[];
+  findings: LinuxAuthFinding[];
+  accounts: LinuxAuthAccount[];
+  sources: LinuxAuthSource[];
+  campaigns: LinuxAuthCampaign[];
   sessions: LinuxAuthSession[];
-  failed_authentication: LinuxAuthEvent[];
-  brute_force: LinuxAuthBruteForceGroup[];
-  last_login: LinuxAuthEvent[];
-  events: LinuxAuthEvent[];
+  failures: LinuxAuthFailureGroup[];
+  privilege: LinuxAuthPrivilege[];
+  account_changes: LinuxAuthAccountChange[];
+  events: { total: number; offset: number; limit: number; items: LinuxAuthEvent[] };
 };
 
 export type EmailArtifactItem = {
@@ -7514,18 +7614,16 @@ export const api = {
     caseId: string,
     params?: {
       username?: string;
-      attempted_username?: string;
       source_ip?: string;
-      source_port?: number;
       result?: string;
       service?: string;
-      session_state?: string;
-      brute_force_only?: boolean;
-      followed_by_success?: boolean;
       time_from?: string;
       time_to?: string;
       evidence_id?: string;
       host_id?: string | null;
+      event_group?: string;
+      offset?: number;
+      limit?: number;
     },
   ) => {
     const query = new URLSearchParams();

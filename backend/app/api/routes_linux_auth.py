@@ -25,18 +25,16 @@ def _parse_time(value: str | None) -> datetime | None:
 def get_linux_authentication(
     case_id: str,
     username: str | None = Query(default=None),
-    attempted_username: str | None = Query(default=None),
     source_ip: str | None = Query(default=None),
-    source_port: int | None = Query(default=None),
     result: str | None = Query(default=None),
     service: str | None = Query(default=None),
-    session_state: str | None = Query(default=None),
-    brute_force_only: bool = Query(default=False),
-    followed_by_success: bool | None = Query(default=None),
     time_from: str | None = Query(default=None),
     time_to: str | None = Query(default=None),
     evidence_id: str | None = Query(default=None),
     host_id: str | None = Query(default=None),
+    event_group: str | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=1000),
     db: Session = Depends(get_db),
 ) -> dict:
     if not db.get(Case, case_id):
@@ -45,9 +43,7 @@ def get_linux_authentication(
         case_id,
         {
             "username": username,
-            "attempted_username": attempted_username,
             "source_ip": source_ip,
-            "source_port": source_port,
             "result": result,
             "service": service,
             "time_from": _parse_time(time_from),
@@ -55,13 +51,8 @@ def get_linux_authentication(
             "evidence_id": evidence_id,
             "host_id": host_id,
         },
+        event_group=event_group,
+        offset=offset,
+        limit=limit,
     )
-    if session_state:
-        payload["sessions"] = [item for item in payload["sessions"] if item.get("status") == session_state]
-    if followed_by_success is not None:
-        payload["brute_force"] = [item for item in payload["brute_force"] if bool(item.get("followed_by_success")) is followed_by_success]
-    if brute_force_only:
-        usernames = {item.get("target_account") for item in payload["brute_force"]}
-        source_ips = {item.get("source_ip") for item in payload["brute_force"]}
-        payload["failed_authentication"] = [item for item in payload["failed_authentication"] if item.get("attempted_username") in usernames and item.get("source_ip") in source_ips]
     return payload

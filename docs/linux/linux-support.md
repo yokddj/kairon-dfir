@@ -80,6 +80,26 @@ Current Linux parsers cover 12 families. Coverage is calculated from detected ar
 - Fields: `timestamp`, `username`, `process`, `pid`, `source_ip`, `source_port`, `auth_method`, `run_as`, `command`, `terminal`, `event_action`, `authentication_result`, `message`. Search: `action:sudo_command runas:root`, `action:login_failure ip:203.0.113.9`.
 - `wtmp` and `btmp` store exact UTC times (no zone or year to guess); they are also what dates the syslog-style lines (see below).
 
+### Authentication investigation page
+*Access → Authentication* answers who logged in, from where, what was tried and what was done with privileges, for any Linux host, from every carrier of that data in the case:
+- `auth.log` / `secure`, and the same messages in the **systemd journal** (`sshd`, `sshd-session` of OpenSSH 9.8+, `sudo`, `su`, `login`, display managers, `useradd`/`usermod`/`passwd`...), so a journald-only host (Debian 12+, Fedora, Arch) is covered;
+- **auditd** `USER_AUTH`, `USER_LOGIN`, `USER_START`/`USER_END`, `USER_CMD` and account records (RHEL family);
+- `wtmp`, `btmp` and `lastlog`; and `/etc/passwd` (live file only), to tell `root`, system (UID below 1000) and human accounts apart.
+
+Every event of the case is read, not a first page of them. One failed attempt is often written by sshd, by `pam_unix`, by `btmp` and by auditd, all under the PID of the connection: attempts are counted **once per connection**, as the largest count any single carrier gives (never their sum, and never just one carrier, since each misses lines in its own way: rsyslog rate limiting, rotation). A login recorded by several carriers is one login.
+
+Tabs:
+- **Overview**: generic findings (successful login after brute force or password spraying from the same source; distributed attack on one account; interactive login by a system account; direct remote root login; first key-based login of an account that used passwords; an account added to `sudo`/`wheel`/`admin`/`root`/`docker`/`lxd`/`disk`/`shadow` or created with UID 0; a system account given a login shell; an account created with a system UID and a login shell; denied sudo; logins recorded only in wtmp/auditd inside the period the logs cover; logs that end before the login records), each linked to its events, and the **data coverage** of each carrier with its time span.
+- **Accounts**: logins, failures, methods, sources, last login (lastlog included), sudo, su and changes per account, with its type from `/etc/passwd`.
+- **Sources**: one row per origin with its pattern (brute force, password spray, repeated failures), the accounts it tried and the accounts it logged in as.
+- **Sessions**: SSH, console and graphical sessions, ended by their PAM close, by the wtmp logout of the same terminal, or bounded by the next shutdown or boot.
+- **Failed logins**: attack campaigns (failures from one source with gaps under 30 minutes) and failures by source, account and service.
+- **sudo / su**: commands, target users, working directory and denials; `su` is attributed to the login name in `session opened ... by <name>`, which is who really switched user.
+- **Account changes**: users and groups created or deleted, group membership, passwords, shells, UIDs, renames.
+- **Events**: the normalised events, newest first, by group, paged.
+
+Filters (account, source, result, time range, service) apply to every tab; clicking an account or source anywhere sets them.
+
 ### Linux Journal (`linux_journal`)
 - Sources: binary systemd journals (`/var/log/journal/<machine-id>/system.journal`, `user-<uid>.journal`, rotated `system@<id>.journal`, the `.journal~` left by an unclean shutdown, and the volatile `/run/log/journal`), plus `journalctl -o export` and `-o json` text exports.
 - Why it matters: Debian 12+, Fedora, Arch and recent RHEL/SUSE can run on journald alone, with no `auth.log` or `syslog` at all. Without this parser those hosts produce almost no log evidence.
@@ -278,6 +298,7 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 - Sources: `/var/log/audit/audit.log`
 - Events: SYSCALL, EXECVE, USER_AUTH, USER_LOGIN, PATH
 - Fields: `timestamp`, `audit_type`, `uid`, `auid`, `pid`, `exe`, `command`, `success`, `message`
+- User-space records (`USER_*`, `CRED_*`) also keep `audit_acct` (the account), `audit_addr`/`audit_hostname` (the remote address), `audit_res` (`success`/`failed`), `audit_op` and `audit_terminal`: the authentication trail of hosts where auditd is the main log. Evidence ingested before this has them only in the raw line; reprocess it to use them.
 - Limitations: multi-line event reconstruction is partial in v1
 
 ### Linux Shell History (`linux_shell_history`)

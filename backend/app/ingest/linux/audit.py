@@ -182,5 +182,15 @@ def parse_audit(
         }
         for index, argument in enumerate(arguments[:8]):
             row[f"audit_a{index}"] = argument[:1024]
+        if audit_type.startswith("USER_") or audit_type.startswith("CRED_"):
+            # PAM/login records: who, from where and with what outcome -- the authentication
+            # trail of hosts whose auth.log is absent or incomplete (RHEL-family auditd).
+            for field in ("res", "op", "addr", "hostname", "terminal", "id"):
+                value = kv.get(field)
+                if value and value != "?":
+                    row[f"audit_{field}"] = value
+            acct = _string_field(typed, "acct")
+            if acct and acct != "?":
+                row["audit_acct"] = acct
         results.append(row)
     return results
