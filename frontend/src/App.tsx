@@ -26,6 +26,7 @@ const HostInformationPage = lazy(() => import("./pages/HostInformationPage"));
 const CaseProcessGraphPage = lazy(() => import("./pages/CaseProcessGraphPage"));
 const CommandHistoryPage = lazy(() => import("./pages/CommandHistoryPage"));
 const LinuxAuthenticationPage = lazy(() => import("./pages/LinuxAuthenticationPage"));
+const DiskFilesPage = lazy(() => import("./pages/DiskFilesPage"));
 const IncidentTimelinePage = lazy(() => import("./pages/IncidentTimelinePage"));
 const TimelinePage = lazy(() => import("./pages/TimelinePage"));
 const CaseReportsPage = lazy(() => import("./pages/CaseReportsPage"));
@@ -166,6 +167,7 @@ export default function App() {
                         <Route path="/cases/:caseId/tables/:tableId" element={<SourceTablesPage />} />
                         <Route path="/cases/:caseId/incident-timeline" element={<IncidentTimelinePage />} />
                         <Route path="/cases/:caseId/evidence" element={<CaseDetail />} />
+                        <Route path="/cases/:caseId/evidence/:evidenceId/files" element={<DiskFilesPage />} />
                         <Route path="/cases/:caseId/ingest" element={<LegacyCaseParamRedirect suffix="/evidence?tab=processing" preserveQuery={false} />} />
                         <Route path="/cases/:caseId/detections" element={<Detections />} />
                         <Route path="/cases/:caseId/reports" element={<CaseReportsPage />} />
