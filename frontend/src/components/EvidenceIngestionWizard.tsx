@@ -918,8 +918,18 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     return numbers;
   }, [preflight?.classification.volume_diagnostics]);
 
-  const detectedHostname = preflight?.classification.hostname?.trim() || "";
+  // A batch is judged on all its ingestable items, never on whichever report happens to be first:
+  // an item that detected no hostname (a raw memory image, typically) takes the batch's hostname
+  // when exactly one was detected; with several, each item keeps its own.
+  const ingestableBatchReports = useMemo(() => batchItems.map((item) => item.preflight).filter((report) => report.classification.category !== "auxiliary"), [batchItems]);
+  const batchHostnames = useMemo(() => [...new Set(ingestableBatchReports.map((report) => report.classification.hostname?.trim() || "").filter(Boolean))], [ingestableBatchReports]);
+  const batchMissingHostname = ingestableBatchReports.some((report) => !report.classification.hostname?.trim());
+  const autoAssignPerItem = batchHostnames.length > 1 && !batchMissingHostname;
+  const detectedHostname = batchItems.length
+    ? batchHostnames.length === 1 ? batchHostnames[0] : ""
+    : preflight?.classification.hostname?.trim() || "";
   const detectedHostMatches = useMemo(() => caseHosts.filter((host) => hostMatchesName(host, detectedHostname)), [caseHosts, detectedHostname]);
+  const perItemAmbiguousHostname = autoAssignPerItem && batchHostnames.some((name) => caseHosts.filter((host) => hostMatchesName(host, name)).length > 1);
   const filteredCaseHosts = useMemo(() => {
     const query = normalizeHostLabel(hostSearch);
     if (!query) return caseHosts;
@@ -928,15 +938,15 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
   useEffect(() => {
     if (!preflight || intakeType === "memory_dump") return;
-    if (detectedHostname) {
+    if (detectedHostname || autoAssignPerItem) {
       setHostChoice("auto");
       return;
     }
     setHostChoice((current) => current === "auto" ? CREATE_HOST_CHOICE : current);
-  }, [detectedHostname, intakeType, preflight]);
+  }, [autoAssignPerItem, detectedHostname, intakeType, preflight]);
 
   async function resolveHostAssignment(report: PreflightReport | undefined = preflight ?? undefined): Promise<{ host_id?: string; provided_host?: string }> {
-    const reportHostname = report?.classification.hostname?.trim() || "";
+    const reportHostname = report?.classification.hostname?.trim() || detectedHostname;
     const reportHostMatches = caseHosts.filter((host) => hostMatchesName(host, reportHostname));
     if (hostChoice === UNASSIGNED_HOST_CHOICE) return {};
     if (hostChoice === "auto") {
@@ -976,9 +986,12 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       if (batchItems.length) {
         let lastEvidence: Evidence | null = null;
         let queuedTotal = 0;
+        // An explicit choice (existing or new host) is one host for the whole batch: resolved, and
+        // for a new host created, once.
+        const sharedHostAssignment = hostChoice === "auto" ? null : await resolveHostAssignment();
         for (const item of batchItems) {
           if (item.preflight.classification.category === "auxiliary") continue;
-          const hostAssignment = await resolveHostAssignment(item.preflight);
+          const hostAssignment = sharedHostAssignment ?? await resolveHostAssignment(item.preflight);
           const declaredPlatform = platform === "auto" ? undefined : platform;
           const evidence = await api.promoteEvidenceUploadSession(caseId, item.session.id, {
             provided_platform: declaredPlatform,
@@ -1093,12 +1106,14 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     if (hostChoice === UNASSIGNED_HOST_CHOICE) return "Choose an existing host or create a new host before indexing.";
     if (hostChoice === CREATE_HOST_CHOICE) return newHostName.trim() ? null : "Enter a hostname before indexing.";
     if (hostChoice === "auto") {
+      if (autoAssignPerItem) return perItemAmbiguousHostname ? "Several hosts match a detected hostname. Select the correct host before indexing." : null;
+      if (batchHostnames.length > 1) return `The evidences report different hostnames (${batchHostnames.join(", ")}) and some report none. Choose an existing host or create a new one before indexing.`;
       if (!detectedHostname) return "No reliable hostname was detected. Choose an existing host or create a new one before indexing.";
       if (detectedHostMatches.length > 1) return "Multiple hosts match the detected hostname. Select the correct host before indexing.";
       return null;
     }
     return hostChoice ? null : "Choose a host before indexing.";
-  }, [detectedHostMatches.length, detectedHostname, hostAssignmentRequired, hostChoice, newHostName]);
+  }, [autoAssignPerItem, batchHostnames, detectedHostMatches.length, detectedHostname, hostAssignmentRequired, hostChoice, newHostName, perItemAmbiguousHostname]);
   const overrideBlocking = activePreflightReports.some((report) => needsManualOverride(report) && !forcedRoutes[report.token]);
   const wrongRouteBlocking = activePreflightReports.some((report) => {
     const forced = forcedRoutes[report.token];
@@ -1112,7 +1127,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const assignedHostLabel = hostChoice === CREATE_HOST_CHOICE
     ? newHostName.trim() || null
     : hostChoice === "auto"
-      ? detectedHostMatches.length === 1 ? detectedHostMatches[0].display_name : detectedHostname
+      ? autoAssignPerItem ? batchHostnames.join(", ") : detectedHostMatches.length === 1 ? detectedHostMatches[0].display_name : detectedHostname
       : selectedHostName;
   // Single source of truth for "does this evidence need a host, right now,
   // that it doesn't have" -- drives the "Host required" banner, the status
@@ -1130,10 +1145,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     <div className="rounded-2xl border border-line bg-abyss/60 p-3" data-testid="host-assignment-panel">
       <p className="text-xs uppercase tracking-[0.16em] text-muted">Assign to host</p>
       <div className="mt-3 grid gap-3">
-        {detectedHostname ? (
+        {detectedHostname || autoAssignPerItem ? (
           <label className={`rounded-2xl border p-3 text-sm ${hostChoice === "auto" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
             <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === "auto"} onChange={() => setHostChoice("auto")} disabled={detectedHostMatches.length > 1} />
-            {detectedHostMatches.length === 1 ? `Auto assign to ${detectedHostMatches[0].display_name}` : `Create host from detected hostname (${detectedHostname})`}
+            {autoAssignPerItem ? `Assign each evidence to its detected host (${batchHostnames.join(", ")})` : detectedHostMatches.length === 1 ? `Auto assign to ${detectedHostMatches[0].display_name}` : `Create host from detected hostname (${detectedHostname})`}
           </label>
         ) : null}
         <label className={`rounded-2xl border p-3 text-sm ${hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
