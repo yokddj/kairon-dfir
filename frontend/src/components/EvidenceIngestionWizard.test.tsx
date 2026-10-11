@@ -721,6 +721,68 @@ describe("EvidenceIngestionWizard", () => {
     await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledTimes(2));
   });
 
+  function diskAndMemoryBatch(diskHostname: string | null, otherHostname: string | null = null) {
+    const report = (token: string, name: string, category: string, hostname: string | null) => readyReport({
+      token,
+      original_filename: name,
+      classification: { ...readyReport().classification, category, hostname, chain: [category === "memory_dump" ? "Memory Dump" : "Disk Image"] },
+    });
+    createEvidenceUploadSessionMock
+      .mockResolvedValueOnce(sessionResponse({ session: { ...sessionResponse().session, id: "session-disk", original_filename: "host.img" }, preflight: report("tok-disk", "host.img", "disk_image", diskHostname) }))
+      .mockResolvedValueOnce(sessionResponse({ session: { ...sessionResponse().session, id: "session-mem", original_filename: "host.mem" }, preflight: report("tok-mem", "host.mem", "memory_dump", otherHostname) }));
+    promoteEvidenceUploadSessionMock
+      .mockResolvedValueOnce({ id: "evidence-disk", original_filename: "host.img", evidence_type: "disk_image" })
+      .mockResolvedValueOnce({ id: "evidence-mem", original_filename: "host.mem", evidence_type: "memory_dump" });
+  }
+
+  async function inspectBatch() {
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, [new File(["d"], "host.img"), new File(["m"], "host.mem")]);
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+  }
+
+  it("gives a batch item without a hostname (raw memory) the batch's single detected hostname", async () => {
+    diskAndMemoryBatch("victoria");
+    await inspectBatch();
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledTimes(2));
+    expect(promoteEvidenceUploadSessionMock).toHaveBeenNthCalledWith(1, "case-1", "session-disk", expect.objectContaining({ provided_host: "victoria" }));
+    expect(promoteEvidenceUploadSessionMock).toHaveBeenNthCalledWith(2, "case-1", "session-mem", expect.objectContaining({ provided_host: "victoria", memory_authorization_acknowledged: true }));
+  });
+
+  it("blocks auto assignment when batch hostnames disagree and an item has none", async () => {
+    createEvidenceUploadSessionMock
+      .mockResolvedValueOnce(sessionResponse({ session: { ...sessionResponse().session, id: "s1" }, preflight: readyReport({ token: "t1", original_filename: "a.img", classification: { ...readyReport().classification, category: "disk_image", hostname: "alpha" } }) }))
+      .mockResolvedValueOnce(sessionResponse({ session: { ...sessionResponse().session, id: "s2" }, preflight: readyReport({ token: "t2", original_filename: "b.img", classification: { ...readyReport().classification, category: "disk_image", hostname: "beta" } }) }))
+      .mockResolvedValueOnce(sessionResponse({ session: { ...sessionResponse().session, id: "s3" }, preflight: readyReport({ token: "t3", original_filename: "c.mem", classification: { ...readyReport().classification, category: "memory_dump", hostname: null } }) }));
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, [new File(["a"], "a.img"), new File(["b"], "b.img"), new File(["c"], "c.mem")]);
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+
+    // No single hostname to inherit: auto assignment is not offered and a host must be chosen.
+    expect(within(screen.getByTestId("host-assignment-panel")).queryByRole("radio", { name: /detected/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId("host-assignment-guidance")).toHaveTextContent(/Enter a hostname/);
+    expect(screen.getByRole("button", { name: "Start Processing" })).toBeDisabled();
+  });
+
+  it("creates a new host once for the whole batch", async () => {
+    diskAndMemoryBatch(null);
+    await inspectBatch();
+    const hostPanel = screen.getByTestId("host-assignment-panel");
+    await userEvent.click(within(hostPanel).getByRole("radio", { name: /New host/i }));
+    await userEvent.type(within(hostPanel).getByPlaceholderText("DESKTOP-7FQ2A1"), "victoria");
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledTimes(2));
+    expect(createCaseHostMock).toHaveBeenCalledTimes(1);
+    expect(promoteEvidenceUploadSessionMock).toHaveBeenNthCalledWith(2, "case-1", "session-mem", expect.objectContaining({ host_id: "host-created" }));
+  });
+
   it("requires an explicit acknowledgement when a forced route conflicts with disk-memory detection", async () => {
     createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
       preflight: readyReport({
