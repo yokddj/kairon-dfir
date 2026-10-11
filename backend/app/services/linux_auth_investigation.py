@@ -573,13 +573,16 @@ def _sessions(logins: list[dict], events: list[dict]) -> list[dict]:
     for login in sorted(logins, key=lambda item: item["_dt"] or datetime.min.replace(tzinfo=timezone.utc)):
         start = login["_dt"]
         end_event = None
+        # PIDs are reused after a restart: a close or logout written after the next boot belongs
+        # to another process, however well its PID or terminal matches.
+        next_restart = next((event["_dt"] for event in restarts if event["evidence_id"] == login["evidence_id"] and start and event["_dt"] > start), None)
         if start:
             candidates = [event for event in closes if event["id"] not in used and event["evidence_id"] == login["evidence_id"]
-                          and event["pid"] in login["session_pids"] and event["_dt"] >= start
+                          and event["pid"] in login["session_pids"] and event["_dt"] >= start and (not next_restart or event["_dt"] <= next_restart)
                           and (not event["username"] or event["username"] == login["username"])]
             if not candidates and login["wtmp_terminal"]:
                 candidates = [event for event in logouts if event["id"] not in used and event["evidence_id"] == login["evidence_id"]
-                              and event["terminal"] == login["wtmp_terminal"] and event["_dt"] >= start
+                              and event["terminal"] == login["wtmp_terminal"] and event["_dt"] >= start and (not next_restart or event["_dt"] <= next_restart)
                               and (not login["wtmp_pid"] or not event["pid"] or event["pid"] == login["wtmp_pid"])]
             end_event = min(candidates, key=lambda event: event["_dt"], default=None)
         status = "closed"
