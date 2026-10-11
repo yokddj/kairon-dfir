@@ -13,21 +13,16 @@ ARG MEMPROCFS_SHA256_ARM64=03554471c1702d73f2b83c22e2483b0e110b04399fc399c07fc4f
 ARG MEMPROCFS_SOURCE_COMMIT=2e85ff7edc3772e24bce28bdc4cccb744a8b2456
 ARG MEMPROCFS_SOURCE_SHA256=8916c442d1a7de667aebaa6c34e69a43325e474e003da89a6881f3961a4b2048
 ARG TARGETARCH
-ARG KAIRON_COMMIT=unknown
-ARG BUILD_DATE=unknown
 
 LABEL org.opencontainers.image.title="Kairon optional Volatility memory worker" \
       org.opencontainers.image.description="Operator-built isolated worker for authorized Kairon memory analysis using Volatility 3 from PyPI" \
       org.opencontainers.image.source="https://github.com/yokddj/kairon-dfir" \
-      org.opencontainers.image.revision="${KAIRON_COMMIT}" \
       org.opencontainers.image.licenses="Kairon project license: see repository LICENSE; bundled-at-build dependency: Volatility 3, Volatility Software License 1.0" \
-      org.opencontainers.image.version="${BUILD_DATE}" \
       org.kairon.volatility3.version="${VOLATILITY3_VERSION}" \
       org.kairon.memprocfs.version="${MEMPROCFS_VERSION}+kairon-patches"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    KAIRON_COMMIT="${KAIRON_COMMIT}" \
     KAIRON_WORKER_ID="memory-worker"
 
 WORKDIR /app
@@ -95,6 +90,14 @@ RUN python -m pip install --no-cache-dir ".[dev]" \
     && vol --help >/tmp/vol-help.txt \
     && grep -i "volatility" /tmp/vol-help.txt >/dev/null \
     && rm -rf /root/.cache /tmp/vol-help.txt /build
+
+# Per-commit metadata last: declared earlier, it changes every build and invalidates every layer
+# below it, rebuilding MemProcFS and reinstalling Volatility on each deploy.
+ARG KAIRON_COMMIT=unknown
+ARG BUILD_DATE=unknown
+ENV KAIRON_COMMIT="${KAIRON_COMMIT}"
+LABEL org.opencontainers.image.revision="${KAIRON_COMMIT}" \
+      org.opencontainers.image.version="${BUILD_DATE}"
 
 USER 10001:10001
 
