@@ -590,6 +590,14 @@ class TestAuditParser:
     def audit_content(self):
         return (FIXTURES_DIR / "audit.log").read_text()
 
+    def test_user_space_records_keep_account_address_and_result(self):
+        # The authentication trail of auditd-only hosts: who, from where, and the outcome.
+        from app.ingest.linux.audit import parse_audit
+        line = ("type=USER_AUTH msg=audit(1700000000.123:456): pid=2085 uid=0 auid=4294967295 ses=4294967295 "
+                "msg='op=PAM:authentication grantors=? acct=\"root\" exe=\"/usr/sbin/sshd\" hostname=203.0.113.9 addr=203.0.113.9 terminal=ssh res=failed'")
+        row = parse_audit(line, source_path="/var/log/audit/audit.log")[0]
+        assert (row["audit_acct"], row["audit_addr"], row["audit_res"], row["audit_op"], row["audit_terminal"]) == ("root", "203.0.113.9", "failed", "PAM:authentication", "ssh")
+
     def test_syscall_entry(self, audit_content):
         from app.ingest.linux.audit import parse_audit
         results = parse_audit(audit_content, source_path="/var/log/audit/audit.log")

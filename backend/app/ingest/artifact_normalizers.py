@@ -3702,6 +3702,9 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["euid"] = row.get("euid") or ""
     linux_data["syscall"] = row.get("syscall") or ""
     linux_data["audit_type"] = row.get("audit_type") or ""
+    for _audit_field in ("audit_res", "audit_op", "audit_acct", "audit_addr", "audit_hostname", "audit_terminal", "audit_id"):
+        if row.get(_audit_field):
+            linux_data[_audit_field] = row[_audit_field]
     linux_data["audit_key"] = row.get("audit_key") or ""
     linux_data["audit_name"] = row.get("audit_name") or ""
     for _arg_index in range(8):

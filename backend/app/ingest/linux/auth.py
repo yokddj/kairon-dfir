@@ -340,6 +340,42 @@ def parse_lastlog(content: bytes, *, source_path: str = "") -> list[dict]:
     return parse_linux_lastlog(content, source_path=source_path)
 
 
+def classify_auth_message(message: str, process: str | None, *, fallback_username: str | None = None) -> dict:
+    """The authentication fields of one auth.log/secure message, without its syslog prefix.
+
+    Shared by the auth.log parser and by consumers of the same messages from other carriers
+    (the systemd journal, which holds them on hosts without rsyslog).
+    """
+    detected_username = _extract_username(message)
+    if detected_username is None:
+        detected_username = fallback_username
+    ip_matches = _IP_RE.findall(message)
+    source_ip = ip_matches[0] if ip_matches else None
+    event_action = _extract_event_action(message, process)
+    structured = _extract_structured_auth(message, process)
+    structured.update({key: value for key, value in _extract_privilege_and_console(message, event_action).items() if value not in (None, "")})
+    auth_event_type, authentication_result = _auth_type_from_action(event_action)
+    if structured.get("username"):
+        detected_username = structured["username"]
+    return {
+        "username": detected_username,
+        "attempted_username": structured.get("attempted_username") or detected_username,
+        "service": structured.get("service") or process or "",
+        "source_ip": structured.get("source_ip") or source_ip,
+        "source_port": structured.get("source_port"),
+        "terminal": structured.get("terminal", ""),
+        "uid": structured.get("uid"),
+        "auth_method": _extract_auth_method(message),
+        "authentication_result": authentication_result,
+        "auth_event_type": auth_event_type,
+        "effective_failure_count": structured.get("effective_failure_count"),
+        "run_as": structured.get("run_as", ""),
+        "cwd": structured.get("cwd", ""),
+        "command": structured.get("command", ""),
+        "event_action": event_action,
+    }
+
+
 def parse_auth(
     content: str | bytes,
     *,
@@ -364,8 +400,6 @@ def parse_auth(
         process = None
         pid = None
         message = stripped
-        detected_username = None
-        source_ip = None
 
         syslog_match = _SYSLOG_TIMESTAMP_RE.match(stripped)
         if syslog_match:
@@ -380,25 +414,7 @@ def parse_auth(
             pid = None
             message = stripped
 
-        detected_username = _extract_username(message)
-        if detected_username is None:
-            detected_username = username
-
-        ip_matches = _IP_RE.findall(message)
-        if ip_matches:
-            source_ip = ip_matches[0]
-
-        event_action = _extract_event_action(message, process)
-        auth_method = _extract_auth_method(message)
-        structured = _extract_structured_auth(message, process)
-        structured.update({key: value for key, value in _extract_privilege_and_console(message, event_action).items() if value not in (None, "")})
-        auth_event_type, authentication_result = _auth_type_from_action(event_action)
-        if structured.get("username"):
-            detected_username = structured["username"]
-        attempted_username = structured.get("attempted_username") or detected_username
-        source_ip = structured.get("source_ip") or source_ip
-        service = structured.get("service") or process or ""
-
+        fields = classify_auth_message(message, process, fallback_username=username)
         results.append({
             "artifact_family": "linux_auth",
             "artifact_type": "auth_log",
@@ -407,23 +423,9 @@ def parse_auth(
             "timestamp": timestamp,
             "timestamp_status": "assumed_year_utc" if timestamp else "missing",
             "detected_host": host,
-            "username": detected_username,
-            "attempted_username": attempted_username,
             "process": process,
-            "service": service,
             "pid": pid,
-            "source_ip": source_ip,
-            "source_port": structured.get("source_port"),
-            "terminal": structured.get("terminal", ""),
-            "uid": structured.get("uid"),
-            "auth_method": auth_method,
-            "authentication_result": authentication_result,
-            "auth_event_type": auth_event_type,
-            "effective_failure_count": structured.get("effective_failure_count"),
-            "run_as": structured.get("run_as", ""),
-            "cwd": structured.get("cwd", ""),
-            "command": structured.get("command", ""),
-            "event_action": event_action,
+            **fields,
             "message": message[:2000],
             "raw_excerpt": raw_excerpt,
         })
