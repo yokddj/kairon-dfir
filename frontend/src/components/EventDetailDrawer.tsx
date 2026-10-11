@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import EventSummary from "./EventSummary";
 import { copyToClipboard } from "../lib/time";
+import { diskFileRouteForEvent } from "../lib/canonicalRoutes";
 
 type Props = {
   open: boolean;
@@ -49,6 +50,7 @@ export default function EventDetailDrawer({ open, loading = false, error, event,
   const filePath = String(file.path ?? "");
   const processName = String(process.name ?? "");
   const hostName = String(host.name ?? "");
+  const diskFileHref = event ? diskFileRouteForEvent(event) : "";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
@@ -91,6 +93,11 @@ export default function EventDetailDrawer({ open, loading = false, error, event,
                 <button type="button" onClick={() => onSearchSameProcess(processName)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">
                   Search same process
                 </button>
+              ) : null}
+              {diskFileHref ? (
+                <a href={diskFileHref} className="rounded-xl border border-accent/40 px-3 py-2 text-xs text-accent">
+                  Open source file in disk explorer
+                </a>
               ) : null}
               {hostName && onSearchSameHost ? (
                 <button type="button" onClick={() => onSearchSameHost(hostName)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">

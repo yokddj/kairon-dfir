@@ -9,7 +9,7 @@ import { useActiveCase } from "../context/ActiveCaseContext";
 import { useNotifications } from "../context/NotificationsContext";
 import { useHostAssignment } from "../hooks/useHostAssignment";
 import { useHostContext } from "../hooks/useHostContext";
-import { linuxCommandHistoryRoute, memoryEvidenceRoute } from "../lib/canonicalRoutes";
+import { diskFilesRoute, linuxCommandHistoryRoute, memoryEvidenceRoute } from "../lib/canonicalRoutes";
 import EvidenceSourceTablesPanel from "../components/EvidenceSourceTablesPanel";
 import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 import {
@@ -1625,6 +1625,7 @@ function formatReportStatus(status: string | null | undefined) {
             <button type="button" onClick={() => setDeleteDialogOpen(true)} className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
               Delete evidence
             </button>
+            {diskImage && data?.case_id ? <Link to={diskFilesRoute(data.case_id, evidenceId)} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Browse files</Link> : null}
             {data?.case_id ? <Link to={addFindingHref} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Add finding</Link> : null}
             {data?.case_id ? <Link to={`/cases/${data.case_id}`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back to case</Link> : null}
           </div>

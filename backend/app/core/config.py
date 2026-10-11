@@ -280,6 +280,10 @@ class Settings(BaseSettings):
     disk_image_max_bytes: int = 1099511627776
     disk_image_max_segments: int = 64
     disk_image_max_partitions: int = 64
+    # Disk file explorer (app.services.disk_file_explorer): limits of one export.
+    disk_file_export_max_bytes: int = 2 * 1024**3
+    disk_file_export_max_files: int = 5000
+    disk_file_browser_max_entries: int = 10000
     disk_image_max_files_per_volume: int = 50000
     disk_image_max_bytes_per_volume: int = 10737418240
     disk_image_max_directory_depth: int = 16

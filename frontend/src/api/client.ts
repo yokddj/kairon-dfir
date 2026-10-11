@@ -18,6 +18,15 @@ const API_BASE_URLS = Array.from(
 );
 export const API_BASE_URL = API_BASE_URLS[0] ?? fallbackApiBase;
 
+function diskFilesQuery(params: Record<string, string | number | undefined>) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") query.set(key, String(value));
+  }
+  const value = query.toString();
+  return value ? `?${value}` : "";
+}
+
 function hostScopeQuery(params?: { host_id?: string | null; host?: string | null }) {
   const query = new URLSearchParams();
   if (params?.host_id) query.set("host_id", params.host_id);
@@ -305,6 +314,50 @@ export type DiskImage = {
   error_json: Record<string, unknown>;
   volumes: DiskVolume[];
 };
+
+export type DiskFileVolume = {
+  id: string;
+  partition_index: number;
+  label?: string | null;
+  filesystem_type?: string | null;
+  partition_type?: string | null;
+  length_bytes: number;
+  logical_volume?: string | null;
+  browsable: boolean;
+  unavailable_reason?: string | null;
+  installations: Array<{ platform: string; hostname?: string | null; distro?: string | null; version?: string | null; root_path: string }>;
+};
+
+export type DiskFileVolumes = {
+  evidence_id: string;
+  format: string;
+  image_name: string;
+  volumes: DiskFileVolume[];
+  archive_password: string;
+};
+
+export type DiskFileStatus = "allocated" | "deleted" | "deleted_inode_reused" | "deleted_metadata_lost";
+
+export type DiskFileEntry = {
+  name: string;
+  path: string;
+  inode: number | null;
+  parent_inode?: number | null;
+  kind: "dir" | "file" | "symlink" | "other";
+  status: DiskFileStatus;
+  size: number | null;
+  mode?: number | null;
+  uid?: number | null;
+  gid?: number | null;
+  mtime: number | null;
+  atime: number | null;
+  ctime: number | null;
+  crtime: number | null;
+};
+
+export type DiskFileListing = { path: string; inode: number | null; entries: DiskFileEntry[]; total: number; truncated: boolean };
+export type DiskFileSearch = { results: DiskFileEntry[]; scanned: number; truncated: boolean };
+export type DiskFileExportItem = { path: string; inode?: number | null; parent_inode?: number | null };
 
 export type InstallationSummary = {
   id: string;
@@ -7211,6 +7264,34 @@ export const api = {
     return uploadFormData<Evidence>(`/cases/${caseId}/disk-images/upload`, formData, { onProgress: options?.onProgress, transport: "xhr" });
   },
   getEvidenceDiskImage: (evidenceId: string) => request<DiskImage>(`/evidences/${evidenceId}/disk-image`),
+  getDiskFileVolumes: (caseId: string, evidenceId: string) => request<DiskFileVolumes>(`/cases/${caseId}/evidences/${evidenceId}/files/volumes`),
+  listDiskFiles: (caseId: string, evidenceId: string, volumeId: string, params: { path?: string; inode?: number | null }) =>
+    request<DiskFileListing>(`/cases/${caseId}/evidences/${evidenceId}/files/volumes/${volumeId}/list${diskFilesQuery({ path: params.path, inode: params.inode ?? undefined })}`),
+  findDiskFiles: (caseId: string, evidenceId: string, volumeId: string, params: { q: string; path?: string; include_deleted?: boolean }) =>
+    request<DiskFileSearch>(`/cases/${caseId}/evidences/${evidenceId}/files/volumes/${volumeId}/find${diskFilesQuery({ q: params.q, path: params.path, include_deleted: params.include_deleted ? "true" : undefined })}`),
+  exportDiskFiles: async (caseId: string, evidenceId: string, volumeId: string, items: DiskFileExportItem[], includeDeleted: boolean) => {
+    const response = await apiFetch(`/cases/${caseId}/evidences/${evidenceId}/files/volumes/${volumeId}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items, include_deleted: includeDeleted }),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      let message = body || `HTTP ${response.status}`;
+      try {
+        const parsed = JSON.parse(body) as { detail?: { message?: string } | string };
+        message = typeof parsed.detail === "string" ? parsed.detail : parsed.detail?.message ?? message;
+      } catch {
+        // plain-text error body
+      }
+      throw new Error(message);
+    }
+    return {
+      blob: await response.blob(),
+      filename: extractDownloadFilename(response.headers.get("content-disposition"), "kairon-export.zip"),
+      summary: response.headers.get("x-kairon-export-summary") ?? "",
+    };
+  },
   getCaseDiskImageInstallations: (caseId: string) => request<InstallationSummary[]>(`/cases/${caseId}/disk-image-installations`),
   getIngestionReadiness: (caseId: string) => request<IngestionReadiness>(`/cases/${caseId}/ingestion-readiness`),
   getCaseActivity: (caseId: string) => request<ActivityCenterResponse>(`/cases/${caseId}/activity`),

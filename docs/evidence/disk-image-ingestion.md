@@ -349,6 +349,28 @@ If EWF is recognized but not processed, verify that:
 - `pyewf` (the `libewf-python` package) is installed and importable
 - the segment set is complete and in one directory
 
+## File explorer
+
+**Browse files** in Evidence Detail (or *Open source file in disk explorer* in an event's detail) opens `/cases/<case>/evidence/<evidence>/files`: the filesystem of each readable volume as it is in the image, including deleted entries.
+
+- **Formats:** raw and E01, which are read in place. VMDK/VHD/QCOW/VDI are converted to a temporary RAW only while processing, so they are not browsable.
+- **Isolation:** every filesystem read runs in `app.disk_images.file_browser_cli`, a child process the API kills on a timeout (60 s for a directory, 300 s for a search, 30 min for an export). TSK parses attacker-controlled structures; a hang or crash ends that request, not the server.
+- **Deleted entries:** each one says how much of it survives.
+  - `deleted`: the inode is free. Its content may be recoverable (usual on NTFS and FAT; ext3/ext4 clear the size and block pointers, so it is usually gone).
+  - `deleted_inode_reused`: the inode now belongs to another file. It is never exported as this file.
+  - `deleted_metadata_lost`: only the name is left.
+- **Search:** finds by name or glob (`*.php`, or a path glob such as `/etc/*cron*`) across the whole volume. Deleted directories are not descended into.
+- **Export:** single files, a selection, or whole folders, as a ZIP protected with the password `infected` (ZipCrypto, so any unzip tool opens it). The export never trusts what the browser sends: each item is looked up again in its directory by name and inode. `kairon-export.json` in the archive lists every file with its inode, MAC times, size, SHA-256/MD5 and its result:
+  - `exported`
+  - `recovered`: deleted, read through its surviving inode
+  - `partial`
+  - `suspect`: deleted and read back as all zeros
+  - `unrecoverable`
+  - `skipped`, with the reason
+- **Audit:** each export is written to the audit log as `disk_files_export`, with the user, the case, the evidence and the file list.
+- **Limits:** `DISK_FILE_EXPORT_MAX_BYTES` (2 GiB), `DISK_FILE_EXPORT_MAX_FILES` (5000) and `DISK_FILE_BROWSER_MAX_ENTRIES` (10 000 entries per directory).
+- **Not included:** carving of unallocated space.
+
 ## Known limitations
 
 - VMDK/VHD/VHDX/QCOW/QCOW2/VDI still use a controlled `qemu-img convert` temporary export to RAW instead of direct filesystem access (EWF no longer does -- see the Read-only access section above).
