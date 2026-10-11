@@ -333,6 +333,9 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const requiresPathInput = acquisitionSource === "server_path";
   const requiresFolderInput = folderUploadSelected;
   const activePreflightReports = batchItems.length ? batchItems.map((item) => item.preflight) : preflight ? [preflight] : [];
+  // Auxiliary support files (symbol bundles, Volatility profiles...) are never promoted, so their
+  // own status (often "blocked": not standalone evidence) must not hold back the evidence beside them.
+  const ingestablePreflightReports = activePreflightReports.filter((report) => !batchItems.length || report.classification.category !== "auxiliary");
 
   const caseHostsQuery = useQuery({ queryKey: ["case-hosts", caseId], queryFn: () => api.getCaseHosts(caseId), enabled: open && Boolean(caseId), staleTime: 15_000 });
   const caseHosts = caseHostsQuery.data?.hosts ?? [];
@@ -776,8 +779,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     onSuccess: async (response) => {
       if ("batch" in response) {
         setBatchItems(response.items);
-        setSession(response.items[0]?.session ?? null);
-        setPreflight(response.items[0]?.preflight ?? null);
+        // The batch's primary report is its first real evidence, never a support file listed first.
+        const primaryItem = response.items.find((item) => item.preflight.classification.category !== "auxiliary") ?? response.items[0];
+        setSession(primaryItem?.session ?? null);
+        setPreflight(primaryItem?.preflight ?? null);
         setUploadProgress(1);
         setInspectionState("complete");
         setInspectionError(null);
@@ -1077,7 +1082,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     },
   });
 
-  const blocked = activePreflightReports.some((report) => report.status === "blocked" && !manualOverrideAccepted && !needsManualOverride(report));
+  const blocked = ingestablePreflightReports.some((report) => report.status === "blocked" && !manualOverrideAccepted && !needsManualOverride(report));
   const hasMemoryEvidence = activePreflightReports.some((report) => report.classification.category === "memory_dump") || intakeType === "memory_dump";
 
   const canAdvanceStep4 = useMemo(() => {
@@ -1114,8 +1119,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     }
     return hostChoice ? null : "Choose a host before indexing.";
   }, [autoAssignPerItem, batchHostnames, detectedHostMatches.length, detectedHostname, hostAssignmentRequired, hostChoice, newHostName, perItemAmbiguousHostname]);
-  const overrideBlocking = activePreflightReports.some((report) => needsManualOverride(report) && !forcedRoutes[report.token]);
-  const wrongRouteBlocking = activePreflightReports.some((report) => {
+  const overrideBlocking = ingestablePreflightReports.some((report) => needsManualOverride(report) && !forcedRoutes[report.token]);
+  const wrongRouteBlocking = ingestablePreflightReports.some((report) => {
     const forced = forcedRoutes[report.token];
     const detected = routeForCategory(report.classification.category);
     return forced && detected && forced !== detected && [forced, detected].includes("disk_image") && [forced, detected].includes("memory_dump") && !wrongRouteAccepted[report.token];
@@ -1139,7 +1144,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   // (e.g. the instant a host is picked), or React unmounts/remounts the
   // panel out from under the very selection the analyst is making.
   const hostRequirementBlocking = hostAssignmentBlockingReason !== null;
-  const readyToProcess = !preflight?.diagnostics.length && !hostRequirementBlocking;
+  const readyToProcess = !ingestablePreflightReports.some((report) => report.diagnostics.length) && !hostRequirementBlocking;
 
   const hostAssignmentPanel = (
     <div className="rounded-2xl border border-line bg-abyss/60 p-3" data-testid="host-assignment-panel">
@@ -1590,8 +1595,12 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                     <div className="mt-3 grid gap-2 text-sm text-muted sm:grid-cols-2">
                       <p>Detected kind: <span className="text-ink">{evidenceKindLabel(report.classification.category)}</span></p>
                       <p>Detected platform: <span className="text-ink">{report.classification.platform === "unknown" ? report.classification.contained_object ?? "Unknown" : report.classification.platform}</span></p>
+                      {report.classification.category === "auxiliary" && batchItems.length ? (
+                        <p className="sm:col-span-2" data-testid="auxiliary-skipped">Status: <span className="text-muted">skipped — support file, not processed as evidence</span></p>
+                      ) : <>
                       <p>Assign to host: <span className="text-ink">{assignedHostLabel || "Needs confirmation"}</span></p>
                       <p>Status: <span className={hostRequirementBlocking ? "text-amber" : report.status === "ready" ? "text-mint" : report.status === "warning" ? "text-amber" : "text-danger"}>{hostRequirementBlocking ? "action required" : report.status}</span></p>
+                      </>}
                     </div>
                     {expectedMismatch ? (
                       <div className="mt-3 rounded-xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber" data-testid="expected-kind-warning">

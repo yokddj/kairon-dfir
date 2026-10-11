@@ -753,6 +753,40 @@ describe("EvidenceIngestionWizard", () => {
     expect(promoteEvidenceUploadSessionMock).toHaveBeenNthCalledWith(2, "case-1", "session-mem", expect.objectContaining({ provided_host: "victoria", memory_authorization_acknowledged: true }));
   });
 
+  it("processes a mixed batch whose first file is a blocked auxiliary support file", async () => {
+    const item = (id: string, name: string, classification: Record<string, unknown>, extra: Record<string, unknown> = {}) => sessionResponse({
+      session: { ...sessionResponse().session, id, original_filename: name },
+      preflight: readyReport({ token: `tok-${id}`, original_filename: name, classification: { ...readyReport().classification, ...classification }, ...extra }),
+    });
+    createEvidenceUploadSessionMock
+      .mockResolvedValueOnce(item("aux", "Debian5_26.zip", { category: "auxiliary", hostname: null, container: "ZIP" }, {
+        status: "blocked",
+        status_checks: [{ label: "Supported", ok: false, detail: "Auxiliary support file" }],
+        diagnostics: [{ severity: "error", title: "Not evidence", reason: "Volatility profile", action: "None" }],
+      }))
+      .mockResolvedValueOnce(item("kcore", "host.kcore.img", { category: "memory_dump", hostname: null }))
+      .mockResolvedValueOnce(item("memdump", "host.memdump.img", { category: "memory_dump", hostname: null }))
+      .mockResolvedValueOnce(item("disk", "host.sda1.img", { category: "disk_image", hostname: "victoria" }));
+    promoteEvidenceUploadSessionMock.mockImplementation(async (_case: string, sessionId: string) => ({ id: `evidence-${sessionId}`, original_filename: sessionId, evidence_type: sessionId === "disk" ? "disk_image" : "memory_dump" }));
+
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, ["Debian5_26.zip", "host.kcore.img", "host.memdump.img", "host.sda1.img"].map((name) => new File(["x"], name)));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+
+    expect(screen.getByTestId("auxiliary-skipped")).toBeInTheDocument();
+    const start = screen.getByRole("button", { name: "Start Processing" });
+    expect(start).toBeEnabled();
+    await userEvent.click(start);
+
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledTimes(3));
+    for (const sessionId of ["kcore", "memdump", "disk"]) {
+      expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", sessionId, expect.objectContaining({ provided_host: "victoria" }));
+    }
+    expect(promoteEvidenceUploadSessionMock).not.toHaveBeenCalledWith("case-1", "aux", expect.anything());
+  });
+
   it("blocks auto assignment when batch hostnames disagree and an item has none", async () => {
     createEvidenceUploadSessionMock
       .mockResolvedValueOnce(sessionResponse({ session: { ...sessionResponse().session, id: "s1" }, preflight: readyReport({ token: "t1", original_filename: "a.img", classification: { ...readyReport().classification, category: "disk_image", hostname: "alpha" } }) }))
