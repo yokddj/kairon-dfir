@@ -1,12 +1,8 @@
 FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
 
-ARG KAIRON_COMMIT=unknown
-ARG BUILD_DATE=unknown
 ARG KAIRON_VERSION=1.1.0
 ARG DOTNET_VERSION=9.0
 
-ENV KAIRON_COMMIT=${KAIRON_COMMIT}
-ENV BUILD_DATE=${BUILD_DATE}
 ENV APP_VERSION=${KAIRON_VERSION}
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -18,9 +14,7 @@ ENV EZTOOLS_ROOT=/opt/eztools
 WORKDIR /app
 
 LABEL org.opencontainers.image.title="Kairon DFIR backend" \
-      org.opencontainers.image.version="${KAIRON_VERSION}" \
-      org.opencontainers.image.revision="${KAIRON_COMMIT}" \
-      org.opencontainers.image.created="${BUILD_DATE}"
+      org.opencontainers.image.version="${KAIRON_VERSION}"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential libpq-dev libyara-dev pkg-config p7zip-full curl ca-certificates libicu-dev ewf-tools sleuthkit dosfstools mtools gdisk parted qemu-utils \
@@ -50,10 +44,13 @@ RUN set -eux; \
         rm -f "/tmp/${tool}.zip"; \
     done
 
+# The pinned dependency set first, so a code change does not reinstall every package.
+COPY backend/requirements.lock /app/requirements.lock
+RUN pip install --no-cache-dir -r requirements.lock
+
 COPY backend/app /app/app
 COPY backend/tests /app/tests
 COPY backend/pyproject.toml /app/pyproject.toml
-COPY backend/requirements.lock /app/requirements.lock
 COPY docs /app/docs
 COPY tools/demo /app/tools/demo
 # pyproject.toml's dependency bounds are loose (e.g. "fastapi>=0.115.0"), so
@@ -65,5 +62,14 @@ COPY tools/demo /app/tools/demo
 # first pass resolved differently.
 RUN pip install --no-cache-dir ".[dev]" \
     && pip install --no-cache-dir -r requirements.lock
+
+# Per-commit metadata last: declared earlier, it changes every build and invalidates every layer
+# below it, re-downloading .NET and the Eric Zimmerman tools on each deploy.
+ARG KAIRON_COMMIT=unknown
+ARG BUILD_DATE=unknown
+ENV KAIRON_COMMIT=${KAIRON_COMMIT} \
+    BUILD_DATE=${BUILD_DATE}
+LABEL org.opencontainers.image.revision="${KAIRON_COMMIT}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

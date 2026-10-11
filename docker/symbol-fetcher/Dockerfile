@@ -1,18 +1,13 @@
 ARG PYTHON_IMAGE=python:3.12-slim
 FROM ${PYTHON_IMAGE}
 
-ARG KAIRON_COMMIT=unknown
-ARG BUILD_DATE=unknown
-
 LABEL org.opencontainers.image.title="Kairon optional Windows symbol fetcher" \
       org.opencontainers.image.description="Isolated, operator-built fetcher for exact official Windows debugging symbols" \
       org.opencontainers.image.source="https://github.com/yokddj/kairon-dfir" \
-      org.opencontainers.image.revision="${KAIRON_COMMIT}" \
       org.opencontainers.image.licenses="Kairon project license and Volatility Software License 1.0"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    KAIRON_COMMIT="${KAIRON_COMMIT}" \
     KAIRON_WORKER_ID="symbol-fetcher" \
     XDG_CACHE_HOME=/volatility-cache \
     HOME=/volatility-cache
@@ -35,6 +30,12 @@ RUN python -m pip install --no-cache-dir ".[dev]" \
     && python -m pip install --require-hashes --no-deps --no-cache-dir -r /build/requirements.lock \
     && python /build/copy_volatility_notice.py \
     && rm -rf /root/.cache /build
+
+# Per-commit metadata last, so it does not invalidate the layers above on every build.
+ARG KAIRON_COMMIT=unknown
+ARG BUILD_DATE=unknown
+ENV KAIRON_COMMIT="${KAIRON_COMMIT}"
+LABEL org.opencontainers.image.revision="${KAIRON_COMMIT}"
 
 USER 10001:10001
 
