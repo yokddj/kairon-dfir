@@ -19,6 +19,9 @@ whether its content can be trusted:
   deleted_inode_reused  -- the inode now belongs to another, live object, so
                            its content is not this file's
   deleted_metadata_lost -- only the name is left
+  deleted_journal       -- (ext3/ext4) gone from the directory, but an old
+                           copy of the directory block in the journal still
+                           holds it; see app.disk_images.ext_journal
 """
 
 from __future__ import annotations
@@ -35,11 +38,16 @@ from typing import Any
 import pytsk3
 
 from app.disk_images.ewf_img_info import EwfImgInfo
-from app.disk_images.volume_access import _PytskFileReader, _open_persisted_volume_fs_info
+from app.disk_images.ext_journal import ExtJournal
+from app.disk_images.volume_access import _PytskFileReader, _open_persisted_volume_fs_info, _volume_byte_reader
 
 
 _CHUNK = 1024 * 1024
 _UNSAFE_NAME = re.compile(r'[\x00-\x1f\x7f<>:"/\\|?*]')
+
+
+# One request per process: the opened image and, lazily, its journal index.
+_context: dict[str, Any] = {}
 
 
 class BrowserError(Exception):
@@ -63,6 +71,7 @@ def _open_fs(request: dict[str, Any]) -> tuple[Any, pytsk3.FS_Info]:
         metadata_json=volume.get("metadata") or {},
         warnings_json=volume.get("warnings") or [],
     )
+    _context.update(reader=reader, spec=spec, request=request)
     try:
         return reader, _open_persisted_volume_fs_info(reader, spec)
     except Exception as exc:
@@ -180,18 +189,71 @@ def _iter_entries(directory, parent_path: str):
             yield entry
 
 
+def _journal(fs_info) -> ExtJournal | None:
+    """The ext3/ext4 journal index, or None (not ext, no journal, unreadable)."""
+    if "journal" not in _context:
+        _context["journal"] = None
+        request = _context.get("request") or {}
+        if request.get("journal", True):
+            try:
+                journal = ExtJournal(_volume_byte_reader(_context["reader"], _context["spec"]), fs_info, cache_path=request.get("journal_cache"))
+                if journal.copies:
+                    _context["journal"] = journal
+            except Exception:
+                pass
+    return _context["journal"]
+
+
+def _directory_blocks(fs_info, inode: int) -> list[int]:
+    try:
+        handle = fs_info.open_meta(inode=int(inode))
+        return [block for attribute in handle for run in attribute for block in range(int(run.addr), int(run.addr) + int(run.len))]
+    except Exception:
+        return []
+
+
+def _journal_entry(item: dict[str, Any], parent_path: str, parent_inode: int | None) -> dict[str, Any]:
+    return {
+        "name": item["name"],
+        "path": f"{parent_path.rstrip('/')}/{item['name']}",
+        "inode": item["inode"],
+        "parent_inode": parent_inode,
+        "kind": item["kind"],
+        "status": "deleted_journal",
+        "size": None, "mode": None, "uid": None, "gid": None, "mtime": None, "atime": None, "ctime": None, "crtime": None,
+        "journal_last_seen": item.get("last_seen"),
+        "journal_gone_by": item.get("gone_by"),
+        "journal_first_seq": item.get("first_seq"),
+        "journal_last_seq": item.get("last_seq"),
+    }
+
+
+def _journal_entries(fs_info, directory_inode: int | None, parent_path: str, live: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Names the journal remembers in this directory that it no longer lists."""
+    journal = _journal(fs_info)
+    if journal is None or directory_inode is None:
+        return []
+    present = {(entry["name"], entry["inode"]) for entry in live}
+    names = journal.past_names(_directory_blocks(fs_info, directory_inode))
+    return [_journal_entry(item, parent_path, directory_inode) for key, item in sorted(names.items()) if key not in present]
+
+
 def _resolve(fs_info, item: dict[str, Any]) -> dict[str, Any] | None:
     """Look the item up again in its parent directory, so what gets exported
     and how it is labelled come from the filesystem, never from the request."""
     path = str(item.get("path") or "")
     parent_path, _, name = path.rpartition("/")
     parent_path = parent_path or "/"
-    try:
-        directory = _open_dir(fs_info, inode=item.get("parent_inode"), path=parent_path)
-    except BrowserError:
-        return None
     wanted = item.get("inode")
-    for entry in _iter_entries(directory, parent_path):
+    live: list[dict[str, Any]] = []
+    parent_inode = item.get("parent_inode")
+    try:
+        directory = _open_dir(fs_info, inode=parent_inode, path=parent_path)
+        parent_inode = _directory_inode(directory)
+        live = list(_iter_entries(directory, parent_path))
+    except BrowserError:
+        pass
+    for entry in [*live, *_journal_entries(fs_info, parent_inode, parent_path, live)]:
         if entry["name"] == name and (wanted is None or entry["inode"] == wanted):
             return entry
     return None
@@ -204,13 +266,10 @@ def op_list(fs_info: pytsk3.FS_Info, request: dict[str, Any]) -> dict[str, Any]:
         inode = int(fs_info.info.root_inum)
     directory = _open_dir(fs_info, inode=inode, path=path)
     limit = int(request.get("max_entries") or 10000)
-    entries: list[dict[str, Any]] = []
-    total = 0
-    for entry in _iter_entries(directory, path):
-        total += 1
-        if len(entries) < limit:
-            entries.append(entry)
-    return {"path": path, "inode": inode, "entries": entries, "total": total, "truncated": total > len(entries)}
+    live = list(_iter_entries(directory, path))
+    every = [*live, *_journal_entries(fs_info, _directory_inode(directory), path, live)]
+    entries = every[:limit]
+    return {"path": path, "inode": inode, "entries": entries, "total": len(every), "truncated": len(every) > len(entries), "journal": _journal(fs_info) is not None}
 
 
 def _walk(fs_info, path: str, inode: int | None, *, include_deleted: bool, ancestors: set[int], budget: dict[str, int], depth: int = 0):
@@ -254,15 +313,51 @@ def op_find(fs_info: pytsk3.FS_Info, request: dict[str, Any]) -> dict[str, Any]:
         start_inode = int(fs_info.info.root_inum)
     max_results = int(request.get("max_results") or 500)
     budget = {"entries": int(request.get("max_entries_scanned") or 2_000_000), "exhausted": 0}
+    include_deleted = bool(request.get("include_deleted"))
     results: list[dict[str, Any]] = []
     scanned = 0
-    for entry in _walk(fs_info, start, start_inode, include_deleted=bool(request.get("include_deleted")), ancestors=set(), budget=budget):
-        scanned += 1
+    directories: dict[int, str] = {start_inode: start} if start_inode is not None else {}
+    live: set[tuple[int | None, str, int | None]] = set()
+    parent_of: dict[tuple[str, int | None], int | None] = {}
+
+    def matches(entry: dict[str, Any]) -> bool:
         target = entry["path"].lower() if match_path else entry["name"].lower()
-        if fnmatch.fnmatchcase(target, pattern):
+        return fnmatch.fnmatchcase(target, pattern)
+
+    for entry in _walk(fs_info, start, start_inode, include_deleted=include_deleted, ancestors=set(), budget=budget):
+        scanned += 1
+        live.add((entry.get("parent_inode"), entry["name"], entry["inode"]))
+        if entry["status"] == "allocated":
+            parent_of[(entry["name"], entry["inode"])] = entry.get("parent_inode")
+        if entry["kind"] == "dir" and entry["status"] == "allocated" and entry["inode"] is not None:
+            directories.setdefault(entry["inode"], entry["path"])
+        if matches(entry):
             results.append(entry)
             if len(results) >= max_results:
                 return {"results": results, "scanned": scanned, "truncated": True}
+    journal = _journal(fs_info) if include_deleted else None
+    if journal is not None:
+        seen: set[tuple[int, str, int]] = set()
+        for number, owner, names in journal.journaled_directory_blocks():
+            # Only a directory's first block starts with "."; any other block
+            # is placed by a name it holds that is still live somewhere.
+            if owner is None:
+                owner = next((parent_of[(name, inode)] for name, inode, _, _ in names if (name, inode) in parent_of), None)
+            if owner is None:
+                owner = next((parent_of[(name, inode)] for inode, _, name in journal.dirents(journal.block(number)) if (name, inode) in parent_of), None)
+            if owner is None or (owner not in directories and start != "/"):
+                continue
+            parent_path = directories.get(owner, f"/<deleted directory {owner}>")
+            for (name, inode), item in journal.past_names([number]).items():
+                key = (owner, name, inode)
+                if key in live or key in seen:
+                    continue
+                seen.add(key)
+                entry = _journal_entry(item, parent_path, owner)
+                if matches(entry):
+                    results.append(entry)
+                    if len(results) >= max_results:
+                        return {"results": results, "scanned": scanned, "truncated": True}
     return {"results": results, "scanned": scanned, "truncated": bool(budget["exhausted"])}
 
 
@@ -273,9 +368,44 @@ def _safe_component(name: str) -> str:
     return cleaned[:200]
 
 
+def _write_from_journal(journal: ExtJournal, recovered: dict[str, Any], record: dict[str, Any], destination: Path, budget: dict[str, int]) -> dict[str, Any]:
+    size = recovered["size"]
+    times = {key: recovered.get(key) or None for key in ("mtime", "atime", "ctime", "crtime")}
+    record = {**record, **times, "size": size, "uid": recovered["uid"], "gid": recovered["gid"], "method": "ext_journal",
+              "journal_seq": recovered["seq"], "journal_committed": recovered["committed"], "blocks": recovered["blocks"], "blocks_reused": recovered["blocks_reused"]}
+    if size > budget["bytes"]:
+        return {**record, "result": "skipped", "reason": "Over the export size limit."}
+    sha256 = hashlib.sha256()
+    md5 = hashlib.md5()
+    written = 0
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("wb") as out:
+        for chunk in journal.iter_content(recovered):
+            sha256.update(chunk)
+            md5.update(chunk)
+            out.write(chunk)
+            written += len(chunk)
+    budget["bytes"] -= written
+    record = {**record, "bytes_written": written, "sha256": sha256.hexdigest(), "md5": md5.hexdigest()}
+    source = f"Rebuilt from a copy of its inode in the ext journal (transaction {recovered['seq']})."
+    if written < size:
+        return {**record, "result": "partial", "reason": f"{source} The volume ended at byte {written}."}
+    if recovered["blocks_reused"]:
+        return {**record, "result": "suspect", "reason": f"{source} {recovered['blocks_reused']} of its {recovered['blocks']} blocks now belong to other files, so part of the content is probably theirs."}
+    return {**record, "result": "recovered", "reason": f"{source} None of its {recovered['blocks']} blocks has been given to another file since."}
+
+
 def _export_one(fs_info, entry: dict[str, Any], destination: Path, budget: dict[str, int]) -> dict[str, Any]:
     record = {key: entry.get(key) for key in ("path", "inode", "status", "size", "mtime", "atime", "ctime", "crtime")}
     status = entry.get("status")
+    if status == "deleted_journal":
+        journal = _journal(fs_info)
+        if entry.get("journal_last_seq") is None:
+            return {**record, "result": "unrecoverable", "reason": "The journal only holds this name as an already-deleted record, so when it existed (and which version of its inode was its) is unknown."}
+        recovered = journal.recover(int(entry["inode"]), min_seq=entry.get("journal_first_seq"), max_seq=entry.get("journal_last_seq")) if journal and entry.get("kind") == "file" else None
+        if recovered is None:
+            return {**record, "result": "unrecoverable", "reason": "The journal has the name, but no copy of its inode from while the name existed and the file still had content."}
+        return _write_from_journal(journal, recovered, record, destination, budget)
     if status == "deleted_inode_reused":
         return {**record, "result": "skipped", "reason": "The inode now belongs to another file, so its content is not this file's."}
     if status == "deleted_metadata_lost" or not entry.get("inode"):
@@ -314,12 +444,23 @@ def _export_one(fs_info, entry: dict[str, Any], destination: Path, budget: dict[
             written += len(chunk)
     budget["bytes"] -= written
     result = {**record, "size": size, "bytes_written": written, "sha256": sha256.hexdigest(), "md5": md5.hexdigest()}
+    if status == "deleted" and (size == 0 or written == 0 or not nonzero):
+        # ext3/ext4 clear the inode on delete; an older copy in the journal may still point at the content.
+        journal = _journal(fs_info)
+        if journal is not None:
+            try:
+                generation = journal.inode_on_disk(int(entry["inode"]))["generation"]
+                recovered = journal.recover(int(entry["inode"]), generation=generation)
+            except Exception:
+                recovered = None
+            if recovered is not None:
+                return _write_from_journal(journal, recovered, record, destination, budget)
     if written == 0 and size > 0:
         destination.unlink(missing_ok=True)
         return {**result, "result": "unrecoverable", "reason": reason or "No content could be read.", "sha256": None, "md5": None}
     if status == "deleted" and size == 0:
         destination.unlink(missing_ok=True)
-        return {**result, "result": "unrecoverable", "reason": "The filesystem cleared the size and block pointers when it deleted the file (usual on ext3/ext4).", "sha256": None, "md5": None}
+        return {**result, "result": "unrecoverable", "reason": "The filesystem cleared the size and block pointers when it deleted the file (usual on ext3/ext4), and the journal has no older copy of its inode.", "sha256": None, "md5": None}
     if written < size:
         return {**result, "result": "partial", "reason": reason}
     if status == "deleted" and size and not nonzero:

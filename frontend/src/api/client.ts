@@ -336,7 +336,7 @@ export type DiskFileVolumes = {
   archive_password: string;
 };
 
-export type DiskFileStatus = "allocated" | "deleted" | "deleted_inode_reused" | "deleted_metadata_lost";
+export type DiskFileStatus = "allocated" | "deleted" | "deleted_inode_reused" | "deleted_metadata_lost" | "deleted_journal";
 
 export type DiskFileEntry = {
   name: string;
@@ -353,9 +353,12 @@ export type DiskFileEntry = {
   atime: number | null;
   ctime: number | null;
   crtime: number | null;
+  journal_last_seen?: number | null;
+  journal_gone_by?: number | null;
+  journal_last_seq?: number | null;
 };
 
-export type DiskFileListing = { path: string; inode: number | null; entries: DiskFileEntry[]; total: number; truncated: boolean };
+export type DiskFileListing = { path: string; inode: number | null; entries: DiskFileEntry[]; total: number; truncated: boolean; journal?: boolean };
 export type DiskFileSearch = { results: DiskFileEntry[]; scanned: number; truncated: boolean };
 export type DiskFileExportItem = { path: string; inode?: number | null; parent_inode?: number | null };
 

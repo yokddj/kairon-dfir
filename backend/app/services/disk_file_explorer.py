@@ -106,6 +106,8 @@ def _volume_request(db: Session, evidence: Evidence, volume_id: str) -> dict[str
             "metadata": volume.metadata_json or {},
             "warnings": volume.warnings_json or [],
         },
+        # The journal never changes (the image is read-only), so its index is built once per volume.
+        "journal_cache": str(get_settings().backend_temp_dir / "disk-journal-index" / f"{volume.id}.json"),
     }
 
 

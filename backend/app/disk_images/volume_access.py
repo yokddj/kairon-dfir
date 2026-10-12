@@ -169,6 +169,26 @@ def _open_logical_volume_fs_info(read_physical, logical_volume_name: str) -> pyt
     return pytsk3.FS_Info(LogicalVolumeImgInfo(reader))
 
 
+def _volume_byte_reader(image_reader: "_PytskFileReader | EwfImgInfo", volume: Any):
+    """read(offset, size) over the volume's own bytes (offset 0 = start of the
+    filesystem), for the readers that need raw blocks TSK does not expose,
+    such as the ext3/ext4 journal parser. Plain partitions and logical volumes
+    only; the NTFS boot-sector repair does not matter for raw block reads."""
+    lvm_marker = (volume.metadata_json or {}).get("lvm")
+    if lvm_marker:
+        container_offset_bytes = int(lvm_marker["container_offset_bytes"])
+
+        def read_physical(offset: int, size: int) -> bytes:
+            return image_reader.read(container_offset_bytes + offset, size)
+
+        pv_metadata = parse_physical_volume_metadata(read_physical)
+        logical_volume = next(lv for lv in pv_metadata.volume_group.logical_volumes if lv.name == str(lvm_marker["logical_volume"]))
+        img = LogicalVolumeImgInfo(LogicalVolumeReader(logical_volume, pv_metadata.volume_group, read_physical))
+        return img.read
+    offset_bytes = int(volume.offset_bytes)
+    return lambda offset, size: image_reader.read(offset_bytes + offset, size)
+
+
 def _open_persisted_volume_fs_info(image_reader: "_PytskFileReader | EwfImgInfo", volume: Any) -> pytsk3.FS_Info:
     """Reopen a pytsk3.FS_Info for an already-persisted DiskVolume, for
     materialization. A plain partition is reopened exactly as before (a flat
