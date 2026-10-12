@@ -56,12 +56,13 @@ describe("DiskFilesPage", () => {
     listDiskFiles.mockResolvedValue({
       path: "/tmp",
       inode: null,
-      total: 3,
+      total: 4,
       truncated: false,
       entries: [
         entry("c.pl", { inode: 11 }),
         entry("ccm0efZD.c", { inode: 12, status: "deleted", size: 0 }),
         entry("ucf.config.48161", { inode: 13, status: "deleted_inode_reused", size: null }),
+        entry("37292.c", { inode: 14, status: "deleted_journal", size: null, mtime: null, journal_last_seen: 1570274625, journal_gone_by: 1570274632, journal_last_seq: 36258 }),
       ],
     });
     exportDiskFiles.mockResolvedValue({ blob: new Blob(["zip"]), filename: "kairon-ev-1-c.pl.zip", summary: "1/1" });
@@ -73,11 +74,16 @@ describe("DiskFilesPage", () => {
     renderPage("/cases/case-1/evidence/ev-1/files?path=/tmp");
     const rows = await screen.findAllByTestId("disk-file-row");
     expect(listDiskFiles).toHaveBeenCalledWith("case-1", "ev-1", "vol-root", { path: "/tmp", inode: null });
-    expect(rows).toHaveLength(3);
-    expect(within(rows[1]).getByText("Deleted")).toBeInTheDocument();
-    expect(within(rows[2]).getByText("Deleted · inode reused")).toBeInTheDocument();
+    expect(rows).toHaveLength(4);
+    const byName = (name: string) => rows.find((row) => within(row).queryByText(name))!;
+    expect(within(byName("ccm0efZD.c")).getByText("Deleted")).toBeInTheDocument();
+    expect(within(byName("ucf.config.48161")).getByText("Deleted · inode reused")).toBeInTheDocument();
+    // A name only the journal remembers, with when it was last listed and when it was gone.
+    expect(within(byName("37292.c")).getByText("Deleted · from journal")).toBeInTheDocument();
+    expect(within(byName("37292.c")).getByTestId("journal-times")).toHaveTextContent("seen 2019-10-05 11:23:45 · gone by 2019-10-05 11:23:52");
+    expect(within(byName("37292.c")).getByRole("checkbox")).toBeEnabled();
     // A reused inode's content is another file's: it cannot be selected for export.
-    expect(within(rows[2]).getByRole("checkbox")).toBeDisabled();
+    expect(within(byName("ucf.config.48161")).getByRole("checkbox")).toBeDisabled();
     expect(screen.getByTestId("export-warning")).toHaveTextContent("infected");
     expect(screen.getByRole("option", { name: /No filesystem Kairon can read/ })).toBeDisabled();
   });

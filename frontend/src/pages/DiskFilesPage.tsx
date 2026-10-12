@@ -12,12 +12,14 @@ const STATUS_LABEL: Record<DiskFileStatus, string> = {
   deleted: "Deleted",
   deleted_inode_reused: "Deleted · inode reused",
   deleted_metadata_lost: "Deleted · name only",
+  deleted_journal: "Deleted · from journal",
 };
 const STATUS_HINT: Record<DiskFileStatus, string> = {
   allocated: "",
   deleted: "The inode was not reused: the content may still be recoverable (NTFS/FAT usually; ext3/ext4 clear the block pointers).",
   deleted_inode_reused: "The inode now belongs to another file. Its content is not this file's, so it is not exported.",
   deleted_metadata_lost: "Only the name survives in the directory.",
+  deleted_journal: "No longer in the directory: the name comes from an older copy of it in the ext3/ext4 journal. The content can be rebuilt when the journal also kept the file's inode from that time.",
 };
 type SortKey = "name" | "size" | "mtime";
 
@@ -253,7 +255,7 @@ export default function DiskFilesPage() {
                 ) : null}
                 {rows.map((entry) => {
                   const deleted = entry.status !== "allocated";
-                  const exportable = entry.status !== "deleted_inode_reused" && entry.status !== "deleted_metadata_lost" && (entry.kind === "file" || (entry.kind === "dir" && !deleted));
+                  const exportable = entry.status !== "deleted_inode_reused" && entry.status !== "deleted_metadata_lost" && (entry.kind === "file" || (entry.kind === "dir" && !deleted)) && !(entry.status === "deleted_journal" && entry.journal_last_seq == null);
                   const canOpen = entry.kind === "dir" && (!deleted || entry.status === "deleted");
                   return (
                     <tr key={`${entry.path}-${entry.inode}`} data-testid="disk-file-row" className={`border-t border-line ${!searchTerm && entry.name === highlight ? "bg-accent/10" : ""} ${deleted ? "text-muted" : ""}`}>
@@ -268,7 +270,13 @@ export default function DiskFilesPage() {
                         )}
                         {searchTerm ? <button type="button" onClick={() => update({ q: null, path: parentOf(entry.path), inode: null, file: entry.name })} className="ml-2 text-[11px] text-muted underline">show in folder</button> : null}
                       </td>
-                      <td className="whitespace-nowrap px-3 py-2">{deleted ? <span title={STATUS_HINT[entry.status]} className="rounded-full border border-danger/40 bg-danger/10 px-2 py-0.5 text-[11px] text-danger">{STATUS_LABEL[entry.status]}</span> : null}</td>
+                      <td className="whitespace-nowrap px-3 py-2">{deleted ? <span title={STATUS_HINT[entry.status]} className="rounded-full border border-danger/40 bg-danger/10 px-2 py-0.5 text-[11px] text-danger">{STATUS_LABEL[entry.status]}</span> : null}
+                        {entry.status === "deleted_journal" && (entry.journal_last_seen || entry.journal_gone_by) ? (
+                          <p className="mt-1 font-mono text-[11px] text-muted" data-testid="journal-times">
+                            {entry.journal_last_seen ? `seen ${fmtEpoch(entry.journal_last_seen)}` : ""}{entry.journal_gone_by ? ` · gone by ${fmtEpoch(entry.journal_gone_by)}` : ""}
+                          </p>
+                        ) : null}
+                      </td>
                       <td className="whitespace-nowrap px-3 py-2">{entry.kind === "dir" ? "" : entry.size === null ? "-" : entry.size === 0 ? "0" : formatBytes(entry.size)}</td>
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-xs">{fmtEpoch(entry.mtime)}</td>
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{fmtEpoch(entry.atime)}</td>

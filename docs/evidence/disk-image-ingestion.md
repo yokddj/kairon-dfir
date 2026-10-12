@@ -359,10 +359,16 @@ If EWF is recognized but not processed, verify that:
   - `deleted`: the inode is free. Its content may be recoverable (usual on NTFS and FAT; ext3/ext4 clear the size and block pointers, so it is usually gone).
   - `deleted_inode_reused`: the inode now belongs to another file. It is never exported as this file.
   - `deleted_metadata_lost`: only the name is left.
+- **ext3/ext4 journal:** when ext3/ext4 delete a file, they reuse its directory slot and clear the inode, so usually nothing of it is left. The journal (jbd2) still keeps whole copies of the metadata blocks it wrote. `app.disk_images.ext_journal` indexes those copies once per volume (the index is cached under `<temp>/disk-journal-index/`) and uses them in two ways:
+  - **Names:** a listing also shows names an older copy of the directory still held, as `deleted_journal`, with when the name was last listed and when it was gone.
+  - **Content:** an export of such a name, or of an ext `deleted` entry whose inode was cleared, is rebuilt from an old copy of its inode, followed by its blocks as they are on the volume now.
+  - **Tying a copy to the file:** inode numbers are reused, so a copy is only used if it is from the window in which the directory listed the name, or has the same generation as the inode on disk. A name seen only as an already-deleted record has no such window and is not rebuilt.
+  - **Confidence:** the result reports how many of the file's blocks are allocated to something else now. `recovered` means none are; `suspect` means some are.
+  - **Limit:** the journal is circular. Anything older than what it still holds is gone.
 - **Search:** finds by name or glob (`*.php`, or a path glob such as `/etc/*cron*`) across the whole volume. Deleted directories are not descended into.
 - **Export:** single files, a selection, or whole folders, as a ZIP protected with the password `infected` (ZipCrypto, so any unzip tool opens it). The export never trusts what the browser sends: each item is looked up again in its directory by name and inode. `kairon-export.json` in the archive lists every file with its inode, MAC times, size, SHA-256/MD5 and its result:
   - `exported`
-  - `recovered`: deleted, read through its surviving inode
+  - `recovered`: deleted, read through its surviving inode or rebuilt from the journal (`method: ext_journal`, with the transaction)
   - `partial`
   - `suspect`: deleted and read back as all zeros
   - `unrecoverable`
