@@ -72,6 +72,9 @@ TERMINAL_STATUSES = {STATUS_VALID, STATUS_INVALID, STATUS_UNSUPPORTED, STATUS_VA
 # back to VALIDATION_FAILED rather than crashing the request.
 _UNSUPPORTED_CODES = {"SYMBOL_UNSUPPORTED_PLATFORM", "SYMBOL_UNSUPPORTED_FORMAT"}
 _ACCEPTED_EXTENSIONS = (".json", ".json.xz")
+# A Volatility 2 Linux profile (module.dwarf + System.map), converted on the worker.
+_VOL2_PROFILE_EXTENSION = ".zip"
+VOL2_CONVERSION_TIMEOUT_SECONDS = 600
 
 
 class DuplicateValidationJobError(ValueError):
@@ -92,7 +95,11 @@ class LinuxSymbolValidationOutcome:
 
 def has_accepted_isf_extension(filename: str) -> bool:
     lowered = (filename or "").strip().lower()
-    return lowered.endswith(_ACCEPTED_EXTENSIONS)
+    return lowered.endswith(_ACCEPTED_EXTENSIONS) or is_vol2_profile_upload(lowered)
+
+
+def is_vol2_profile_upload(filename: str) -> bool:
+    return (filename or "").strip().lower().endswith(_VOL2_PROFILE_EXTENSION)
 
 
 def _identity_fields(identity: LinuxSymbolIdentity | dict | None) -> dict[str, Any] | None:
@@ -287,6 +294,15 @@ def execute_linux_symbol_validation(job_id: str, *, db: Session | None = None) -
         db.commit()
 
         staging_path = Path(job.staging_path)
+        if is_vol2_profile_upload(staging_path.name):
+            converted, outcome_status, outcome_reason = _convert_vol2_profile(staging_path, evidence, required_identity, settings=settings)
+            if converted is None:
+                _fail_job(db, job, outcome_status, outcome_reason)
+                return
+            staging_path.unlink(missing_ok=True)
+            staging_path = converted
+            job.staging_path = str(converted)
+            db.commit()
         detected_identity, outcome_status, outcome_reason = _inspect_isolated(staging_path, settings=settings)
 
         if outcome_status is not None:
@@ -311,6 +327,47 @@ def execute_linux_symbol_validation(job_id: str, *, db: Session | None = None) -
     finally:
         if owns_session:
             db.close()
+
+
+def _convert_vol2_profile(
+    profile_path: Path, evidence: Evidence, required_identity: LinuxSymbolIdentity | None, *, settings: Any
+) -> tuple[Path | None, str, str]:
+    """Turn an uploaded Volatility 2 profile into an ISF next to it
+    (app.services.memory.linux_vol2_profile, in an isolated subprocess: it
+    parses an untrusted upload and reads the memory image). Returns
+    (isf path, "", "") or (None, outcome_status, reason)."""
+    import json
+    import sys
+
+    from app.services.memory.evidence_access import resolve_memory_evidence_path
+    from app.services.memory.subprocess_isolation import SubprocessIsolationTimeout, run_isolated
+
+    banner = required_identity.banner if required_identity else None
+    if not banner:
+        return None, STATUS_VALIDATION_FAILED, "Kairon has not found this memory image's kernel banner, which a Volatility 2 profile needs to be matched."
+    try:
+        image_path = resolve_memory_evidence_path(evidence, settings=settings)
+    except Exception:  # noqa: BLE001
+        return None, STATUS_VALIDATION_FAILED, "The memory image could not be opened to check the profile against it."
+    output = profile_path.with_suffix(".json")
+    argv = [sys.executable, "-m", "app.services.memory.linux_vol2_profile", str(profile_path), str(image_path), banner, str(output)]
+    try:
+        result = run_isolated(argv, timeout_seconds=VOL2_CONVERSION_TIMEOUT_SECONDS, termination_grace_seconds=5)
+    except SubprocessIsolationTimeout:
+        output.unlink(missing_ok=True)
+        return None, STATUS_VALIDATION_FAILED, "Converting the Volatility 2 profile exceeded the time limit and was stopped."
+    try:
+        payload = json.loads(result.stdout.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        payload = {}
+    if result.returncode != 0 or not payload.get("ok") or not output.is_file():
+        output.unlink(missing_ok=True)
+        if result.returncode != 0 or not payload:
+            logger.warning("volatility 2 profile conversion failed", extra={"returncode": result.returncode, "stderr": result.stderr[:4096].decode("utf-8", "replace")})
+        code = str(payload.get("code") or "SYMBOL_PARSE_FAILED")
+        status = STATUS_UNSUPPORTED if code in _UNSUPPORTED_CODES else STATUS_INVALID if code == "SYMBOL_PROFILE_MISMATCH" else STATUS_VALIDATION_FAILED
+        return None, status, str(payload.get("message") or "The Volatility 2 profile could not be converted.")
+    return output, "", ""
 
 
 def _inspect_isolated(

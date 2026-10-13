@@ -6,6 +6,7 @@ import re
 import signal
 import subprocess
 import sys
+import importlib.util
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,6 +106,19 @@ def resolve_volatility_invocation() -> tuple[list[str], str]:
         message = "Python executable for Volatility 3 was not found." if error == "python_missing" else "Volatility 3 executable was not found."
         raise VolatilityRunnerError(code, message)
     return argv_prefix, display or Path(argv_prefix[0]).name
+
+
+LEGACY_LINUX_ENTRY_POINT = Path(__file__).with_name("volatility_legacy_linux.py")
+
+
+def _linux_invocation(argv_prefix: list[str]) -> list[str]:
+    """Linux plugins go through volatility_legacy_linux (kernels before 2.6.29)
+    whenever this interpreter has Volatility 3 -- the memory worker image does.
+    -I keeps the script's own directory (whose platform/ package would shadow the
+    standard library's) off sys.path."""
+    if importlib.util.find_spec("volatility3") is None:
+        return argv_prefix
+    return [sys.executable, "-I", str(LEGACY_LINUX_ENTRY_POINT)]
 
 
 ALLOWED_VOLATILITY_PLUGINS = {
@@ -273,7 +287,7 @@ def run_plugin(
             probe.unlink(missing_ok=True)
         except OSError as exc:
             raise VolatilityRunnerError("MEMORY_SYMBOL_CACHE_NOT_WRITABLE", "Volatility symbol cache is not writable by the memory worker.") from exc
-    argv = build_plugin_argv(argv_prefix, evidence_path, plugin, offline=offline, cache_path=effective_cache_path, symbol_path=effective_symbol_path, extra_args=extra_args)
+    argv = build_plugin_argv(_linux_invocation(argv_prefix) if plugin.startswith("linux.") else argv_prefix, evidence_path, plugin, offline=offline, cache_path=effective_cache_path, symbol_path=effective_symbol_path, extra_args=extra_args)
     timeout = max(1, int(timeout_seconds or settings.memory_plugin_timeout_seconds))
     max_bytes = max(1, int(max_output_bytes or settings.memory_plugin_output_max_bytes))
     logger.info("memory volatility plugin started", extra={"plugin": plugin, "executable": display})

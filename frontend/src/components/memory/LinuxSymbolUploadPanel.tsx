@@ -134,6 +134,10 @@ export function LinuxSymbolUploadPanel({ caseId, evidenceId, architecture, onVal
       <p className="mt-2 text-sm text-ink">
         Kairon requires a compatible Volatility 3 ISF for this Linux kernel.
       </p>
+      <p className="mt-1 text-xs text-muted" data-testid="linux-symbol-vol2-hint">
+        A Volatility 2 Linux profile works too: the zip with module.dwarf and System.map that CTFs and older guides provide.
+        Kairon converts it and checks it against this memory image.
+      </p>
       <div className="mt-3 grid gap-2 text-sm text-muted sm:grid-cols-2">
         <p>
           Expected kernel: <span className="text-ink">{identityLine(requirementQuery.data?.expected_identity ?? null)}</span>
@@ -142,7 +146,7 @@ export function LinuxSymbolUploadPanel({ caseId, evidenceId, architecture, onVal
           Architecture: <span className="text-ink">{architecture}</span>
         </p>
         <p className="sm:col-span-2">
-          Accepted formats: <span className="text-ink">.json, .json.xz</span>
+          Accepted formats: <span className="text-ink">.json, .json.xz, .zip (Volatility 2 profile)</span>
         </p>
       </div>
 
@@ -244,7 +248,7 @@ export function LinuxSymbolUploadPanel({ caseId, evidenceId, architecture, onVal
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".json,.json.xz"
+                  accept=".json,.json.xz,.zip"
                   className="sr-only"
                   onChange={(event) => handleFileChosen(event.target.files?.[0] ?? null)}
                   data-testid="linux-symbol-file-input"

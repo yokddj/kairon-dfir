@@ -102,6 +102,8 @@ Supported profiles:
 - `files_basic`: `windows.filescan`
 - `find_evil`: Kairon's checks (`windows.pslist`, `windows.psscan`, `windows.cmdline`, `windows.malfind`, `windows.ldrmodules`) and MemProcFS FindEvil (Windows)
 
+Linux plugins need a symbol file for the exact kernel: a Volatility 3 ISF or a Volatility 2 profile (`.zip`), see [Linux memory symbols](linux_symbols.md).
+
 **Run all** runs every profile above, in this order: metadata, processes, extended processes, shell history, files, Find Evil, network, modules, handles, kernel, suspicious memory.
 
 ### Find Evil
