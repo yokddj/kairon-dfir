@@ -538,9 +538,23 @@ class TestPreparationEndpoint:
         direct = get_preparation_status(db, EVIDENCE_ID)
         response = get_memory_evidence_preparation(CASE_ID, EVIDENCE_ID, db=db)
 
+        result_views = response.pop("result_views")
+        upload_enabled = response.pop("linux_symbol_upload_enabled")
         assert response == direct.to_dict()
         assert response["readiness"] == "ready"
         assert response["platform"] == "windows"
+        assert "memory_handle" in result_views["presentation_families"]
+        assert "memprocfs" in result_views["frameworks"]
+        assert upload_enabled is False
+
+    def test_result_views_follow_the_platform(self):
+        from app.services.memory.capability_registry import platform_result_views
+        from app.services.memory.platform import PlatformFamily
+
+        linux = platform_result_views(PlatformFamily.LINUX)
+        assert set(linux["presentation_families"]) == {"memory_process", "memory_network_connection", "memory_shell_history"}
+        assert linux["frameworks"] == ["volatility3"]
+        assert platform_result_views(PlatformFamily.UNKNOWN) is None
 
     def test_linux_symbols_required_via_endpoint(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         from app.api.routes_memory import get_memory_evidence_preparation

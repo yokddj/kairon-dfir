@@ -15,6 +15,7 @@ import { MemoryExperimentalResultsPanel } from "../components/memory/MemoryExper
 import { MemoryPreparationCard } from "../components/memory/MemoryPreparationCard";
 import { INITIAL_ANALYSIS_PROFILE } from "../components/memory/MemoryInitialAnalysisAction";
 import { VmwareCompanionSection } from "../components/memory/VmwareCompanionSection";
+import { LinuxSymbolUploadPanel } from "../components/memory/LinuxSymbolUploadPanel";
 import { ZeroResultWarningBanner } from "../components/memory/ZeroResultWarningBanner";
 import { assignedHostMatchesDetected, normalizeEvidenceHostName } from "../lib/evidenceDetailFormatting";
 import { capabilityEnabled } from "../lib/platformRegistry";
@@ -343,50 +344,14 @@ export default function MemoryEvidencePage() {
     (overview?.evidences || []).map((evidence, index) => [evidence.id, evidenceReadinessQueries[index]?.data]),
   );
 
-  // Per-evidence symbol readiness is diagnostic only.  Volatility
-  // identifies layers and resolves symbols during the actual run.
-  const symbolReadinessQuery = useQuery({
-    queryKey: ["memory-symbol-readiness", caseId, evidenceId],
-    queryFn: () => api.getMemorySymbolReadiness(caseId, evidenceId),
-    enabled: Boolean(caseId && evidenceId),
-    refetchOnWindowFocus: false,
-  });
-  const symbolReadiness = symbolReadinessQuery.data ?? null;
-
-  // Automatic preparation pipeline.  This is the new state machine
-  // the analyst sees in the "Memory preparation" card.  Polled
-  // aggressively while preparation is in progress.
-  const symbolPreparationQuery = useQuery({
-    queryKey: ["memory-symbol-preparation", caseId, evidenceId],
-    queryFn: () => api.getMemorySymbolPreparation(caseId, evidenceId),
-    enabled: Boolean(caseId && evidenceId),
-    refetchOnWindowFocus: false,
-    refetchInterval: (query) => {
-      const data = query.state.data as { ui_state?: string } | undefined;
-      if (data?.ui_state && data.ui_state !== "ready" && data.ui_state !== "failed" && data.ui_state !== "blocked") {
-        return 2_000;
-      }
-      return false;
-    },
-  });
-  const symbolPreparation = symbolPreparationQuery.data ?? null;
-  // Both panels are diagnostics: stays collapsed by default (the analyst
-  // opens it deliberately) but flags itself with a warning marker when
-  // something needs attention, mirroring the same "ready == nothing to
-  // show" convention MemoryEvidenceHeader already uses for its own inline
-  // banner (showPreparationInfo) -- just without auto-expanding.
-  const symbolsNeedAttention = Boolean(symbolReadiness && symbolReadiness.state !== "cached");
-  const preparationState = symbolPreparation?.effective_state || symbolPreparation?.preparation_state || symbolPreparation?.ui_state;
-  const preparationNeedsAttention = Boolean(symbolPreparation && preparationState !== "ready");
-
   // Memory Evidence Preparation (Phase 1/2, app.services.memory.preparation)
   // -- a separate, platform-agnostic read-only snapshot from the
   // MemorySymbolPreparation pipeline above (see MemoryEvidencePreparationCard.tsx's
-  // module docstring for the distinction). Only fetched here for its
-  // vmware_companion_* fields, which VmwareCompanionSection needs -- this
-  // page intentionally does not also render the rest of that card
-  // (platform/architecture/readiness), which MemoryPreparationCard and
-  // MemorySymbolResolutionPanel below already cover for this page.
+  // module docstring for the distinction). Fetched here for its
+  // vmware_companion_* fields, which VmwareCompanionSection needs, and for
+  // the platform: the Windows symbol panels below only apply to Windows
+  // (and not-yet-identified) images, while a Linux image that lacks its
+  // kernel's symbols gets the Linux symbol upload instead.
   // Same query key as MemoryEvidencePreparationCard.tsx so the two never
   // disagree if ever mounted together.
   const evidencePreparationQueryKey = ["memory-evidence-preparation", caseId, evidenceId];
@@ -397,6 +362,46 @@ export default function MemoryEvidencePage() {
     refetchOnWindowFocus: false,
   });
   const evidencePreparation = evidencePreparationQuery.data ?? null;
+  const evidencePlatform = evidencePreparation?.platform;
+  const windowsSymbolsApply = evidencePreparationQuery.isFetched && evidencePlatform !== "linux" && evidencePlatform !== "macos";
+  const linuxSymbolsRequired = evidencePlatform === "linux" && evidencePreparation?.readiness === "symbols_required";
+
+  // Per-evidence symbol readiness is diagnostic only.  Volatility
+  // identifies layers and resolves symbols during the actual run.
+  const symbolReadinessQuery = useQuery({
+    queryKey: ["memory-symbol-readiness", caseId, evidenceId],
+    queryFn: () => api.getMemorySymbolReadiness(caseId, evidenceId),
+    enabled: Boolean(caseId && evidenceId && windowsSymbolsApply),
+    refetchOnWindowFocus: false,
+  });
+  const symbolReadiness = windowsSymbolsApply ? symbolReadinessQuery.data ?? null : null;
+
+  // Automatic preparation pipeline.  This is the new state machine
+  // the analyst sees in the "Memory preparation" card.  Polled
+  // aggressively while preparation is in progress.
+  const symbolPreparationQuery = useQuery({
+    queryKey: ["memory-symbol-preparation", caseId, evidenceId],
+    queryFn: () => api.getMemorySymbolPreparation(caseId, evidenceId),
+    enabled: Boolean(caseId && evidenceId && windowsSymbolsApply),
+    refetchOnWindowFocus: false,
+    refetchInterval: (query) => {
+      const data = query.state.data as { ui_state?: string } | undefined;
+      if (data?.ui_state && data.ui_state !== "ready" && data.ui_state !== "failed" && data.ui_state !== "blocked") {
+        return 2_000;
+      }
+      return false;
+    },
+  });
+  const symbolPreparation = windowsSymbolsApply ? symbolPreparationQuery.data ?? null : null;
+  // Both panels are diagnostics: stays collapsed by default (the analyst
+  // opens it deliberately) but flags itself with a warning marker when
+  // something needs attention, mirroring the same "ready == nothing to
+  // show" convention MemoryEvidenceHeader already uses for its own inline
+  // banner (showPreparationInfo) -- just without auto-expanding.
+  const symbolsNeedAttention = Boolean(symbolReadiness && symbolReadiness.state !== "cached");
+  const preparationState = symbolPreparation?.effective_state || symbolPreparation?.preparation_state || symbolPreparation?.ui_state;
+  const preparationNeedsAttention = Boolean(symbolPreparation && preparationState !== "ready");
+
 
   const prepEffectiveState = symbolPreparation?.effective_state || symbolPreparation?.ui_state;
   const isBlockedSymbols = prepEffectiveState === "blocked_symbols";
@@ -586,11 +591,17 @@ export default function MemoryEvidencePage() {
         </div>
       ) : null}
 
-      {evidence && (symbolReadiness || symbolPreparation) ? (
-        <details className="rounded-[28px] border border-line bg-panel/60 shadow-panel" data-testid="memory-evidence-readiness-details">
+      {evidence && (symbolReadiness || symbolPreparation || linuxSymbolsRequired) ? (
+        <details
+          className="rounded-[28px] border border-line bg-panel/60 shadow-panel"
+          data-testid="memory-evidence-readiness-details"
+          // Nothing runs on a Linux image until its kernel's symbols are
+          // added, so that case opens itself.
+          open={linuxSymbolsRequired || undefined}
+        >
           <summary className="flex cursor-pointer select-none items-center justify-between gap-3 p-5 text-sm text-ink">
             <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Evidence readiness</span>
-            {symbolsNeedAttention || preparationNeedsAttention ? (
+            {symbolsNeedAttention || preparationNeedsAttention || linuxSymbolsRequired ? (
               <span className="flex items-center gap-1.5 text-xs text-amber" data-testid="memory-evidence-readiness-attention-flag">
                 <span aria-hidden="true">⚠</span> Needs attention
               </span>
@@ -599,6 +610,21 @@ export default function MemoryEvidencePage() {
             )}
           </summary>
           <div className="space-y-6 px-5 pb-5">
+            {linuxSymbolsRequired && evidencePreparation ? (
+              <div data-testid="memory-linux-symbols-required">
+                <p className="text-sm text-amber">{evidencePreparation.human_message}</p>
+                <LinuxSymbolUploadPanel
+                  caseId={caseId}
+                  evidenceId={evidenceId}
+                  architecture={evidencePreparation.architecture}
+                  uploadEnabled={evidencePreparation.linux_symbol_upload_enabled !== false}
+                  onValidated={() => {
+                    void queryClient.invalidateQueries({ queryKey: evidencePreparationQueryKey });
+                    void queryClient.invalidateQueries({ queryKey: memoryQueryKeys.catalogue(caseId, evidenceId) });
+                  }}
+                />
+              </div>
+            ) : null}
             {symbolReadiness ? (
               <MemorySymbolResolutionPanel
                 caseId={caseId}

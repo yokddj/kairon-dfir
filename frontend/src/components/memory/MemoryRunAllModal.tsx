@@ -121,6 +121,12 @@ export function MemoryRunAllModal({
   }, [plan, catalogue.items]);
 
   const runnable = Boolean(plan && plan.selected_profiles.length > 0);
+  // A profile skipped because it has no plugin for this evidence's platform
+  // (platform_mismatch: Windows-only profiles on Linux) was never an option
+  // for it, so it is not listed as skipped.
+  const skippedShown = plan
+    ? [...plan.skipped_profiles, ...plan.excluded_profiles].filter((s) => s.reason !== "platform_mismatch")
+    : [];
   const blockedReason = !canRun
     ? volatilityBackend?.message ?? "Volatility 3 is not ready for memory analysis."
     : null;
@@ -240,9 +246,9 @@ export function MemoryRunAllModal({
 
         <section className="mt-4 space-y-2 rounded-2xl border border-line bg-abyss/40 p-4">
           <p className="text-[10px] uppercase tracking-[0.18em] text-muted">Skipped</p>
-          {plan && plan.skipped_profiles.length + plan.excluded_profiles.length > 0 ? (
+          {skippedShown.length > 0 ? (
             <ul className="space-y-1 text-xs" data-testid="memory-run-all-skipped">
-              {[...plan.skipped_profiles, ...plan.excluded_profiles].map((s) => (
+              {skippedShown.map((s) => (
                 <li
                   key={s.profile}
                   className="flex flex-wrap items-center justify-between gap-2"

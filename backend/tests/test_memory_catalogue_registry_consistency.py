@@ -233,3 +233,52 @@ def test_shell_history_basic_catalogue_stays_unavailable_when_evidence_plan_find
     item = next(i for i in catalogue if i["profile"] == "shell_history_basic")
     assert item["available"] is False
     assert item["plugins"] == []
+
+
+def _linux_catalogue(db: Session, *, readiness: ReadinessState = ReadinessState.READY) -> dict[str, dict]:
+    from dataclasses import replace
+
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    eligible = (MemoryCapability.PROCESSES, MemoryCapability.NETWORK, MemoryCapability.SHELL_HISTORY)
+    plan = replace(
+        _plan(PlatformFamily.LINUX, eligible=eligible, selected=("linux.pslist", "linux.pstree", "linux.sockstat", "linux.bash")),
+        readiness=readiness,
+    )
+    settings = _settings_with_process_profiles_enabled()
+    with patch("app.services.memory.counts.get_memory_family_count", return_value={"total": 0}), \
+         patch("app.services.memory.catalogue.build_memory_analysis_plan", return_value=plan), \
+         patch("app.services.memory.catalogue.get_settings", return_value=settings):
+        return {item["profile"]: item for item in build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)}
+
+
+def test_linux_catalogue_marks_profiles_without_a_linux_plugin_as_not_applying(db: Session) -> None:
+    items = _linux_catalogue(db)
+    applying = {profile for profile, item in items.items() if item["applies_to_platform"]}
+    assert applying == {"processes_basic", "network_basic", "shell_history_basic"}
+    assert items["processes_basic"]["plugins"] == ["linux.pslist", "linux.pstree"]
+    assert items["processes_basic"]["available"] is True
+    for profile in ("handles_basic", "suspicious_memory", "files_basic", "find_evil", "metadata_only"):
+        assert items[profile]["available"] is False
+        assert items[profile]["gate_type"] == "unavailable"
+        assert items[profile]["detected_platform"] == "linux"
+
+
+def test_linux_catalogue_without_symbols_is_blocked_on_symbols(db: Session) -> None:
+    items = _linux_catalogue(db, readiness=ReadinessState.BLOCKED_SYMBOLS)
+    for profile in ("processes_basic", "network_basic", "shell_history_basic"):
+        assert items[profile]["available"] is False
+        assert items[profile]["gate_type"] == "blocked_symbols_missing"
+
+
+def test_windows_catalogue_keeps_every_profile(db: Session) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    plan = _plan(PlatformFamily.WINDOWS, eligible=tuple(MemoryCapability), selected=())
+    settings = _settings_with_process_profiles_enabled()
+    with patch("app.services.memory.counts.get_memory_family_count", return_value={"total": 0}), \
+         patch("app.services.memory.catalogue.build_memory_analysis_plan", return_value=plan), \
+         patch("app.services.memory.catalogue.get_settings", return_value=settings):
+        catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
+    assert all(item["applies_to_platform"] for item in catalogue)
+    assert next(i for i in catalogue if i["profile"] == "handles_basic")["plugins"] == ["windows.handles", "windows.info"]

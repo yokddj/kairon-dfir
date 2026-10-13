@@ -65,7 +65,7 @@ function StatusBadge({
   available: boolean;
   gateType?: "available" | "blocked_symbol_probe_required" | "blocked_symbols_missing" | "blocked_acquisition_pending" | "unavailable";
 }) {
-  if (!available || gateType === "unavailable") {
+  if ((!available && !gateType?.startsWith("blocked")) || gateType === "unavailable") {
     return (
       <span
         className="rounded-md border border-rose-400/30 bg-rose-500/10 px-2 py-0.5 text-[10px] text-rose-100"
@@ -628,11 +628,17 @@ export function MemoryAnalysisCatalogueModal({
   evidenceFilename,
   evidenceHost,
   evidenceSizeBytes,
-  catalogue,
+  catalogue: fullCatalogue,
   volatilityBackend,
   canRun,
   onClose,
 }: Props) {
+  // Profiles with no plugin for this evidence's platform (Handles, VADs,
+  // Files... on Linux) are not options for it at all, so they are not listed.
+  const catalogue: MemoryAnalysisCatalogue = {
+    ...fullCatalogue,
+    items: fullCatalogue.items.filter((it) => it.applies_to_platform !== false),
+  };
   const queryClient = useQueryClient();
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
