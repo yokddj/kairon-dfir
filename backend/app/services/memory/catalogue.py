@@ -40,10 +40,10 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.evidence import Evidence
 from app.models.memory import MemoryScanRun
-from app.services.memory.analysis_plan import build_memory_analysis_plan
-from app.services.memory.capability_registry import resolved_plugins_for_capability
+from app.services.memory.analysis_plan import MemoryAnalysisPlan, build_memory_analysis_plan
+from app.services.memory.capability_registry import MEMORY_CAPABILITY_REGISTRY, resolved_plugins_for_capability
 from app.services.memory.execution import PROFILE_CAPABILITY, PROFILE_PLUGINS, resolve_profile_plugins
-from app.services.memory.platform import PlatformFamily
+from app.services.memory.platform import PlatformFamily, ReadinessState
 from app.services.memory.profile_planning import PLUGIN_AVAILABLE, PLUGIN_DISABLED, PLUGIN_UNKNOWN, _plugin_worker_state, plan_profile_capability
 from app.services.memory import profile_planning
 from app.services.memory.validation import MemoryExecutionValidationError
@@ -286,6 +286,7 @@ def _plan_capability_registry_profile(
     evidence: Any,
     *,
     worker_capability: dict[str, Any] | None,
+    analysis_plan: MemoryAnalysisPlan | None = None,
 ) -> dict[str, Any]:
     """``plan_profile_capability()``-shaped result for a profile that has
     no ``PROFILE_PLUGINS`` entry (resolved via capability_registry only).
@@ -303,7 +304,7 @@ def _plan_capability_registry_profile(
     listing.
     """
     settings = get_settings()
-    plan = build_memory_analysis_plan(evidence)
+    plan = analysis_plan if analysis_plan is not None else build_memory_analysis_plan(evidence)
     try:
         plugin_names = resolve_profile_plugins(profile, plan=plan)
     except MemoryExecutionValidationError:
@@ -369,11 +370,14 @@ def build_analysis_catalogue(
         )
         runs_by_profile[profile_def["profile"]] = run
 
-    # linux.bash has no PROFILE_PLUGINS entry (shell_history_basic resolves
-    # through capability_registry only -- see module docstring), but its
-    # real state still belongs in the worker probe, or it would always
-    # report PLUGIN_UNKNOWN even when the worker heartbeat already knows.
-    all_plugins = sorted({plugin for plugins in PROFILE_PLUGINS.values() for plugin in plugins} | {"linux.bash"})
+    # Linux plugins have no PROFILE_PLUGINS entry (they resolve through
+    # capability_registry only -- see module docstring), but their real
+    # state still belongs in the worker probe, or they would always report
+    # PLUGIN_UNKNOWN even when the worker heartbeat already knows.
+    all_plugins = sorted(
+        {plugin for plugins in PROFILE_PLUGINS.values() for plugin in plugins}
+        | {spec.plugin for spec in MEMORY_CAPABILITY_REGISTRY}
+    )
     worker_probe = _probe_plugins_via_worker(all_plugins)
     worker_capability = None
     if worker_probe is not None:
@@ -384,10 +388,25 @@ def build_analysis_catalogue(
             }
         }
 
-    from app.services.memory.symbol_state import GATE_TYPE_AVAILABLE, GATE_TYPE_UNAVAILABLE
+    from app.services.memory.symbol_state import GATE_TYPE_AVAILABLE, GATE_TYPE_BLOCKED_SYMBOLS_MISSING, GATE_TYPE_UNAVAILABLE
+
+    # The evidence's platform decides which profiles apply to it at all:
+    # one whose capability has no plugin for that platform in
+    # capability_registry (Handles, VADs, Files... on Linux) is marked
+    # applies_to_platform=False and the UI leaves it out. Windows keeps the
+    # platform-blind plugin check below; an evidence whose platform the
+    # probe could not settle keeps every profile.
+    evidence: Evidence | None = db.get(Evidence, evidence_id)
+    evidence_plan = build_memory_analysis_plan(evidence) if evidence is not None else None
+    detected_platform = evidence_plan.detected_platform if evidence_plan is not None else PlatformFamily.UNKNOWN
+    platform_known = (
+        evidence_plan is not None
+        and evidence_plan.readiness != ReadinessState.INVALID_EVIDENCE
+        and detected_platform not in {PlatformFamily.UNKNOWN, PlatformFamily.UNSUPPORTED}
+    )
+    non_windows = platform_known and detected_platform != PlatformFamily.WINDOWS
 
     items: list[dict[str, Any]] = []
-    evidence: Evidence | None = None
     for profile_def in PROFILE_CATALOGUE:
         profile = profile_def["profile"]
         family = profile_def["family"]
@@ -413,9 +432,16 @@ def build_analysis_catalogue(
         available = True
         availability_reason: str | None = None
         legacy_plugin_names = list(PROFILE_PLUGINS.get(profile, []))
+        capability = PROFILE_CAPABILITY.get(profile)
+        applies_to_platform = not platform_known or (
+            capability is not None and bool(resolved_plugins_for_capability(detected_platform, capability))
+        )
         use_capability_aware_path = (
             (not legacy_plugin_names and profile in PROFILE_CAPABILITY)
             or profile in _CAPABILITY_AWARE_DESPITE_LEGACY_PLUGINS
+            # PROFILE_PLUGINS lists Windows plugins; any other platform
+            # resolves through capability_registry.
+            or (non_windows and capability is not None)
         )
         if use_capability_aware_path:
             # No PROFILE_PLUGINS entry (or a demonstrated-safe override,
@@ -423,16 +449,24 @@ def build_analysis_catalogue(
             # resolve through the real, platform-aware capability_registry
             # path instead of the platform-blind Windows plugin-name
             # check every other profile uses (see module docstring).
-            if evidence is None:
-                evidence = db.get(Evidence, evidence_id)
-            plan = _plan_capability_registry_profile(profile, evidence, worker_capability=worker_capability) if evidence is not None else {"plugin_names": [], "platform_ineligible": True, "detected_platform": "unknown", "available_plugin_count": 0}
+            plan = _plan_capability_registry_profile(profile, evidence, worker_capability=worker_capability, analysis_plan=evidence_plan) if evidence is not None else {"plugin_names": [], "platform_ineligible": True, "detected_platform": "unknown", "available_plugin_count": 0}
         else:
             plan = plan_profile_capability(profile, worker_capability=worker_capability)
         plugin_names = list(plan["plugin_names"])
         plugin_capabilities = _profile_plugin_capabilities(plugin_names, plan)
         available_plugin_count = int(plan["available_plugin_count"])
         unavailable_plugins = [item for item in plugin_capabilities if item["state"] in {"disabled", "unavailable"}]
-        if plan.get("platform_ineligible"):
+        if not applies_to_platform:
+            gate_type = GATE_TYPE_UNAVAILABLE
+            available = False
+            availability_reason = f"{profile_def['title']} does not apply to {detected_platform.value} memory."
+        elif non_windows and evidence_plan is not None and evidence_plan.readiness == ReadinessState.BLOCKED_SYMBOLS:
+            # Every Linux plugin needs the kernel's symbols; until they are
+            # uploaded nothing can run (see docs/memory/linux_symbols.md).
+            gate_type = GATE_TYPE_BLOCKED_SYMBOLS_MISSING
+            available = False
+            availability_reason = "Symbols for this kernel are missing. Add them in this evidence's Evidence readiness section."
+        elif plan.get("platform_ineligible"):
             gate_type = GATE_TYPE_UNAVAILABLE
             available = False
             availability_reason = f"{profile_def['title']} has no plugin producer for this evidence's detected platform ('{plan.get('detected_platform', 'unknown')}') in this runtime."
@@ -463,6 +497,8 @@ def build_analysis_catalogue(
                 "requires_windows_symbols": bool(profile_def.get("requires_windows_symbols", False)),
                 "can_run_without_symbols": bool(profile_def.get("can_run_without_symbols", False)),
                 "supported_os_families": _supported_os_families(profile),
+                "applies_to_platform": applies_to_platform,
+                "detected_platform": detected_platform.value,
                 "plugins": plugin_names,
                 "plugin_count": len(plugin_names),
                 "available_plugin_count": available_plugin_count,

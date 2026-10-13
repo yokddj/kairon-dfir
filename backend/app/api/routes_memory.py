@@ -77,7 +77,7 @@ from app.services.memory.artifact_indexing import (
 from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
 from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, derive_memory_timeout_plan, mark_run_queued, resolve_profile_plugins
 from app.services.memory.analysis_plan import build_memory_analysis_plan
-from app.services.memory.capability_registry import MemoryCapability, capabilities_for_platform, plugins_for_capability
+from app.services.memory.capability_registry import MemoryCapability, capabilities_for_platform, platform_result_views, plugins_for_capability
 from app.services.memory.platform import PlatformFamily
 from app.services.memory.evidence_access import evidence_readiness
 from app.services.memory.preparation import MemoryPreparationError, get_preparation_status
@@ -454,11 +454,13 @@ def get_memory_evidence_readiness(case_id: str, evidence_id: str, db: Session = 
 def get_memory_evidence_preparation(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> dict:
     """Read-only exposure of Memory Preparation, Phase 1.
 
-    Pure passthrough to app.services.memory.preparation
-    .get_preparation_status() -- the case/evidence-scoping check below is
-    the only logic this handler adds (matching every other evidence-scoped
-    memory route in this file); no readiness, platform, or symbol state is
-    computed here.
+    Passthrough to app.services.memory.preparation
+    .get_preparation_status() -- no readiness, platform, or symbol state is
+    computed here. Two fields are added for the UI: ``result_views``, what
+    analysis can produce for the detected platform (capability_registry),
+    so the memory page shows only the views that apply; and
+    ``linux_symbol_upload_enabled``, whether the Linux symbol upload is
+    switched on in this deployment.
     """
     _require_case(db, case_id)
     _require_evidence_for_case(db, case_id, evidence_id)
@@ -466,7 +468,14 @@ def get_memory_evidence_preparation(case_id: str, evidence_id: str, db: Session 
         preparation = get_preparation_status(db, evidence_id)
     except MemoryPreparationError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return preparation.to_dict()
+    payload = preparation.to_dict()
+    try:
+        platform = PlatformFamily(payload.get("platform"))
+    except ValueError:
+        platform = PlatformFamily.UNKNOWN
+    payload["result_views"] = platform_result_views(platform)
+    payload["linux_symbol_upload_enabled"] = bool(get_settings().memory_linux_symbol_manual_import_enabled)
+    return payload
 
 
 async def _save_quarantined_isf_upload(file: UploadFile, *, original_filename: str, max_bytes: int) -> Path:
@@ -1072,9 +1081,11 @@ def get_run_all_preview(
     )
 
     _require_case(db, case_id)
-    _require_evidence_for_case(db, case_id, evidence_id)
+    evidence = _require_evidence_for_case(db, case_id, evidence_id)
     try:
-        plan = plan_run_all(db, case_id=case_id, evidence_id=evidence_id, mode=mode)
+        # With the evidence, as the batch start does, so the preview skips
+        # the profiles that do not apply to its platform.
+        plan = plan_run_all(db, case_id=case_id, evidence_id=evidence_id, mode=mode, evidence=evidence)
     except MemoryBatchError as exc:
         raise HTTPException(status_code=exc.status_code, detail={"error_code": exc.code, "message": exc.message}) from exc
     return {"case_id": case_id, "evidence_id": evidence_id, "mode": mode, **plan}

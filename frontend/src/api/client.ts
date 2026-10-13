@@ -1160,6 +1160,10 @@ export type MemoryAnalysisCatalogueItem = {
   requires_windows_symbols?: boolean;
   can_run_without_symbols?: boolean;
   supported_os_families?: string[];
+  // False when the profile has no plugin for the evidence's detected
+  // platform (Handles on Linux): the analysis modal leaves it out.
+  applies_to_platform?: boolean;
+  detected_platform?: string;
   plugins?: string[];
   plugin_count?: number;
   available_plugin_count?: number;
@@ -1491,6 +1495,17 @@ export type MemoryEvidencePreparation = {
   zero_result_warning_code: string | null;
   zero_result_warning_message: string | null;
   zero_result_warning_plugin: string | null;
+  // What analysis can produce for the detected platform (backend
+  // capability_registry.platform_result_views); null when the platform is
+  // unknown. The memory page hides the views no plugin can fill.
+  result_views?: MemoryPlatformResultViews | null;
+  // Whether this deployment accepts Linux symbol uploads.
+  linux_symbol_upload_enabled?: boolean;
+};
+
+export type MemoryPlatformResultViews = {
+  presentation_families: string[];
+  frameworks: string[];
 };
 
 // VMware companion files (backend: app.api.routes_evidence_companions /

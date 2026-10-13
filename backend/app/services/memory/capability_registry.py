@@ -193,6 +193,23 @@ def capabilities_for_platform(platform: PlatformFamily) -> list[MemoryCapability
     return seen
 
 
+def platform_result_views(platform: PlatformFamily) -> dict[str, list[str]] | None:
+    """What kinds of results analysis can produce for this platform.
+
+    ``presentation_families`` are the document families its plugins
+    normalize into and ``frameworks`` the tools that produce them. The UI
+    hides the views no plugin can fill (Handles or VADs on Linux). None
+    when the platform is unknown, so every view stays.
+    """
+    specs = specs_for_platform(platform)
+    if not specs:
+        return None
+    return {
+        "presentation_families": sorted({spec.presentation_family for spec in specs}),
+        "frameworks": sorted({spec.framework for spec in specs}),
+    }
+
+
 def plugins_for_capability(platform: PlatformFamily, capability: MemoryCapability) -> list[CapabilityPluginSpec]:
     return [spec for spec in MEMORY_CAPABILITY_REGISTRY if spec.platform == platform and spec.capability == capability]
 

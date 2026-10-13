@@ -136,6 +136,7 @@ export function MemoryEvidencePreparationCard({ caseId, evidenceId }: Props) {
           caseId={caseId}
           evidenceId={evidenceId}
           architecture={formatEnumValue(preparation.architecture)}
+          uploadEnabled={preparation.linux_symbol_upload_enabled !== false}
           onValidated={() => void queryClient.invalidateQueries({ queryKey })}
         />
       ) : null}

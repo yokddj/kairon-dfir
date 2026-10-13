@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { api, type LinuxSymbolIdentity, type LinuxSymbolValidationResult } from "../../api/client";
 
 // Evidence-scoped Linux ISF upload + validate panel (Memory Preparation
-// Phase 3). Shown by MemoryEvidencePreparationCard ONLY when
+// Phase 3). Shown by MemoryEvidencePreparationCard (the upload wizard)
+// and MemoryEvidencePage's Evidence readiness section, ONLY when
 // platform === "linux" && readiness === "symbols_required".
 //
 // Validation runs asynchronously on the memory-worker -- the backend API
@@ -30,6 +31,10 @@ type Props = {
   caseId: string;
   evidenceId: string;
   architecture: string;
+  // False when this deployment has the Linux symbol upload switched off
+  // (MEMORY_LINUX_SYMBOL_MANUAL_IMPORT_ENABLED): the panel then says so
+  // instead of offering a file picker whose upload would be refused.
+  uploadEnabled?: boolean;
   onValidated: () => void;
 };
 
@@ -53,7 +58,7 @@ function identityLine(identity: LinuxSymbolIdentity | null): string {
   return parts.length ? parts.join(" · ") : "Unknown";
 }
 
-export function LinuxSymbolUploadPanel({ caseId, evidenceId, architecture, onValidated }: Props) {
+export function LinuxSymbolUploadPanel({ caseId, evidenceId, architecture, uploadEnabled = true, onValidated }: Props) {
   const [stage, setStage] = useState<Stage>({ kind: "selecting" });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const notifiedValidationIdRef = useRef<string | null>(null);
@@ -239,6 +244,11 @@ export function LinuxSymbolUploadPanel({ caseId, evidenceId, architecture, onVal
           </div>
           <p className="mt-2 text-xs text-muted">Validating symbols...</p>
         </div>
+      ) : !uploadEnabled ? (
+        <p className="mt-4 rounded-xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber" data-testid="linux-symbol-upload-disabled">
+          Uploading symbols is switched off on this Kairon server. An administrator can switch it on with
+          MEMORY_LINUX_SYMBOL_MANUAL_IMPORT_ENABLED=true.
+        </p>
       ) : (
         <div className="mt-4">
           {showFilePicker ? (

@@ -82,6 +82,17 @@ describe("LinuxSymbolUploadPanel (Phase 3, async)", () => {
     expect(screen.getByTestId("linux-symbol-file-input")).toHaveAttribute("accept", ".json,.json.xz,.zip");
   });
 
+  it("says the upload is switched off instead of offering a file picker when the server refuses uploads", () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <LinuxSymbolUploadPanel caseId={CASE} evidenceId={EVIDENCE} architecture="X64" uploadEnabled={false} onValidated={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByTestId("linux-symbol-upload-disabled")).toHaveTextContent("MEMORY_LINUX_SYMBOL_MANUAL_IMPORT_ENABLED=true");
+    expect(screen.queryByTestId("linux-symbol-file-input")).not.toBeInTheDocument();
+  });
+
   it("does not render a Validate button until a file has been selected", () => {
     renderPanel();
     expect(screen.queryByTestId("linux-symbol-validate-button")).not.toBeInTheDocument();

@@ -10,10 +10,12 @@ import {
   type MemoryActiveRun,
   type MemoryEvidenceReadiness,
   type MemorySymbolCacheStatus,
+  type MemoryPlatformResultViews,
   api,
 } from "../../api/client";
 import { backendBadge } from "../MemoryWorkspace";
 import type { MemoryTab } from "../../lib/memoryWorkspaceState";
+import { memoryFamilyApplies } from "../../lib/memoryPlatformViews";
 import { commandHistoryRoute } from "../../lib/canonicalRoutes";
 import { InvestigationChecklist, type InvestigationChecklistItem } from "../common/InvestigationChecklist";
 
@@ -24,6 +26,9 @@ type Props = {
   backend: MemoryBackendStatus | null;
   symbolCache: MemorySymbolCacheStatus | null;
   readinessByEvidence: Map<string, MemoryEvidenceReadiness | undefined>;
+  // What analysis can produce on this evidence's platform; families it
+  // cannot produce (Handles on Linux) are left out. Null keeps them all.
+  resultViews?: MemoryPlatformResultViews | null;
   onJumpToTab: (tab: MemoryTab, artifact?: string) => void;
 };
 
@@ -290,6 +295,7 @@ export function MemoryOverviewTab({
   backend,
   symbolCache,
   readinessByEvidence,
+  resultViews = null,
   onJumpToTab,
 }: Props) {
   const readiness = readinessByEvidence.get(evidenceId) ?? null;
@@ -320,8 +326,8 @@ export function MemoryOverviewTab({
   // ``kernel_modules`` from ``drivers`` even when both come from the
   // same ``kernel_basic`` run.
   const families = useMemo(
-    () => buildFamilies(landing, catalogueQuery.data),
-    [landing, catalogueQuery.data],
+    () => buildFamilies(landing, catalogueQuery.data).filter((f) => memoryFamilyApplies(f.family, resultViews)),
+    [landing, catalogueQuery.data, resultViews],
   );
 
   // 26+ checks: artifact cards are derived from the same family rows.

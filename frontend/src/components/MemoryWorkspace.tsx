@@ -8,6 +8,7 @@ import {
 } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { MEMORY_TABS, useMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
+import { memoryTabApplies } from "../lib/memoryPlatformViews";
 import { MemoryOverviewTab } from "./memory/MemoryOverviewTab";
 import { MemoryProcessesTab } from "./memory/MemoryProcessesTab";
 import { MemoryShellHistoryTab } from "./memory/MemoryShellHistoryTab";
@@ -122,6 +123,17 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
     queryFn: () => api.getMemorySymbolCacheStatus(),
     refetchOnWindowFocus: false,
   });
+
+  // The evidence's platform decides which tabs apply (see
+  // lib/memoryPlatformViews). Same query key as MemoryEvidencePage.
+  const evidencePreparationQuery = useQuery({
+    queryKey: ["memory-evidence-preparation", caseId, evidenceIdProp],
+    queryFn: () => api.getMemoryEvidencePreparation(caseId, evidenceIdProp as string),
+    enabled: Boolean(caseId && evidenceIdProp),
+    refetchOnWindowFocus: false,
+  });
+  const resultViews = evidenceIdProp ? evidencePreparationQuery.data?.result_views ?? null : null;
+  const visibleTabs = MEMORY_TABS.filter((item) => item.key === tab || memoryTabApplies(item.key, resultViews));
 
   const overview = overviewQuery.data;
 
@@ -269,7 +281,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
         className="flex flex-wrap gap-2 rounded-[28px] border border-line bg-panel/60 p-3 shadow-panel"
         data-testid="memory-subview-tabs"
       >
-        {MEMORY_TABS.map((item) => (
+        {visibleTabs.map((item) => (
           <button
             key={item.key}
             type="button"
@@ -305,6 +317,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
             backend={volatilityBackend ?? null}
             symbolCache={symbolCacheQuery.data ?? null}
             readinessByEvidence={readinessByEvidence}
+            resultViews={resultViews}
             onJumpToTab={onTabChange}
           />
         ) : null}
