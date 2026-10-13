@@ -22,4 +22,4 @@ The upload is validated on the memory worker and, when it matches, stored in the
 
 Kairon starts Linux plugins through `app.services.memory.volatility_legacy_linux`, which bridges two places where Volatility 3 assumes a newer kernel: process user and group ids are read from `task_struct` when there is no `task->cred`, and a listening IPv4 socket's destination is read from `inet_sock.daddr` when `sock_common` has no `skc_daddr`. On newer kernels nothing changes.
 
-Checked with the Ulysses CTF (Debian 5, kernel `2.6.26-2-686`, its `Debian5_26.zip`): processes with start times, the process tree, bash history and sockets, including the reverse shell to `192.168.56.1:4444`.
+Checked with the Ulysses CTF (Debian 5, kernel `2.6.26-2-686`, its `Debian5_26.zip`): processes with start times, the process tree, bash history and sockets, including the attacker's reverse shell.
