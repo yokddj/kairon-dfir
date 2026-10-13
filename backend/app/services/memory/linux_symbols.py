@@ -265,6 +265,7 @@ def import_linux_isf(
     final_name = f"{cache_key}{suffix}"
     final_path = _safe_child(cache_dir, final_name)
     sidecar = _safe_child(cache_dir, f"{final_path.name}.kairon.json")
+    _remove_superseded_conversions(cache_dir, identity, upload_path, keep=final_path, settings=settings)
     if sidecar.exists() or final_path.exists():
         existing = _status_from_sidecar(cache_dir, sidecar, required_identity=identity) if sidecar.exists() else None
         if existing and existing.sha256 == sha256 and existing.valid:
@@ -447,6 +448,37 @@ def _supersedes_kairon_conversion(upload_path: Path, cached_path: Path, *, setti
     except LinuxSymbolError:
         return False
     return new is not None and old is not None and new > old
+
+
+def _remove_superseded_conversions(cache_dir: Path, identity: LinuxSymbolIdentity, upload_path: Path, *, keep: Path, settings: Any) -> None:
+    """Drop Kairon's earlier conversions of the same kernel (same release and banner) when the
+    upload is a newer conversion: their cache key can differ (an older converter recorded less
+    of the identity), and two ISFs with one banner leave Volatility to pick either."""
+    if not identity.banner:
+        return
+    try:
+        new_version = _kairon_converter_version(_load_isf(upload_path, settings=settings))
+    except LinuxSymbolError:
+        return
+    if new_version is None:
+        return
+    for sidecar in cache_dir.glob("*.kairon.json"):
+        try:
+            recorded = json.loads(sidecar.read_text(encoding="utf-8")).get("identity") or {}
+            isf_path = _safe_child(cache_dir, sidecar.name[: -len(".kairon.json")])
+        except (OSError, ValueError, LinuxSymbolError):
+            continue
+        if isf_path == keep or not isf_path.is_file():
+            continue
+        if recorded.get("kernel_release") != identity.kernel_release or not _same_banner(str(recorded.get("banner") or ""), identity.banner):
+            continue
+        try:
+            old_version = _kairon_converter_version(_load_isf(isf_path, settings=_SidecarSettings(max_bytes=isf_path.stat().st_size + 1)))
+        except (OSError, LinuxSymbolError):
+            continue
+        if old_version is not None and old_version < new_version:
+            isf_path.unlink(missing_ok=True)
+            sidecar.unlink(missing_ok=True)
 
 
 def _isf_banner(payload: dict[str, Any]) -> str | None:
