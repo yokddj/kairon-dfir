@@ -77,7 +77,9 @@ describe("LinuxSymbolUploadPanel (Phase 3, async)", () => {
     await waitFor(() => expect(getLinuxSymbolRequirementMock).toHaveBeenCalledWith(CASE, EVIDENCE));
     expect(screen.getByText(/Expected kernel:/)).toBeInTheDocument();
     expect(screen.getByText("X64")).toBeInTheDocument();
-    expect(screen.getByText(".json, .json.xz")).toBeInTheDocument();
+    expect(screen.getByText(".json, .json.xz, .zip (Volatility 2 profile)")).toBeInTheDocument();
+    expect(screen.getByTestId("linux-symbol-vol2-hint")).toHaveTextContent("module.dwarf and System.map");
+    expect(screen.getByTestId("linux-symbol-file-input")).toHaveAttribute("accept", ".json,.json.xz,.zip");
   });
 
   it("does not render a Validate button until a file has been selected", () => {
@@ -221,7 +223,7 @@ describe("LinuxSymbolUploadPanel (Phase 3, async)", () => {
 
   it("UNSUPPORTED: shows the exact required copy and allows choosing another file", async () => {
     getLinuxSymbolValidationStatusMock.mockResolvedValue(
-      statusResult({ status: "unsupported", reason: "Only .json or .json.xz Volatility 3 ISF files are accepted." }),
+      statusResult({ status: "unsupported", reason: "Only .json or .json.xz Volatility 3 ISF files, or a Volatility 2 Linux profile (.zip), are accepted." }),
     );
     renderPanel();
     await selectAndSubmit();

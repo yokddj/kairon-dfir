@@ -170,11 +170,11 @@ def _patch_settings(monkeypatch: pytest.MonkeyPatch, settings: SimpleNamespace) 
 
 
 class TestAcceptedExtension:
-    @pytest.mark.parametrize("filename", ["kernel.json", "KERNEL.JSON", "kernel.json.xz", "kernel.JSON.XZ"])
+    @pytest.mark.parametrize("filename", ["kernel.json", "KERNEL.JSON", "kernel.json.xz", "kernel.JSON.XZ", "Debian5_26.zip"])
     def test_accepted(self, filename: str) -> None:
         assert has_accepted_isf_extension(filename) is True
 
-    @pytest.mark.parametrize("filename", ["vmlinux", "System.map", "kernel.pdb", "kernel.zip", "kernel.xz", "kernel"])
+    @pytest.mark.parametrize("filename", ["vmlinux", "System.map", "kernel.pdb", "kernel.xz", "kernel"])
     def test_rejected(self, filename: str) -> None:
         assert has_accepted_isf_extension(filename) is False
 
@@ -699,3 +699,57 @@ def _case_and_evidence(tmp_path: Path):
     _case(db)
     _evidence(db, stored_path=str(_write(tmp_path, "linux.img", _linux_dump_bytes())))
     return db
+
+
+# ---------------------------------------------------------------------------
+# A Volatility 2 profile (.zip) is converted on the worker, then validated
+# ---------------------------------------------------------------------------
+
+
+class TestVolatility2Profile:
+    def _setup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, banner_offset: int | None = None):
+        from tests.test_linux_vol2_profile import BANNER, BANNER_ADDRESS, _profile, _raw_image
+
+        db = _db()
+        _case(db)
+        data_dir = tmp_path / "data"
+        image_dir = data_dir / "evidence" / CASE_ID
+        image_dir.mkdir(parents=True)
+        image = _raw_image(image_dir, banner_offset=banner_offset if banner_offset is not None else BANNER_ADDRESS - 0xC0000000)
+        evidence = _evidence(db, stored_path=str(image), metadata_json={"linux_kernel": {"banner": BANNER, "kernel_release": "2.6.26-2-686"}})
+        cache_root = _cache_dir(tmp_path)
+        settings = _isf_settings(cache_root)
+        settings.backend_data_dir = data_dir
+        settings.allowed_evidence_roots = []
+        _patch_settings(monkeypatch, settings)
+        staging_dir = tmp_path / "staging"
+        staging_dir.mkdir()
+        staging = staging_dir / "20261013T000000-upload.zip"
+        staging.write_bytes(_profile(tmp_path).read_bytes())
+        return db, evidence, cache_root, staging
+
+    def test_a_matching_profile_is_converted_promoted_and_linked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        db, evidence, cache_root, staging = self._setup(tmp_path, monkeypatch)
+        job = create_linux_symbol_validation_job(db, evidence, staging_path=staging)
+
+        execute_linux_symbol_validation(job.id, db=db)
+
+        db.refresh(job)
+        assert job.status == STATUS_VALID, job.reason
+        assert job.identity_json["kernel_release"] == "2.6.26-2-686"
+        isf = __import__("json").loads(Path(job.isf_path).read_text())
+        assert isf["metadata"]["linux"]["converted_from"] == "volatility2-profile"
+        assert not staging.exists() and not staging.with_suffix(".json").exists()
+        assert get_linux_symbol_link(db, evidence.id) is not None
+
+    def test_a_profile_for_another_kernel_build_is_invalid_and_never_cached(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        db, evidence, cache_root, staging = self._setup(tmp_path, monkeypatch, banner_offset=0x2C0123)
+        job = create_linux_symbol_validation_job(db, evidence, staging_path=staging)
+
+        execute_linux_symbol_validation(job.id, db=db)
+
+        db.refresh(job)
+        assert job.status == STATUS_INVALID
+        assert "System.map does not match" in job.reason
+        assert not staging.exists() and not staging.with_suffix(".json").exists()
+        assert list((cache_root / "symbols" / "linux").iterdir()) == []

@@ -486,7 +486,8 @@ async def _save_quarantined_isf_upload(file: UploadFile, *, original_filename: s
     guarantee. See settings.memory_linux_symbol_staging_path's docstring.
     """
     settings = get_settings()
-    suffix = ".json.xz" if original_filename.lower().endswith(".xz") else ".json"
+    lowered = original_filename.lower()
+    suffix = ".json.xz" if lowered.endswith(".xz") else ".zip" if lowered.endswith(".zip") else ".json"
     staging_root = settings.memory_linux_symbol_staging_path
     staging_root.mkdir(parents=True, exist_ok=True, mode=0o750)
     quarantine = staging_root / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex}{suffix}"
@@ -628,7 +629,7 @@ async def validate_linux_evidence_symbols(
             status_code=422,
             detail={
                 "error_code": "SYMBOL_UNSUPPORTED_FORMAT",
-                "message": "Only .json or .json.xz Volatility 3 ISF files are accepted.",
+                "message": "Only .json or .json.xz Volatility 3 ISF files, or a Volatility 2 Linux profile (.zip), are accepted.",
             },
         )
 
