@@ -6,13 +6,15 @@ Windows PDB resolver, Windows symbol requirement tables, or network providers.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import lzma
 import os
 import re
 import shutil
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -83,11 +85,44 @@ class LinuxSymbolIdentity:
         for field in ("architecture", "kernel_release", "banner", "build_id", "framework_version"):
             expected = getattr(required, field)
             observed = getattr(self, field)
-            if expected and observed and str(expected).strip().lower() != str(observed).strip().lower():
-                return False
             if expected and not observed:
                 return False
+            if not (expected and observed):
+                continue
+            if field == "architecture":
+                if _architecture_family(expected) != _architecture_family(observed):
+                    return False
+            elif field == "banner":
+                if not _same_banner(expected, observed):
+                    return False
+            elif str(expected).strip().lower() != str(observed).strip().lower():
+                return False
         return True
+
+
+_ARCHITECTURE_ALIASES = {
+    "x64": "x64", "x86_64": "x64", "amd64": "x64", "intel64": "x64",
+    "x86": "x86", "i386": "x86", "i486": "x86", "i586": "x86", "i686": "x86", "intel": "x86", "intel32": "x86",
+    "arm64": "arm64", "aarch64": "arm64",
+}
+# Shorter than any real banner's fixed part ("Linux version <release> (<builder>) (<compiler>"),
+# long enough that a prefix match cannot pair two different builds by accident.
+_MIN_BANNER_PREFIX = 64
+
+
+def _architecture_family(value: str) -> str:
+    text = str(value).strip().lower()
+    return _ARCHITECTURE_ALIASES.get(text, text)
+
+
+def _same_banner(expected: str, observed: str) -> bool:
+    """Banners match when equal, or when one is the other cut short (a memory scan reads a
+    bounded number of characters; the ISF carries the whole string)."""
+    first, second = (str(value).rstrip("\x00\n ").strip() for value in (expected, observed))
+    if first == second:
+        return True
+    shorter, longer = sorted((first, second), key=len)
+    return len(shorter) >= _MIN_BANNER_PREFIX and longer.startswith(shorter)
 
 
 @dataclass(frozen=True)
@@ -246,7 +281,11 @@ def import_linux_isf(
                 reason_code=STATUS_SYMBOLS_READY,
                 duplicate=True,
             )
-        raise LinuxSymbolError("SYMBOL_CACHE_COLLISION", "A different Linux ISF already exists for this cache identity.")
+        if not _supersedes_kairon_conversion(upload_path, final_path, settings=settings):
+            raise LinuxSymbolError("SYMBOL_CACHE_COLLISION", "A different Linux ISF already exists for this cache identity.")
+        # An ISF Kairon converted from a Volatility 2 profile, replaced by a newer converter's.
+        final_path.unlink(missing_ok=True)
+        sidecar.unlink(missing_ok=True)
     tmp_path = _safe_child(cache_dir, f".{uuid4().hex}.tmp")
     sidecar_tmp = _safe_child(cache_dir, f".{uuid4().hex}.json.tmp")
     try:
@@ -343,6 +382,25 @@ def _identity_from_isf(payload: dict[str, Any], *, sha256: str) -> LinuxSymbolId
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     linux = metadata.get("linux") if isinstance(metadata.get("linux"), dict) else {}
     identity = _identity_from_mapping({**metadata, **linux}, sha256=sha256)
+    # dwarf2json records neither the banner nor the architecture in metadata; Volatility itself
+    # matches an image by the banner stored in linux_banner, and the pointer size gives the width.
+    derived: dict[str, str] = {}
+    if not identity.banner:
+        banner = _isf_banner(payload)
+        if banner:
+            derived["banner"] = banner
+    if not identity.architecture:
+        pointer = (payload.get("base_types") or {}).get("pointer") if isinstance(payload.get("base_types"), dict) else None
+        size = pointer.get("size") if isinstance(pointer, dict) else None
+        if size in (4, 8):
+            derived["architecture"] = "x64" if size == 8 else "x86"
+    if not identity.kernel_release:
+        release = _kernel_release_from_isf_symbols(linux)
+        banner_release = re.match(r"Linux version (\S+)", derived.get("banner") or identity.banner or "")
+        if release or banner_release:
+            derived["kernel_release"] = release or banner_release.group(1)
+    if derived:
+        identity = replace(identity, **derived)
     if not _has_kernel_identity(identity):
         # A genuine, official Volatility 3 ISF (as produced by dwarf2json,
         # the tool the framework itself ships) does NOT carry a flat
@@ -367,6 +425,42 @@ def _identity_from_isf(payload: dict[str, Any], *, sha256: str) -> LinuxSymbolId
                 isf_sha256=identity.isf_sha256,
             )
     return identity
+
+
+def _kairon_converter_version(payload: dict[str, Any]) -> int | None:
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    producer = metadata.get("producer") if isinstance(metadata.get("producer"), dict) else {}
+    if producer.get("name") != "kairon-vol2-profile":
+        return None
+    try:
+        return int(producer.get("version"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _supersedes_kairon_conversion(upload_path: Path, cached_path: Path, *, settings: Any) -> bool:
+    """Whether the upload is a newer conversion of the same profile than the cached ISF: both
+    made by Kairon's Volatility 2 converter, the upload by a later version of it."""
+    try:
+        new = _kairon_converter_version(_load_isf(upload_path, settings=settings))
+        old = _kairon_converter_version(_load_isf(cached_path, settings=settings)) if cached_path.exists() else None
+    except LinuxSymbolError:
+        return False
+    return new is not None and old is not None and new > old
+
+
+def _isf_banner(payload: dict[str, Any]) -> str | None:
+    symbols = payload.get("symbols") if isinstance(payload.get("symbols"), dict) else {}
+    entry = symbols.get("linux_banner") if isinstance(symbols, dict) else None
+    data = entry.get("constant_data") if isinstance(entry, dict) else None
+    if not isinstance(data, str):
+        return None
+    try:
+        text = base64.b64decode(data, validate=True)[:1024].decode("utf-8", "replace")
+    except (ValueError, binascii.Error):
+        return None
+    text = text.rstrip("\x00\n ").strip()
+    return text if text.startswith("Linux version ") else None
 
 
 _ISF_SYMBOL_ARTIFACT_KERNEL_PREFIXES = ("vmlinux-", "system.map-", "vmlinuz-")

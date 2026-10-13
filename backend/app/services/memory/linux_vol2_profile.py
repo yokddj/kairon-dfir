@@ -492,7 +492,9 @@ def convert_profile(zip_path: Path, image_path: Path, banner_text: str) -> dict[
     return {
         "metadata": {
             "format": "6.2.0",
-            "producer": {"name": "kairon-vol2-profile", "version": "1"},
+            # Raised whenever the conversion's output changes: a newer conversion of a profile
+            # replaces the cached one (app.services.memory.linux_symbols).
+            "producer": {"name": "kairon-vol2-profile", "version": "2"},
             "linux": {
                 "kernel_release": release or profile_release,
                 "banner": banner_line,

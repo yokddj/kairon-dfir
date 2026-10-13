@@ -30,7 +30,7 @@ LINUX = "linux"
 MACOS = "macos"
 
 _WINDOWS_KERNEL_PDB = re.compile(rb"RSDS(.{16})(.{4})(nt(?:krnlmp|oskrnl|krpamp|kpamp)\.pdb)\x00", re.S)
-_LINUX_BANNER = re.compile(rb"Linux version (\d[\w.+~-]*) \([^\x00-\x08\x0e-\x1f\x7f]{0,220}")
+_LINUX_BANNER = re.compile(rb"Linux version (\d[\w.+~-]*) \([^\x00-\x08\x0e-\x1f\x7f]{0,480}")
 _DARWIN_BANNER = re.compile(rb"Darwin Kernel Version (\d[\w.]*)[^\x00-\x08\x0e-\x1f\x7f]{0,200}")
 _CHUNK_BYTES = 64 * 1024 * 1024
 _OVERLAP_BYTES = 512
