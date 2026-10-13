@@ -294,8 +294,11 @@ def test_fail_orphaned_runs_with_fake_session(monkeypatch) -> None:
     lost = SimpleNamespace(id="lost", status="running", worker_task_id="job-lost", metadata_json={"progress": {"current_plugin": "memprocfs.findevil"}}, plugin_runs=[done_plugin, lost_plugin], completed_at=None, error_log={})
     alive = SimpleNamespace(id="alive", status="running", worker_task_id="job-alive", metadata_json={}, plugin_runs=[], completed_at=None, error_log={})
 
+    filters = []
+
     class _Query:
         def filter(self, *args):
+            filters.append(args)
             return self
 
         def all(self):
@@ -322,6 +325,11 @@ def test_fail_orphaned_runs_with_fake_session(monkeypatch) -> None:
     assert "memprocfs.findevil" in lost.error_log["message"]
     assert (lost_plugin.status, done_plugin.status) == ("failed", "completed")
     assert alive.status == "running" and _Session.committed
+    # The API has no run of its own and passes "": no id filter, which Postgres would reject as a uuid.
+    filters.clear()
+    lost.status = "running"
+    assert execution.fail_orphaned_memory_runs("", lambda job_id: job_id == "job-alive") == 1
+    assert len(filters) == 1
 
 
 # --- One row when both tools report the same indicator ---

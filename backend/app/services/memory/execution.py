@@ -484,7 +484,10 @@ def fail_orphaned_memory_runs(current_run_id: str, job_is_alive: Callable[[str],
     restarted): nothing else ever finishes them, and the UI would wait on them forever."""
     closed = 0
     with SessionLocal() as db:
-        runs = db.query(MemoryScanRun).filter(MemoryScanRun.status == "running", MemoryScanRun.id != current_run_id).all()
+        query = db.query(MemoryScanRun).filter(MemoryScanRun.status == "running")
+        if current_run_id:  # the API passes "" (no run of its own), which Postgres cannot compare to a uuid
+            query = query.filter(MemoryScanRun.id != current_run_id)
+        runs = query.all()
         for run in runs:
             if not run.worker_task_id or job_is_alive(run.worker_task_id):
                 continue
