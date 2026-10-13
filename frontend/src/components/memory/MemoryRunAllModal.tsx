@@ -127,6 +127,7 @@ export function MemoryRunAllModal({
   const skippedShown = plan
     ? [...plan.skipped_profiles, ...plan.excluded_profiles].filter((s) => s.reason !== "platform_mismatch")
     : [];
+  const symbolsMissing = Boolean(plan?.skipped_profiles.some((s) => s.reason === "symbols_unavailable"));
   const blockedReason = !canRun
     ? volatilityBackend?.message ?? "Volatility 3 is not ready for memory analysis."
     : null;
@@ -237,7 +238,11 @@ export function MemoryRunAllModal({
           <p className="mt-2 text-[10px] text-muted" data-testid="memory-run-all-est-duration">
             Estimated total duration: ~{totalSeconds}s
           </p>
-          {plan && plan.selected_profiles.length === 0 ? (
+          {plan && plan.selected_profiles.length === 0 && symbolsMissing ? (
+            <p className="mt-2 rounded-xl border border-amber/30 bg-amber/10 px-3 py-2 text-xs text-amber" data-testid="memory-run-all-symbols-missing">
+              Nothing can run until this kernel&apos;s symbols are added in the evidence&apos;s Evidence readiness section.
+            </p>
+          ) : plan && plan.selected_profiles.length === 0 ? (
             <p className="mt-2 rounded-xl border border-mint/30 bg-mint/10 px-3 py-2 text-xs text-mint" data-testid="memory-run-all-noop">
               All available profiles have already been run.
             </p>

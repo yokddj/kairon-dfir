@@ -400,3 +400,35 @@ def test_run_all_preview_skips_profiles_that_do_not_apply_to_the_platform(db: Se
     assert skipped["handles_basic"] == "platform_mismatch"
     assert "handles_basic" not in plan["selected_profiles"]
     assert plan["detected_platform"] == "linux"
+
+
+def test_run_all_preview_skips_linux_profiles_until_the_kernel_symbols_are_added(db: Session, monkeypatch) -> None:
+    from dataclasses import replace
+
+    from app.api.routes_memory import get_run_all_preview
+    from app.services.memory import batch as memory_batch
+    from app.services.memory.analysis_plan import MemoryAnalysisPlan
+    from app.services.memory.capability_registry import MemoryCapability
+    from app.services.memory.platform import PlatformFamily, ProbeConfidence, ReadinessState
+
+    blocked = MemoryAnalysisPlan(
+        evidence_id="ev",
+        detected_platform=PlatformFamily.LINUX,
+        platform_confidence=ProbeConfidence.HIGH,
+        platform_signals="test",
+        framework="volatility3",
+        readiness=ReadinessState.BLOCKED_SYMBOLS,
+        readiness_reason="test",
+        eligible_capabilities=(MemoryCapability.PROCESSES, MemoryCapability.NETWORK, MemoryCapability.SHELL_HISTORY),
+    )
+    monkeypatch.setattr(memory_batch, "build_memory_analysis_plan", lambda evidence: blocked)
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    plan = get_run_all_preview(case_id=case.id, evidence_id=ev.id, mode="missing_or_failed", db=db)
+    skipped = {s["profile"]: s["reason"] for s in plan["skipped_profiles"]}
+    assert plan["selected_profiles"] == []
+    assert skipped["processes_basic"] == skipped["shell_history_basic"] == "symbols_unavailable"
+
+    monkeypatch.setattr(memory_batch, "build_memory_analysis_plan", lambda evidence: replace(blocked, readiness=ReadinessState.READY))
+    plan = get_run_all_preview(case_id=case.id, evidence_id=ev.id, mode="missing_or_failed", db=db)
+    assert "processes_basic" in plan["selected_profiles"]
