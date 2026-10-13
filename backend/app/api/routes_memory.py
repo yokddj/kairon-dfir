@@ -27,8 +27,10 @@ PROCESS_SOURCE_PLUGIN_FILTERS = {
     "windows.cmdline",
     "linux.pslist",
     "linux.pstree",
+    "linux.psaux",
+    "linux.psscan",
 }
-PROCESS_SOURCE_PLUGIN_FILTER_PATTERN = "^(windows\\.pslist|windows\\.psscan|windows\\.pstree|windows\\.cmdline|linux\\.pslist|linux\\.pstree)$"
+PROCESS_SOURCE_PLUGIN_FILTER_PATTERN = "^(windows\\.pslist|windows\\.psscan|windows\\.pstree|windows\\.cmdline|linux\\.pslist|linux\\.pstree|linux\\.psaux|linux\\.psscan)$"
 
 
 def _structured_db_error(

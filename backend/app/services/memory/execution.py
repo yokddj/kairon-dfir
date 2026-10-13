@@ -29,6 +29,8 @@ from app.services.memory.artifact_normalizers import (
     NORMALIZATION_VERSION,
     merge_module_documents,
     normalize_linux_bash,
+    normalize_linux_lsmod,
+    normalize_linux_lsof,
     normalize_linux_sockstat,
     normalize_windows_dlllist,
     normalize_windows_driverscan,
@@ -47,7 +49,7 @@ from app.services.memory.artifact_normalizers import (
     normalize_windows_vadinfo,
 )
 from app.services.memory.indexing import index_memory_documents, index_memory_system_info
-from app.services.memory.normalizers import merge_memory_process_results, normalize_linux_pslist, normalize_linux_pstree, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
+from app.services.memory.normalizers import merge_memory_process_results, normalize_linux_psaux, normalize_linux_pslist, normalize_linux_psscan, normalize_linux_pstree, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
 from app.services.memory.pids import normalize_pid
 from app.services.memory.process_entities import renormalize_documents
 from app.services.memory.storage import memory_run_dir, relative_to_data_dir, write_atomic_bytes, write_atomic_json
@@ -55,6 +57,7 @@ from app.services.memory.validation import MemoryExecutionValidationError, valid
 from app.services.memory.volatility_runner import VolatilityRunnerError, probe_windows_symbol_identity, run_plugin
 from app.services.memory.kairon_findevil import KAIRON_FINDEVIL_PLUGIN, run_kairon_findevil
 from app.services.memory.kairon_psreadline import KAIRON_PSREADLINE_PLUGIN, run_kairon_psreadline
+from app.services.memory.kairon_linux_findevil import KAIRON_LINUX_FINDEVIL_PLUGIN, run_kairon_linux_findevil
 from app.services.memory.memprocfs_runner import MEMPROCFS_PLUGINS, TIMELINE_DIRNAME as MEMPROCFS_TIMELINE_DIRNAME, run_findevil
 from app.services.memory.memprocfs_timeline import index_memprocfs_timeline
 from app.services.memory import volatility_runner
@@ -78,7 +81,7 @@ PROFILE_PLUGINS = {
     "kernel_basic": ["windows.modules", "windows.driverscan", "windows.info"],
     "suspicious_memory": ["windows.malfind", "windows.vadinfo"],
 }
-PROCESS_PLUGINS = {"windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "linux.pslist", "linux.pstree"}
+PROCESS_PLUGINS = {"windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "linux.pslist", "linux.pstree", "linux.psaux", "linux.psscan"}
 PROCESS_OBSERVATION_PLUGINS = {"windows.envars", "windows.getsids", "windows.privileges"}
 OPTIONAL_RUNTIME_PROBED_PLUGINS = PROCESS_OBSERVATION_PLUGINS | {"windows.netscan", "windows.netstat", "windows.vadinfo"}
 ARTIFACT_PROFILES = {
@@ -109,6 +112,10 @@ ARTIFACT_PLUGIN_NORMALIZER = {
     "kairon.findevil": "memory_findevil",
     "memprocfs.findevil": "memory_findevil",
     "kairon.psreadline": "memory_shell_history",
+    "linux.lsof": "memory_handle",
+    "linux.lsmod": "memory_kernel_module",
+    "linux.malware.malfind": "memory_suspicious_region",
+    "kairon.linux_findevil": "memory_findevil",
 }
 ARTIFACT_PLUGIN_LIMITS = {
     # Per-plugin guard-rails to keep offline execution bounded.
@@ -162,6 +169,21 @@ ARTIFACT_PLUGIN_LIMITS = {
     # windows.filescan, then windows.dumpfiles on the PowerShell history files it finds.
     "kairon.psreadline": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "kairon.findevil": {"timeout_seconds": 2400, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    # Linux: psscan and malfind scan all of memory or every process's mappings; lsof walks every
+    # process's file table. Seconds on a 256 MB image; the bounds leave room for large ones.
+    "linux.psaux": {"timeout_seconds": 900, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "linux.psscan": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "linux.lsof": {"timeout_seconds": 1200, "max_output_bytes": 64 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "linux.lsmod": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "linux.malware.malfind": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 50000, "max_preview_bytes": 4096},
+    "linux.malware.check_modules": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "linux.malware.hidden_modules": {"timeout_seconds": 900, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "linux.malware.check_syscall": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "linux.malware.check_idt": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "linux.malware.tty_check": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "linux.malware.check_afinfo": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    # Kairon's Linux checks run the twelve plugins above; each keeps its own bound inside this one.
+    "kairon.linux_findevil": {"timeout_seconds": 3600, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
 }
 
 # Each existing profile name already encodes one capability's intent.
@@ -937,6 +959,14 @@ def _normalize_artifact_payload(
         return normalize_psreadline_history(payload, source_plugin=plugin, **common)
     if plugin in ("memprocfs.findevil", KAIRON_FINDEVIL_PLUGIN):
         return normalize_memprocfs_findevil(payload, source_plugin=plugin, **common)
+    if plugin == KAIRON_LINUX_FINDEVIL_PLUGIN:
+        return normalize_memprocfs_findevil(payload, source_plugin=plugin, platform="linux", **common)
+    if plugin == "linux.lsof":
+        return normalize_linux_lsof(payload, source_plugin=plugin, **common)
+    if plugin == "linux.lsmod":
+        return normalize_linux_lsmod(payload, source_plugin=plugin, **common)
+    if plugin == "linux.malware.malfind":
+        return normalize_windows_malfind(payload, source_plugin=plugin, **common)
     return {
         "items": [],
         "warnings": [f"unsupported_artifact_plugin:{plugin}"],
@@ -1199,6 +1229,15 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
             plugin_timeout=plugin_execution_timeout_seconds,
             cancellation_check=cancellation_requested,
         )
+    elif plugin == KAIRON_LINUX_FINDEVIL_PLUGIN:
+        result = run_kairon_linux_findevil(
+            evidence_path,
+            output_dir,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+            plugin_timeout=plugin_execution_timeout_seconds,
+            cancellation_check=cancellation_requested,
+        )
     elif plugin == KAIRON_PSREADLINE_PLUGIN:
         result = run_kairon_psreadline(
             evidence_path,
@@ -1334,6 +1373,10 @@ def _normalize_process_payload(plugin: str, payload: Any) -> dict[str, Any]:
         return normalize_linux_pslist(payload, **kwargs)
     if plugin == "linux.pstree":
         return normalize_linux_pstree(payload, **kwargs)
+    if plugin == "linux.psaux":
+        return normalize_linux_psaux(payload, **kwargs)
+    if plugin == "linux.psscan":
+        return normalize_linux_psscan(payload, **kwargs)
     return {"plugin": plugin, "processes": [], "edges": [], "warnings": ["unsupported_process_plugin"], "row_count": 0}
 
 

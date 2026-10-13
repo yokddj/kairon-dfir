@@ -77,7 +77,7 @@ describe("LinuxSymbolUploadPanel (Phase 3, async)", () => {
     await waitFor(() => expect(getLinuxSymbolRequirementMock).toHaveBeenCalledWith(CASE, EVIDENCE));
     expect(screen.getByText(/Expected kernel:/)).toBeInTheDocument();
     expect(screen.getByText("X64")).toBeInTheDocument();
-    expect(screen.getByText(".json, .json.xz, .zip (Volatility 2 profile)")).toBeInTheDocument();
+    expect(screen.getByText(".json, .json.xz, .zip (a zipped ISF or a Volatility 2 profile)")).toBeInTheDocument();
     expect(screen.getByTestId("linux-symbol-vol2-hint")).toHaveTextContent("module.dwarf and System.map");
     expect(screen.getByTestId("linux-symbol-file-input")).toHaveAttribute("accept", ".json,.json.xz,.zip");
   });

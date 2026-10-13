@@ -9,7 +9,7 @@ The upload is off by default; with `MEMORY_LINUX_SYMBOL_MANUAL_IMPORT_ENABLED=tr
 
 Upload one of these there:
 
-- **A Volatility 3 ISF** (`.json` or `.json.xz`), for example produced by `dwarf2json` from the kernel's debug package.
+- **A Volatility 3 ISF** (`.json` or `.json.xz`, or either one zipped), for example produced by `dwarf2json` from the kernel's debug package.
 - **A Volatility 2 Linux profile** (`.zip` with `module.dwarf` and `System.map`), the format CTFs and older guides ship (for example `Debian5_26.zip`). Many old kernels only ever had one.
 
 The upload is validated on the memory worker and, when it matches, stored in the offline Linux symbol cache, where other evidence with the same kernel reuses it.
@@ -25,7 +25,26 @@ The upload is validated on the memory worker and, when it matches, stored in the
 
 ## What a Linux image shows
 
-The analyses, tabs and Overview families offered for a memory image follow its detected platform: only those a registered plugin can produce for it (`app.services.memory.capability_registry`). On Linux that is processes (with the process graph and timeline), network sockets and shell history; Windows-only views such as Handles, VADs, Drivers, Files, Find Evil or MemProcFS are not listed. An image whose platform is not identified yet keeps every view.
+The analyses, tabs and Overview families offered for a memory image follow its detected platform: only those a registered plugin can produce for it (`app.services.memory.capability_registry`). On Linux:
+
+| Analysis | Volatility plugins | Shown in |
+|---|---|---|
+| Processes | `linux.pslist`, `linux.pstree`, `linux.psaux` (full command lines) | Processes, Graph, Timeline |
+| Extended processes | `linux.psscan` (exited processes, and ones unlinked from the task list) | Processes |
+| Network | `linux.sockstat` | Network |
+| Open files | `linux.lsof` | Handles |
+| Kernel modules | `linux.lsmod` | Kernel Modules |
+| Suspicious memory | `linux.malware.malfind` | Suspicious Memory |
+| Shell history | `linux.bash` | Shell History |
+| Find Evil | `kairon.linux_findevil` | Find Evil |
+
+Windows-only views (Modules & DLLs, Drivers, VADs, Files, System, MemProcFS) are not listed. An image whose platform is not identified yet keeps every view.
+
+### Linux Find Evil
+
+`app.services.memory.kairon_linux_findevil` runs the plugins above plus Volatility's rootkit checks (`check_modules`, `hidden_modules`, `check_syscall`, `check_idt`, `tty_check`, `check_afinfo`) and reports leads to review: hidden processes and kernel modules, shells whose standard input/output is a socket (reverse or bind shells), shells started by network services, user processes posing as kernel threads, root processes started by unprivileged ones that are not meant to change user, programs run from `/tmp`, `/dev/shm` or hidden folders, suspicious command lines (reverse shells, download cradles, history wiping, miners), hooked system calls, interrupts, terminal and `/proc/net` handlers, and ELF programs or executable code in anonymous memory. A plugin that fails on an image only removes its own checks.
+
+Kernel hook checks compare handler addresses with the kernel's symbols. When most system call handlers have no symbol, the symbols' addresses are not those of this exact kernel build (a Volatility 2 profile made from a near build, for example): the hook checks are skipped and the run says why, instead of reporting every handler as hooked.
 
 ## Kernels before 2.6.29
 

@@ -18,6 +18,10 @@ What a profile does not carry is added here:
 * empty placeholders for the structures Volatility 3 always registers but
   older kernels do not have (``struct cred`` appeared in 2.6.29).
 
+A zip that holds a Volatility 3 ISF instead (``.json`` or ``.json.xz``,
+as ISFs are often shared) is unpacked as is; the validation that follows
+checks it against the memory image like any uploaded ISF.
+
 Run as ``python -m app.services.memory.linux_vol2_profile <zip> <image>
 <banner> <out.json>`` in an isolated subprocess: it prints
 ``{"ok": true, ...}`` or ``{"ok": false, "code": ..., "message": ...}``.
@@ -37,6 +41,7 @@ from typing import Any
 MAX_DWARF_BYTES = 256 * 1024 * 1024
 MAX_SYSTEM_MAP_BYTES = 64 * 1024 * 1024
 MAX_ZIP_ENTRIES = 256
+MAX_ISF_BYTES = 1024 * 1024 * 1024
 MAX_BANNER_BYTES = 512
 PHYSICAL_ALIGN = 0x200000
 
@@ -63,6 +68,26 @@ GLOBAL_TYPES = {
     "log_buf": {"kind": "pointer", "subtype": {"kind": "base", "name": "char"}},
     "log_buf_len": {"kind": "base", "name": "int"},
     "jiffies": {"kind": "base", "name": "long unsigned int"},
+    # Read by Volatility's rootkit checks (check_modules, hidden_modules,
+    # check_idt, tty_check, check_afinfo, keyboard_notifiers) and its
+    # kernel/module address lookups. Only the address of _text, _etext and
+    # idt_table is used, so a char marks it.
+    "_text": {"kind": "base", "name": "char"},
+    "_stext": {"kind": "base", "name": "char"},
+    "_etext": {"kind": "base", "name": "char"},
+    "idt_table": {"kind": "base", "name": "char"},
+    "module_kset": {"kind": "pointer", "subtype": {"kind": "struct", "name": "kset"}},
+    "module_addr_min": {"kind": "base", "name": "long unsigned int"},
+    "module_addr_max": {"kind": "base", "name": "long unsigned int"},
+    "mod_tree": {"kind": "struct", "name": "mod_tree_root"},
+    "tty_drivers": {"kind": "struct", "name": "list_head"},
+    "keyboard_notifier_list": {"kind": "struct", "name": "atomic_notifier_head"},
+    "iomem_resource": {"kind": "struct", "name": "resource"},
+    # Kernels before 4.18 keep the /proc/net seq_file operations in
+    # per-protocol afinfo structures, later ones in plain seq_operations.
+    **{name: {"kind": "struct", "name": "tcp_seq_afinfo"} for name in ("tcp4_seq_afinfo", "tcp6_seq_afinfo")},
+    **{name: {"kind": "struct", "name": "udp_seq_afinfo"} for name in ("udp4_seq_afinfo", "udp6_seq_afinfo", "udplite4_seq_afinfo", "udplite6_seq_afinfo")},
+    **{name: {"kind": "struct", "name": "seq_operations"} for name in ("raw_seq_ops", "udp_seq_ops", "udp6_seq_ops", "raw6_seq_ops", "tcp_seq_ops", "tcp4_seq_ops", "tcp6_seq_ops", "packet_seq_ops")},
 }
 
 # Structures Volatility 3's Linux symbol table registers unconditionally.
@@ -86,6 +111,36 @@ class Vol2ProfileError(ValueError):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def extract_zipped_isf(zip_path: Path, output: Path) -> bool:
+    """Unpack a zip that holds one Volatility 3 ISF into ``output``; False when it holds none."""
+    import lzma
+
+    try:
+        archive = zipfile.ZipFile(zip_path)
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise Vol2ProfileError("SYMBOL_UNSUPPORTED_FORMAT", "The file is not a zip archive.") from exc
+    with archive:
+        entries = [info for info in archive.infolist() if not info.is_dir()]
+        if len(entries) > MAX_ZIP_ENTRIES or any(info.filename.lower().endswith(".dwarf") for info in entries):
+            return False
+        isfs = [info for info in entries if info.filename.lower().endswith((".json", ".json.xz"))]
+        if len(isfs) != 1:
+            return False
+        info = isfs[0]
+        compressed = info.filename.lower().endswith(".xz")
+        written = 0
+        with archive.open(info) as source, output.open("wb") as target:
+            reader = lzma.LZMAFile(source) if compressed else source
+            while chunk := reader.read(1024 * 1024):
+                written += len(chunk)
+                if written > MAX_ISF_BYTES:
+                    target.close()
+                    output.unlink(missing_ok=True)
+                    raise Vol2ProfileError("SYMBOL_UNSUPPORTED_FORMAT", "The ISF in the zip is too large.")
+                target.write(chunk)
+    return True
 
 
 def read_profile(zip_path: Path) -> tuple[str, str, str]:
@@ -392,6 +447,8 @@ def find_banner(image_path: Path, banner_text: str, banner_address: int, pointer
 
 
 def convert_profile(zip_path: Path, image_path: Path, banner_text: str) -> dict[str, Any]:
+    if not banner_text:
+        raise Vol2ProfileError("SYMBOL_BANNER_UNKNOWN", "Kairon has not found this memory image's kernel banner, which a Volatility 2 profile needs to be matched.")
     dwarf_text, system_map_text, system_map_name = read_profile(zip_path)
     symbols_by_name = parse_system_map(system_map_text)
     if "linux_banner" not in symbols_by_name or "init_task" not in symbols_by_name:
@@ -455,6 +512,9 @@ def main(argv: list[str]) -> int:
         print("usage: linux_vol2_profile.py <profile.zip> <memory image> <banner> <out.json>", file=sys.stderr)
         return 2
     try:
+        if extract_zipped_isf(Path(argv[1]), Path(argv[4])):
+            print(json.dumps({"ok": True, "zipped_isf": True}))
+            return 0
         isf = convert_profile(Path(argv[1]), Path(argv[2]), argv[3])
     except Vol2ProfileError as exc:
         print(json.dumps({"ok": False, "code": exc.code, "message": exc.message}))
