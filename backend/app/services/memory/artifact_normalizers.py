@@ -1789,6 +1789,64 @@ def normalize_windows_filescan(
     }
 
 
+def normalize_linux_pagecache_files(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "linux.pagecache.Files",
+    max_records: int = 200000,
+) -> dict[str, Any]:
+    """linux.pagecache.Files' cached inodes as memory_file_object documents, like
+    windows.filescan's: ``name`` is the path and ``offset`` the inode's address, which is what
+    "Retrieve file" hands to linux.pagecache.InodePages."""
+    rows = _rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    dropped = 0
+    for index, row in enumerate(rows):
+        if len(items) >= max_records:
+            warnings.append("filescan_max_records_reached")
+            dropped += len(rows) - index
+            break
+        name = _str_or_none(_lookup(row, "FilePath"), MAX_OBJECT_NAME_LENGTH)
+        if not name:
+            dropped += 1
+            continue
+        address = _lookup(row, "InodeAddr")
+        offset = f"0x{address:x}" if isinstance(address, int) and not isinstance(address, bool) else None
+        identity = _identity_pid_offset(offset, name)
+        items.append({
+            "document_id": _document_id(prefix="memory_file_object", case_id=case_id, run_id=scan_run_id, identity=identity),
+            "document_type": "memory_file_object",
+            "case_id": case_id,
+            "evidence_id": evidence_id,
+            "scan_run_id": scan_run_id,
+            "plugin_run_id": plugin_run_id,
+            "platform": "linux",
+            "offset": offset,
+            "name": name,
+            "file_type": _str_or_none(_lookup(row, "FileType"), 16),
+            "file_mode": _str_or_none(_lookup(row, "FileMode"), 16),
+            "inode": _int_or_none(_lookup(row, "InodeNum")),
+            "file_size": _int_or_none(_lookup(row, "InodeSize")),
+            "cached_pages": _int_or_none(_lookup(row, "CachedPages")),
+            "mount_point": _str_or_none(_lookup(row, "MountPoint"), MAX_OBJECT_NAME_LENGTH),
+            "modified_at": _str_or_none(_lookup(row, "ModificationTime"), 64),
+            "accessed_at": _str_or_none(_lookup(row, "AccessTime"), 64),
+            "changed_at": _str_or_none(_lookup(row, "ChangeTime"), 64),
+            "process_entity_id": None,
+            "source_plugin": source_plugin,
+            "source_record_index": index,
+            "confidence": "reported_by_plugin",
+            "provenance": _provenance(case_id=case_id, evidence_id=evidence_id, scan_run_id=scan_run_id, plugin_run_id=plugin_run_id, source_plugin=source_plugin),
+            "normalization_version": NORMALIZATION_VERSION,
+        })
+    return {"items": items, "warnings": warnings, "raw_count": len(rows), "accepted_count": len(items), "dropped_count": dropped, "conflicts": 0, "normalization_version": NORMALIZATION_VERSION}
+
+
 # ---------------------------------------------------------------------------
 # find_evil -> memory_findevil
 #   MemProcFS's FindEvil (forensic mode) lists memory indicators worth a look:

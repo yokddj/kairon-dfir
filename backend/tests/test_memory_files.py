@@ -2,7 +2,7 @@
 
 Mirrors the shell_history_basic (windows.consoles) buildout: a
 capability-registry-only profile (files_basic -> MemoryCapability.FILES
--> windows.filescan on Windows, no Linux producer), persisting the full
+-> windows.filescan on Windows, linux.pagecache.Files on Linux), persisting the full
 filescan result as a searchable memory_file_object family instead of
 discarding it the way the separate on-demand "recover this exact file"
 action (app.services.memory.file_extraction) already does per request.
@@ -191,10 +191,10 @@ def test_windows_resolves_exactly_windows_filescan_via_resolve_profile_plugins()
     assert resolve_profile_plugins("files_basic", plan=plan) == ["windows.filescan"]
 
 
-def test_linux_has_no_files_producer() -> None:
+def test_linux_files_come_from_the_page_cache() -> None:
     from app.services.memory.capability_registry import resolved_plugins_for_capability
 
-    assert resolved_plugins_for_capability(PlatformFamily.LINUX, MemoryCapability.FILES) == []
+    assert resolved_plugins_for_capability(PlatformFamily.LINUX, MemoryCapability.FILES) == ["linux.pagecache.Files"]
 
 
 def test_files_basic_unknown_profile_check_still_works() -> None:
@@ -271,8 +271,9 @@ def test_files_basic_is_in_the_catalogue() -> None:
     assert entry["cost_label"] != "Fast"
 
 
-def test_files_basic_supported_os_families_is_windows_only() -> None:
-    assert set(_supported_os_families("files_basic")) == {"windows"}
+def test_files_basic_supported_os_families_are_windows_and_linux() -> None:
+    # windows.filescan on Windows, linux.pagecache.Files on Linux.
+    assert set(_supported_os_families("files_basic")) == {"windows", "linux"}
 
 
 def test_catalogue_shows_windows_filescan_on_windows_evidence(db: Session) -> None:
@@ -289,18 +290,19 @@ def test_catalogue_shows_windows_filescan_on_windows_evidence(db: Session) -> No
     assert item["plugins"] == ["windows.filescan"]
 
 
-def test_catalogue_stays_unavailable_on_linux_evidence(db: Session) -> None:
+def test_catalogue_offers_the_page_cache_on_linux_evidence(db: Session) -> None:
     case = _make_case(db)
     ev = _make_evidence(db, case.id)
-    linux_plan = _plan(PlatformFamily.LINUX, eligible=(), selected=())
+    linux_plan = _plan(PlatformFamily.LINUX, eligible=(MemoryCapability.FILES,), selected=("linux.pagecache.Files",))
     settings = _settings_with_process_profiles_enabled()
     with patch("app.services.memory.counts.get_memory_family_count", return_value={"total": 0}), \
          patch("app.services.memory.catalogue.build_memory_analysis_plan", return_value=linux_plan), \
          patch("app.services.memory.catalogue.get_settings", return_value=settings):
         catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
     item = next(i for i in catalogue if i["profile"] == "files_basic")
-    assert item["available"] is False
-    assert item["plugins"] == []
+    assert item["plugins"] == ["linux.pagecache.Files"]
+    assert item["applies_to_platform"] is True
+    assert "page cache" in item["description"]
 
 
 # ---------------------------------------------------------------------------

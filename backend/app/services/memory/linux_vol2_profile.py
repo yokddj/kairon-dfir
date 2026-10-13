@@ -83,6 +83,10 @@ GLOBAL_TYPES = {
     "tty_drivers": {"kind": "struct", "name": "list_head"},
     "keyboard_notifier_list": {"kind": "struct", "name": "atomic_notifier_head"},
     "iomem_resource": {"kind": "struct", "name": "resource"},
+    # Before 4.20 the page cache is a radix tree; reading it (linux.pagecache) needs these tables.
+    # Their length is set from the pointer size in convert_profile.
+    "height_to_maxindex": {"kind": "array", "count": 0, "subtype": {"kind": "base", "name": "long unsigned int"}},
+    "height_to_maxnodes": {"kind": "array", "count": 0, "subtype": {"kind": "base", "name": "long unsigned int"}},
     # Kernels before 4.18 keep the /proc/net seq_file operations in
     # per-protocol afinfo structures, later ones in plain seq_operations.
     **{name: {"kind": "struct", "name": "tcp_seq_afinfo"} for name in ("tcp4_seq_afinfo", "tcp6_seq_afinfo")},
@@ -335,7 +339,7 @@ def _add_socket_alloc(user_types: dict[str, Any], pointer_size: int) -> None:
 
 
 def _known(described: dict[str, Any], builder: _TypeBuilder) -> bool:
-    if described["kind"] == "pointer":
+    if described["kind"] in ("pointer", "array"):
         return _known(described["subtype"], builder)
     if described["kind"] == "base":
         return described["name"] in builder.base_types
@@ -476,6 +480,9 @@ def convert_profile(zip_path: Path, image_path: Path, banner_text: str) -> dict[
     symbols["linux_banner"]["constant_data"] = base64.b64encode(banner).decode("ascii")
     for name, described in GLOBAL_TYPES.items():
         if name in symbols and _known(described, builder):
+            if described["kind"] == "array" and not described["count"]:
+                # RADIX_TREE_MAX_PATH + 1 = ceil(bits per long / RADIX_TREE_MAP_SHIFT (6)) + 1
+                described = {**described, "count": -(-pointer_size * 8 // 6) + 1}
             symbols[name]["type"] = described
     if "total_sleep_time" in symbols:
         # Seconds in an unsigned long before 2.6.32, a timespec since: it moves process start times.
@@ -494,7 +501,7 @@ def convert_profile(zip_path: Path, image_path: Path, banner_text: str) -> dict[
             "format": "6.2.0",
             # Raised whenever the conversion's output changes: a newer conversion of a profile
             # replaces the cached one (app.services.memory.linux_symbols).
-            "producer": {"name": "kairon-vol2-profile", "version": "2"},
+            "producer": {"name": "kairon-vol2-profile", "version": "3"},
             "linux": {
                 "kernel_release": release or profile_release,
                 "banner": banner_line,

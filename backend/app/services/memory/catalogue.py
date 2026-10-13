@@ -98,6 +98,7 @@ PLATFORM_COPY: dict[str, dict[str, dict[str, str]]] = {
         "kernel_basic": {"title": "Kernel modules", "description": "Kernel modules loaded when memory was captured (linux.lsmod)."},
         "suspicious_memory": {"description": "Anonymous executable memory in processes, where injected code lives (linux.malware.malfind)."},
         "network_basic": {"description": "Sockets open in each process: TCP, UDP and Unix (linux.sockstat)."},
+        "files_basic": {"description": "Browsable, searchable list of the files the kernel has in its page cache, on every mounted filesystem including tmpfs (linux.pagecache.Files). Pick one to retrieve its cached contents."},
         "find_evil": {"description": "Indicators to review from Kairon's checks over Volatility: hidden processes and kernel modules, shells connected to sockets, suspicious command lines (reverse shells, download cradles, history wiping), programs run from /tmp or /dev/shm, shells started by network services, root processes started by unprivileged ones, hooked system calls, interrupts and terminal handlers, and injected code."},
     },
 }

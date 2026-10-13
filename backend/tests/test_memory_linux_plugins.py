@@ -204,3 +204,94 @@ def test_an_unreadable_task_list_does_not_make_every_process_hidden():
     indicators, notes = linux_findevil_indicators(outputs)
     assert indicators == []
     assert "task list returned no processes" in notes[0]
+
+
+# --- Files and "Retrieve file" on Linux (linux.pagecache) ---
+
+def test_pagecache_files_become_file_objects_with_the_inode_as_offset():
+    from app.services.memory.artifact_normalizers import normalize_linux_pagecache_files
+
+    rows = [{"FilePath": "/tmp/.x/payload", "FileType": "REG", "InodeAddr": 0x9EE0C1FC6F68, "InodeNum": 42, "InodeSize": 2048, "CachedPages": 1, "MountPoint": "/tmp", "ModificationTime": "2024-07-03T19:28:17+00:00"}, {"FilePath": None}]
+    result = normalize_linux_pagecache_files(rows, **COMMON)
+    doc = result["items"][0]
+    assert (doc["name"], doc["offset"], doc["platform"], doc["file_type"], doc["cached_pages"], doc["document_type"]) == ("/tmp/.x/payload", "0x9ee0c1fc6f68", "linux", "REG", 1, "memory_file_object")
+    assert result["dropped_count"] == 1
+
+
+def test_linux_paths_match_exactly_then_by_name_and_only_regular_files():
+    from app.services.memory.file_extraction import _match_linux_rows
+
+    rows = [{"FilePath": "/etc/passwd", "FileType": "REG"}, {"FilePath": "/var/backups/passwd", "FileType": "REG"}, {"FilePath": "/etc", "FileType": "DIR"}]
+    assert [row["FilePath"] for row in _match_linux_rows(rows, "/etc/passwd")] == ["/etc/passwd"]
+    assert [row["FilePath"] for row in _match_linux_rows(rows, "passwd")] == ["/etc/passwd", "/var/backups/passwd"]
+    assert _match_linux_rows(rows, "/etc/PASSWD") == []  # case-sensitive, and no name match either
+    assert _match_linux_rows(rows, "/etc") == []
+
+
+def _fake_volatility(monkeypatch, tmp_path, *, dump_fails=False, files_rows=None):
+    import json as _json
+    from types import SimpleNamespace
+
+    from app.services.memory import file_extraction
+    from app.services.memory.volatility_runner import VolatilityRunnerError
+
+    calls = []
+    rows = files_rows if files_rows is not None else [{"FilePath": "/tmp/payload", "FileType": "REG", "InodeAddr": 0x1000, "InodeSize": 6, "CachedPages": 1}]
+
+    def run_plugin(plugin, image, work_dir, *, timeout_seconds, extra_args=None, **_):
+        calls.append((plugin, extra_args))
+        if plugin == "linux.pagecache.Files":
+            wanted = extra_args[1] if extra_args else None
+            found = [row for row in rows if wanted is None or row["FilePath"] == wanted]
+            return SimpleNamespace(stdout=_json.dumps(found).encode())
+        if dump_fails:
+            raise VolatilityRunnerError("PLUGIN_FAILED", "unexpected situation")
+        (work_dir / f"inode_0x{int(extra_args[1]):x}.dmp").write_bytes(b"secret")
+        return SimpleNamespace(stdout=b"[]")
+
+    monkeypatch.setattr(file_extraction, "run_plugin", run_plugin)
+    monkeypatch.setattr(file_extraction, "relative_to_data_dir", lambda path: str(path))
+    extraction = SimpleNamespace(requested_path="/tmp/payload", evidence_id="ev", filescan_matches=None)
+    db = SimpleNamespace(commit=lambda: None)
+    return file_extraction, extraction, db, calls
+
+
+def test_retrieve_file_on_linux_dumps_the_cached_pages(monkeypatch, tmp_path):
+    file_extraction, extraction, db, calls = _fake_volatility(monkeypatch, tmp_path)
+    results = file_extraction._extract_linux(db, extraction, tmp_path / "image", tmp_path)
+    assert [call[0] for call in calls] == ["linux.pagecache.Files", "linux.pagecache.InodePages"]
+    assert calls[1][1] == ["--inode", str(0x1000), "--dump"]
+    assert results[0]["original_filename"] == "/tmp/payload" and results[0]["size_bytes"] == 6
+    assert extraction.filescan_matches == [{"offset": "0x1000", "name": "/tmp/payload"}]
+
+
+def test_retrieve_file_on_linux_by_name_lists_every_cached_file(monkeypatch, tmp_path):
+    file_extraction, extraction, db, calls = _fake_volatility(monkeypatch, tmp_path)
+    extraction.requested_path = "payload"
+    results = file_extraction._extract_linux(db, extraction, tmp_path / "image", tmp_path)
+    assert calls[0] == ("linux.pagecache.Files", None) and len(results) == 1
+
+
+def test_a_failed_dump_with_an_old_dwarf2json_isf_says_how_to_fix_it(monkeypatch, tmp_path):
+    import pytest as _pytest
+
+    from app.services.memory.volatility_runner import VolatilityRunnerError
+
+    file_extraction, extraction, db, _ = _fake_volatility(monkeypatch, tmp_path, dump_fails=True)
+    monkeypatch.setattr(file_extraction, "_isf_hint", lambda db, evidence_id: " regenerate the ISF with dwarf2json 0.8 or later")
+    with _pytest.raises(VolatilityRunnerError) as error:
+        file_extraction._extract_linux(db, extraction, tmp_path / "image", tmp_path)
+    assert "dwarf2json 0.8" in error.value.message
+
+
+def test_isfs_from_dwarf2json_before_0_8_are_recognised(tmp_path):
+    import json as _json
+
+    from app.services.memory.linux_symbols import isf_producer, predates_anonymous_member_names
+
+    path = tmp_path / "isf.json"
+    path.write_text(_json.dumps({"metadata": {"producer": {"name": "dwarf2json", "version": "0.7.0"}}, "symbols": {}}))
+    assert isf_producer(path) == ("dwarf2json", "0.7.0")
+    assert predates_anonymous_member_names(("dwarf2json", "0.7.0"))
+    assert not predates_anonymous_member_names(("dwarf2json", "0.9.0"))
+    assert not predates_anonymous_member_names(("kairon-vol2-profile", "3"))

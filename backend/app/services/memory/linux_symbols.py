@@ -481,6 +481,29 @@ def _remove_superseded_conversions(cache_dir: Path, identity: LinuxSymbolIdentit
             sidecar.unlink(missing_ok=True)
 
 
+def isf_producer(path: Path) -> tuple[str, str] | None:
+    """(name, version) of the tool that made an ISF, from its metadata."""
+    try:
+        payload = _load_isf(path, settings=_SidecarSettings(max_bytes=path.stat().st_size + 1))
+    except (OSError, LinuxSymbolError):
+        return None
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    producer = metadata.get("producer") if isinstance(metadata.get("producer"), dict) else {}
+    name, version = producer.get("name"), producer.get("version")
+    return (str(name), str(version)) if name and version else None
+
+
+def predates_anonymous_member_names(producer: tuple[str, str]) -> bool:
+    """dwarf2json before 0.8.0 named every anonymous member of a structure ``unnamed_field_0``
+    at its offset, so all but one of a union's anonymous structs are lost (struct page's mapping
+    and index among them): Volatility's page-cache and hidden-module plugins cannot work."""
+    name, version = producer
+    if name != "dwarf2json":
+        return False
+    parts = re.findall(r"\d+", version)[:3]
+    return bool(parts) and tuple(int(part) for part in parts) < (0, 8, 0)
+
+
 def _isf_banner(payload: dict[str, Any]) -> str | None:
     symbols = payload.get("symbols") if isinstance(payload.get("symbols"), dict) else {}
     entry = symbols.get("linux_banner") if isinstance(symbols, dict) else None

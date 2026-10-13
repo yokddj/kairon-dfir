@@ -185,6 +185,9 @@ _LINUX: tuple[CapabilityPluginSpec, ...] = (
     # Kairon's Linux checks (app.services.memory.kairon_linux_findevil): hidden processes and
     # modules, kernel hooks, shells on sockets, suspicious command lines and injected code.
     CapabilityPluginSpec(MemoryCapability.FIND_EVIL, PlatformFamily.LINUX, FRAMEWORK_VOLATILITY3, "kairon.linux_findevil", presentation_family="memory_findevil"),
+    # Files the kernel has in its page cache (every mounted filesystem, tmpfs included): the
+    # counterpart of windows.filescan, and what "Retrieve file" recovers contents from.
+    CapabilityPluginSpec(MemoryCapability.FILES, PlatformFamily.LINUX, FRAMEWORK_VOLATILITY3, "linux.pagecache.Files", presentation_family="memory_file_object"),
 )
 
 MEMORY_CAPABILITY_REGISTRY: tuple[CapabilityPluginSpec, ...] = _WINDOWS + _LINUX

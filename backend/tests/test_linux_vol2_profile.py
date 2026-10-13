@@ -93,6 +93,7 @@ c03f519c b total_sleep_time
 c0300000 T _etext
 c0380000 D tty_drivers
 c0390000 D module_kset
+c03a0000 d height_to_maxindex
 """
 
 
@@ -152,6 +153,8 @@ def test_what_the_profile_lacks_is_filled_in(tmp_path):
     assert symbols["_etext"]["type"] == {"kind": "base", "name": "char"}
     # ...and stay untyped (the plugin reports it cannot run) when it does not.
     assert "type" not in symbols["module_kset"]
+    # The radix-tree page cache table is RADIX_TREE_MAX_PATH + 1 longs: ceil(32 / 6) + 1 on 32 bits.
+    assert symbols["height_to_maxindex"]["type"] == {"kind": "array", "count": 7, "subtype": {"kind": "base", "name": "long unsigned int"}}
 
 
 @pytest.mark.parametrize("member", ["Ubuntu22.04.6.5.0-41-generic.json", "linux/kernel.json.xz"])
