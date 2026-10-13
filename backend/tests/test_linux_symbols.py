@@ -349,3 +349,18 @@ def test_a_newer_kairon_conversion_replaces_the_cached_one(tmp_path: Path) -> No
     assert "new" in Path(second.path).read_text()
     with pytest.raises(LinuxSymbolError):  # an older conversion never replaces a newer one
         import_linux_isf(converted(tmp_path / "c.json", "1", "older"), original_filename="c.json", settings=settings)
+
+
+def test_a_newer_conversion_removes_an_older_one_cached_under_another_key(tmp_path: Path) -> None:
+    def converted(path: Path, version: str, arch: str | None) -> Path:
+        linux = {"kernel_release": "2.6.26-2-686", "banner": "Linux version 2.6.26-2-686 (Debian) #1 SMP"}
+        if arch:
+            linux["architecture"] = arch
+        path.write_text(json.dumps({"metadata": {"producer": {"name": "kairon-vol2-profile", "version": version}, "linux": linux}, "symbols": {}, "types": {}}))
+        return path
+
+    settings = _settings(tmp_path)
+    old = import_linux_isf(converted(tmp_path / "a.json", "1", None), original_filename="a.json", settings=settings)
+    new = import_linux_isf(converted(tmp_path / "b.json", "2", "x86"), original_filename="b.json", settings=settings)
+    assert new.path != old.path
+    assert not Path(old.path).exists() and Path(new.path).is_file()
