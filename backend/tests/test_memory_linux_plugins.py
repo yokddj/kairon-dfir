@@ -165,8 +165,42 @@ def test_an_elf_in_anonymous_memory_is_high_and_jit_memory_is_low():
     assert [(row["Type"], row.get("Priority")) for row in indicators] == [("ELF_INJECT", None), ("PRIVATE_RWX", "low")]
 
 
+def test_executable_memory_is_one_lead_per_process_and_browser_children_are_jit():
+    outputs = {
+        "linux.psaux": [{"PID": 7, "PPID": 1, "COMM": "Isolated Web Co", "ARGS": "/usr/lib/firefox/firefox -contentproc -childID 3"}, {"PID": 8, "PPID": 1, "COMM": "networkd-dispat", "ARGS": "/usr/bin/python3 /usr/bin/networkd-dispatcher"}],
+        "linux.malware.malfind": [{"PID": 7, "Process": "Isolated Web Co", "Start": 0x1000 * i, "Protection": "rwx", "Hexdump": "00"} for i in range(1, 6)]
+        + [{"PID": 8, "Process": "networkd-dispat", "Start": 0x9000, "Protection": "rwx", "Hexdump": "00"}, {"PID": 9, "Process": "sshd", "Start": 0xA000, "Protection": "r-x", "Hexdump": "00"}],
+    }
+    indicators, _ = linux_findevil_indicators(outputs)
+    by_pid = {row["PID"]: row for row in indicators}
+    assert len(indicators) == 3
+    assert by_pid[7]["Priority"] == "low" and "5 regions" in by_pid[7]["Description"]
+    assert by_pid[8]["Priority"] == "low"  # Python's libffi closures
+    assert by_pid[9]["Priority"] == "medium"
+
+
+def test_a_shell_writing_to_the_journal_is_not_a_reverse_shell():
+    outputs = {
+        "linux.pslist": [_task(1829, "sh", 1), _task(1900, "sh", 1)],
+        "linux.lsof": [{"PID": 1829, "TID": 1829, "FD": fd, "Type": "SOCK"} for fd in (1, 2)]
+        + [{"PID": 1900, "TID": 1900, "FD": fd, "Type": "SOCK"} for fd in (0, 1, 2)],
+        "linux.sockstat": [{"PID": 1829, "FD": fd, "Family": "AF_UNIX"} for fd in (1, 2)] + [{"PID": 1900, "FD": fd, "Family": "AF_UNIX"} for fd in (0, 1, 2)],
+    }
+    indicators, _ = linux_findevil_indicators(outputs)
+    assert indicators == []
+    outputs["linux.sockstat"][-3:] = [{"PID": 1900, "FD": fd, "Family": "AF_INET"} for fd in (0, 1, 2)]
+    assert _types(linux_findevil_indicators(outputs)[0]) == ["SHELL_SOCKET"]
+
+
 def test_linux_indicators_are_normalized_as_linux_findevil():
     indicators, _ = linux_findevil_indicators({"linux.lsof": [{"PID": 9, "Process": "bash", "FD": 0, "Type": "SOCK"}], "linux.pslist": [_task(9, "bash", 1)]})
     result = normalize_memprocfs_findevil(indicators, source_plugin="kairon.linux_findevil", platform="linux", **COMMON)
     doc = result["items"][0]
     assert (doc["platform"], doc["indicator_type"], doc["review_priority"], doc["indicator_category"]) == ("linux", "SHELL_SOCKET", "high", "process")
+
+
+def test_an_unreadable_task_list_does_not_make_every_process_hidden():
+    outputs = {"linux.pslist": [], "linux.psscan": [{"PID": pid, "TID": pid, "PPID": 1, "COMM": "x", "EXIT_STATE": "TASK_RUNNING"} for pid in range(1, 50)]}
+    indicators, notes = linux_findevil_indicators(outputs)
+    assert indicators == []
+    assert "task list returned no processes" in notes[0]

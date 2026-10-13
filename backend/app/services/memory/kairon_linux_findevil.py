@@ -32,6 +32,7 @@ SOURCE_PLUGINS = (
     "linux.psaux",
     "linux.psscan",
     "linux.lsof",
+    "linux.sockstat",
     "linux.lsmod",
     "linux.malware.check_modules",
     "linux.malware.hidden_modules",
@@ -58,6 +59,10 @@ _PRIVILEGE_CHANGERS = frozenset({
     "su", "sudo", "pkexec", "doas", "login", "sshd", "cron", "crond", "atd", "polkitd", "systemd",
     "init", "kthreadd", "newgrp", "sg", "passwd", "chsh", "chfn", "gdm", "lightdm", "sddm", "xdm",
     "runuser", "setpriv", "dbus-daemon", "udevd", "systemd-udevd", "agetty", "getty", "mingetty",
+    # Standard setuid helpers: they run as root by design whoever starts them.
+    "fusermount", "fusermount3", "ping", "mount", "umount", "newuidmap", "newgidmap", "chage", "gpasswd",
+    "unix_chkpwd", "xorg.wrap", "ssh-keysign", "pppd", "ntfs-3g", "snap-confine", "polkit-agent-he",
+    "dbus-daemon-lau", "spice-client-gl", "vmware-user-sui", "traceroute6.iput", "mount.nfs", "at", "crontab",
 })
 
 # Folders anyone can write to. (pattern, priority, label)
@@ -94,8 +99,19 @@ _COMMAND_PATTERNS: tuple[tuple[re.Pattern[str], str, str], ...] = (
     (re.compile(r"(?:^|[\s/])(?:whoami|id|uname\s+-a|cat\s+/etc/(?:passwd|shadow)|sudo\s+-l|ifconfig|ip\s+a(?:ddr)?)(?:\s|$)"), "low", "discovery command"),
 )
 
-# Processes that create writable and executable memory as part of normal work (JIT compilers).
-_JIT_HOSTS = frozenset({"java", "node", "chrome", "chromium", "firefox", "thunderbird", "code", "electron", "dotnet", "mono", "qemu-system-x86_64", "Xorg", "gnome-shell", "plasmashell"})
+# Processes that create executable anonymous memory as part of normal work: JIT compilers
+# (browsers and their child processes, JavaScript, Java, .NET) and interpreters whose foreign
+# function interface writes code at run time (libffi closures in Python, Ruby, Perl).
+_JIT_HOSTS = frozenset({
+    "java", "node", "nodejs", "chrome", "chromium", "chromium-browse", "firefox", "firefox-bin", "thunderbird",
+    "code", "electron", "dotnet", "mono", "qemu-system-x86", "xorg", "gnome-shell", "plasmashell", "gjs",
+    "gjs-console", "cinnamon", "kwin_x11", "kwin_wayland", "evolution", "webkitwebproces", "webkitnetworkpr",
+    "isolated web co", "web content", "webextensions", "privileged cont", "isolated servic", "rdd process",
+    "socket process", "utility process", "gpu process", "forkserver", "file content", "ruby", "perl", "php",
+})
+_JIT_INTERPRETER = re.compile(r"^(?:python[\d.]*|pypy[\d.]*|ruby[\d.]*|perl[\d.]*|php[\d.]*|node|java|dotnet|gjs)$")
+# Child processes of browsers say what they are in their arguments.
+_JIT_ARGUMENTS = re.compile(r"\s(?:-contentproc|--type=(?:renderer|gpu-process|utility|zygote))\b")
 
 
 def _rows(payload: Any) -> list[dict[str, Any]]:
@@ -185,6 +201,11 @@ def linux_findevil_indicators(outputs: dict[str, list[dict[str, Any]] | None]) -
     psaux = outputs.get("linux.psaux")
     psscan = outputs.get("linux.psscan")
     lsof = outputs.get("linux.lsof")
+    families = {
+        (pid, fd): str(_get(row, "Family") or "")
+        for row in outputs.get("linux.sockstat") or []
+        if (pid := _int(_get(row, "PID"))) is not None and (fd := _int(_get(row, "FD"))) is not None
+    }
     modules = _module_ranges(outputs.get("linux.lsmod"))
 
     listed: dict[int, dict[str, Any]] = {}
@@ -204,8 +225,11 @@ def linux_findevil_indicators(outputs: dict[str, list[dict[str, Any]] | None]) -
             return str(_get(row, "COMM") or "")
         return next((str(_get(r, "COMM") or "") for r in psaux or [] if _int(_get(r, "PID")) == pid), "")
 
-    # Processes found by scanning memory but missing from the task list.
-    if pslist is not None:
+    # Processes found by scanning memory but missing from the task list. An empty task list means
+    # it could not be read (every system has init), not that every process is hidden.
+    if pslist is not None and not listed and psscan:
+        notes.append("hidden process check skipped: the kernel's task list returned no processes, so it could not be read")
+    if listed:
         seen: set[int] = set()
         for row in psscan or []:
             pid, tid = _int(_get(row, "PID")), _int(_get(row, "TID"))
@@ -233,6 +257,13 @@ def linux_findevil_indicators(outputs: dict[str, list[dict[str, Any]] | None]) -
                 socket_fds.setdefault(pid, []).append(fd)
         for pid, fds in sorted(socket_fds.items()):
             name = name_of(pid) or next((str(_get(r, "Process") or "") for r in lsof if _int(_get(r, "PID")) == pid), "")
+            # A shell reads its commands from standard input; a service's shell writing its output to
+            # the journal has stdout/stderr on a Unix socket, which is normal.
+            if 0 not in fds:
+                continue
+            known = [families[(pid, fd)] for fd in fds if (pid, fd) in families]
+            if known and not any(family in ("AF_INET", "AF_INET6") for family in known):
+                continue
             if name.lower() in _SHELLS:
                 fds_text = ", ".join(str(fd) for fd in sorted(set(fds)))
                 indicators.append(_indicator(pid, name, "SHELL_SOCKET", f"{name} has its standard input/output (FD {fds_text}) connected to a network socket: a reverse or bind shell."))
@@ -271,8 +302,11 @@ def linux_findevil_indicators(outputs: dict[str, list[dict[str, Any]] | None]) -
         for row in outputs.get(plugin) or []:
             name = str(_get(row, "Module Name", "Name") or "")
             address = _hex(_get(row, "Address", "Module Address", "Offset"))
-            where = "found by scanning memory but missing from the kernel's module list" if plugin.endswith("hidden_modules") else "registered in sysfs but missing from the kernel's module list"
-            indicators.append(_indicator(None, None, "MODULE_HIDDEN", f"Kernel module {name or '(no name)'} {where}: typical of a rootkit hiding itself.", address=address))
+            if plugin.endswith("hidden_modules"):
+                indicators.append(_indicator(None, None, "MODULE_HIDDEN", f"Kernel module {name or '(no name)'} found by scanning memory but missing from the kernel's module list: typical of a rootkit hiding itself.", address=address))
+            else:
+                # Also seen briefly while a module loads or unloads.
+                indicators.append(_indicator(None, None, "MODULE_HIDDEN", f"Kernel module {name or '(no name)'} registered in sysfs but missing from the kernel's module list: a rootkit hiding itself, or a module caught loading or unloading.", address=address, priority="medium"))
 
     check_syscall = outputs.get("linux.malware.check_syscall")
     matches_build = _symbols_match_build(check_syscall)
@@ -300,6 +334,16 @@ def linux_findevil_indicators(outputs: dict[str, list[dict[str, Any]] | None]) -
             address = _hex(_get(row, "Handler Address"))
             indicators.append(_indicator(None, None, "AFINFO_HOOK", f"{_get(row, 'Symbol Name')}.{_get(row, 'Member')} points outside the kernel and its modules ({address}): hides network connections from /proc/net.", address=address))
 
+    def jit_host(pid: int | None, name: str) -> bool:
+        if name.lower() in _JIT_HOSTS:
+            return True
+        command = args.get(pid, "") if pid is not None else ""
+        executable = command.strip().split(" ", 1)[0].rsplit("/", 1)[-1].lower() if command.strip() else ""
+        return executable in _JIT_HOSTS or bool(_JIT_INTERPRETER.match(executable)) or bool(_JIT_ARGUMENTS.search(command))
+
+    # Executable anonymous memory: an embedded program is reported region by region, the rest once
+    # per process with how many regions it has.
+    anonymous: dict[int | None, list[dict[str, Any]]] = {}
     for row in outputs.get("linux.malware.malfind") or []:
         pid = _int(_get(row, "PID"))
         name = str(_get(row, "Process") or name_of(pid))
@@ -309,8 +353,14 @@ def linux_findevil_indicators(outputs: dict[str, list[dict[str, Any]] | None]) -
         if hexdump.startswith("7f 45 4c 46"):
             indicators.append(_indicator(pid, name, "ELF_INJECT", f"ELF header in {protection or 'executable'} anonymous memory at {start}: a program loaded without a file.", address=start))
         else:
-            jit = name in _JIT_HOSTS
-            indicators.append(_indicator(pid, name, "PRIVATE_RWX", f"{protection or 'Executable'} anonymous memory at {start}{' (expected in this process: JIT)' if jit else ''}.", address=start, priority="low" if jit else "medium"))
+            anonymous.setdefault(pid, []).append(row)
+    for pid, rows in anonymous.items():
+        name = str(_get(rows[0], "Process") or name_of(pid))
+        jit = jit_host(pid, name)
+        writable = sum(1 for row in rows if "w" in str(_get(row, "Protection") or ""))
+        first = _hex(_get(rows[0], "Start"))
+        what = f"{len(rows)} region{'s' if len(rows) != 1 else ''} of executable anonymous memory ({writable} also writable), the first at {first}"
+        indicators.append(_indicator(pid, name, "PRIVATE_RWX", f"{what}{': expected in this process (JIT compiler or interpreter)' if jit else '.'}", address=first, priority="low" if jit else "medium"))
     return indicators, notes
 
 
