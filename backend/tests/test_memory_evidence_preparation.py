@@ -547,6 +547,21 @@ class TestPreparationEndpoint:
         assert "memprocfs" in result_views["frameworks"]
         assert upload_enabled is False
 
+    def test_response_schema_keeps_every_field_the_route_returns(self, tmp_path: Path):
+        # FastAPI filters the response through response_model: a field the
+        # schema does not declare never reaches the browser.
+        from app.api.routes_memory import get_memory_evidence_preparation
+        from app.schemas.memory import MemoryEvidencePreparationRead
+
+        db = _db()
+        _case(db)
+        path = _write(tmp_path, "windows.dmp", b"PAGEDU64" + b"\x00" * 4088)
+        _evidence(db, stored_path=str(path))
+
+        response = get_memory_evidence_preparation(CASE_ID, EVIDENCE_ID, db=db)
+        served = MemoryEvidencePreparationRead.model_validate(response).model_dump()
+        assert served == response
+
     def test_result_views_follow_the_platform(self):
         from app.services.memory.capability_registry import platform_result_views
         from app.services.memory.platform import PlatformFamily

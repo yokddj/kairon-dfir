@@ -100,6 +100,11 @@ class MemorySymbolAcquireResponse(BaseModel):
     message: str
 
 
+class MemoryPlatformResultViewsRead(BaseModel):
+    presentation_families: list[str]
+    frameworks: list[str]
+
+
 class MemoryEvidencePreparationRead(BaseModel):
     """Mirrors app.services.memory.preparation.MemoryEvidencePreparation
     .to_dict() field-for-field. This schema adds no fields, computes
@@ -129,6 +134,11 @@ class MemoryEvidencePreparationRead(BaseModel):
     zero_result_warning_code: str | None = None
     zero_result_warning_message: str | None = None
     zero_result_warning_plugin: str | None = None
+    # Added by the route, not the dataclass: what analysis can produce on
+    # the detected platform (capability_registry.platform_result_views) and
+    # whether this deployment accepts Linux symbol uploads.
+    result_views: MemoryPlatformResultViewsRead | None = None
+    linux_symbol_upload_enabled: bool = False
 
 
 class LinuxSymbolIdentityRead(BaseModel):
