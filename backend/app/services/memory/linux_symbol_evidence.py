@@ -455,13 +455,26 @@ def _promote_and_link(
     job.identity_json = asdict(identity)
     job.cached = bool(promoted.duplicate)
     job.status = STATUS_VALID
-    job.reason = None
+    job.reason = _isf_limitations(Path(promoted.path)) if promoted.path else None
     job.completed_at = utc_now_naive()
     metadata = dict(evidence.metadata_json or {})
     metadata["linux_symbol_identity"] = _identity_fields(identity)
     evidence.metadata_json = metadata
     _cleanup_staging(job)
     db.commit()
+
+
+def _isf_limitations(isf_path: Path) -> str | None:
+    """What a valid ISF cannot do, said when it is accepted rather than when a plugin fails."""
+    from app.services.memory.linux_symbols import isf_producer, predates_anonymous_member_names
+
+    producer = isf_producer(isf_path)
+    if producer and predates_anonymous_member_names(producer):
+        return (
+            f"Usable, but made by {producer[0]} {producer[1]}: it drops fields of nested anonymous structures, so retrieving"
+            " file contents and the hidden-module check will not work. An ISF from dwarf2json 0.8 or later fixes that."
+        )
+    return None
 
 
 def _fail_job(db: Session, job: MemoryEvidenceLinuxSymbolLink, status: str, reason: str) -> None:

@@ -172,6 +172,11 @@ export function LinuxSymbolUploadPanel({ caseId, evidenceId, architecture, uploa
               Status: <span className="text-mint">Ready</span>
             </p>
           </div>
+          {result.reason ? (
+            <p className="mt-2 text-xs text-amber" data-testid="linux-symbol-result-valid-note">
+              {result.reason}
+            </p>
+          ) : null}
         </div>
       ) : result?.status === "invalid" ? (
         <div className="mt-4 rounded-xl border border-danger/30 bg-danger/10 p-3 text-sm" data-testid="linux-symbol-result-invalid">

@@ -259,12 +259,12 @@ def test_linux_catalogue_marks_profiles_without_a_linux_plugin_as_not_applying(d
     applying = {profile for profile, item in items.items() if item["applies_to_platform"]}
     assert applying == {
         "processes_basic", "processes_extended", "network_basic", "handles_basic", "kernel_basic",
-        "suspicious_memory", "shell_history_basic", "find_evil",
+        "suspicious_memory", "shell_history_basic", "find_evil", "files_basic",
     }
     assert items["processes_basic"]["plugins"] == ["linux.pslist", "linux.pstree", "linux.psaux"]
     assert items["processes_basic"]["available"] is True
     assert items["handles_basic"]["title"] == "Open files"
-    for profile in ("modules_basic", "files_basic", "metadata_only"):
+    for profile in ("modules_basic", "metadata_only"):
         assert items[profile]["available"] is False
         assert items[profile]["gate_type"] == "unavailable"
         assert items[profile]["detected_platform"] == "linux"

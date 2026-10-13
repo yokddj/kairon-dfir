@@ -12,9 +12,52 @@ type FileObjectRow = {
   document_id?: string;
   name?: string | null;
   offset?: string | null;
+  // Linux (linux.pagecache.Files)
+  file_type?: string | null;
+  file_size?: number | null;
+  cached_pages?: number | null;
+  modified_at?: string | null;
 };
 
-function FileBrowser({ caseId, evidenceId, onPickPath }: { caseId: string; evidenceId: string; onPickPath: (path: string) => void }) {
+type Platform = "windows" | "linux";
+
+// What the tab says depends on the plugins behind it: windows.filescan + windows.dumpfiles, or
+// the Linux kernel's page cache (linux.pagecache.Files + linux.pagecache.InodePages).
+const COPY: Record<Platform, { browse: string; notAnalyzed: string; searchPlaceholder: string; running: string; recover: string; pathPlaceholder: string }> = {
+  windows: {
+    browse:
+      "Every file object Windows currently references (open handle, cached section, mapped image) -- windows.filescan, image-wide. Being listed here means Windows still has a reference to the path, not that its bytes are recoverable; pick a path below to attempt recovery.",
+    notAnalyzed: 'Files has not been analyzed yet. Run the "Files" profile from Run analysis to browse what Windows currently references in this image.',
+    searchPlaceholder: "schtask\\check-updates.ps1",
+    running: "Running windows.filescan, then windows.dumpfiles for any match. This can take a few minutes on a large image.",
+    recover:
+      "Enter a Windows path seen elsewhere in the case (an event log, a JumpList, a persistence hit) that has no hash yet. This runs windows.filescan to locate it in memory, then windows.dumpfiles to recover whatever cached pages Windows still had for it. Recovery is best effort -- the file may no longer be cached.",
+    pathPlaceholder: "C:\\Schtask\\check-updates.ps1",
+  },
+  linux: {
+    browse:
+      "Every file the Linux kernel has in its page cache, on every mounted filesystem including tmpfs (/tmp, /dev/shm, /run) -- linux.pagecache.Files. Files with cached pages may be recoverable, including ones that only ever existed in memory; pick a path below to attempt recovery.",
+    notAnalyzed: 'Files has not been analyzed yet. Run the "Files" profile from Run analysis to browse the files the kernel has cached in this image.',
+    searchPlaceholder: "/tmp/",
+    running: "Running linux.pagecache.Files to find the file, then linux.pagecache.InodePages to write its cached pages. This can take a few minutes on a large image.",
+    recover:
+      "Enter a Linux path (or just a file name) seen elsewhere in the case. Kairon finds it in the kernel's page cache and writes the pages the kernel still held; pages that were not cached come out as zeros. Recovery is best effort -- the file may no longer be cached.",
+    pathPlaceholder: "/tmp/.x/payload",
+  },
+};
+
+function usePlatform(caseId: string, evidenceId?: string): Platform {
+  const query = useQuery({
+    queryKey: ["memory-evidence-preparation", caseId, evidenceId],
+    queryFn: () => api.getMemoryEvidencePreparation(caseId, evidenceId as string),
+    enabled: Boolean(caseId && evidenceId),
+    refetchOnWindowFocus: false,
+  });
+  return query.data?.platform === "linux" ? "linux" : "windows";
+}
+
+function FileBrowser({ caseId, evidenceId, platform, onPickPath }: { caseId: string; evidenceId: string; platform: Platform; onPickPath: (path: string) => void }) {
+  const copy = COPY[platform];
   const [page, setPage] = useState(1);
   const [nameFilter, setNameFilter] = useState("");
   const pageSize = 50;
@@ -42,11 +85,7 @@ function FileBrowser({ caseId, evidenceId, onPickPath }: { caseId: string; evide
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Browse files seen in memory</h3>
-          <p className="mt-1 max-w-2xl text-xs text-muted">
-            Every file object Windows currently references (open handle, cached section, mapped image) --
-            windows.filescan, image-wide. Being listed here means Windows still has a reference to the path,
-            not that its bytes are recoverable; pick a path below to attempt recovery.
-          </p>
+          <p className="mt-1 max-w-2xl text-xs text-muted">{copy.browse}</p>
         </div>
       </header>
 
@@ -56,7 +95,7 @@ function FileBrowser({ caseId, evidenceId, onPickPath }: { caseId: string; evide
           id="memory-file-browser-search"
           value={nameFilter}
           onChange={(event) => { setNameFilter(event.target.value); setPage(1); }}
-          placeholder="schtask\\check-updates.ps1"
+          placeholder={copy.searchPlaceholder}
           className="min-w-[16rem] flex-1 rounded-xl border border-line bg-abyss/70 px-3 py-1.5 font-mono text-sm text-ink outline-none focus:border-accent/50"
           data-testid="memory-file-browser-search-input"
         />
@@ -71,7 +110,7 @@ function FileBrowser({ caseId, evidenceId, onPickPath }: { caseId: string; evide
 
       {!activeResultQuery.isLoading && !activeResultQuery.error && state === "not_analyzed" ? (
         <p className="mt-3 rounded-2xl border border-line bg-abyss/40 p-3 text-xs text-muted" data-testid="memory-file-browser-empty-not-analyzed">
-          Files has not been analyzed yet. Run the "Files" profile from Run analysis to browse what Windows currently references in this image.
+          {copy.notAnalyzed}
         </p>
       ) : null}
 
@@ -98,7 +137,15 @@ function FileBrowser({ caseId, evidenceId, onPickPath }: { caseId: string; evide
               <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted">
                 <tr>
                   <th className="px-2 py-1">Path</th>
-                  <th className="px-2 py-1">Offset</th>
+                  {platform === "linux" ? (
+                    <>
+                      <th className="px-2 py-1">Type</th>
+                      <th className="px-2 py-1">Size</th>
+                      <th className="px-2 py-1">Cached pages</th>
+                      <th className="px-2 py-1">Modified</th>
+                    </>
+                  ) : null}
+                  <th className="px-2 py-1">{platform === "linux" ? "Inode" : "Offset"}</th>
                   <th className="px-2 py-1">Action</th>
                 </tr>
               </thead>
@@ -106,6 +153,14 @@ function FileBrowser({ caseId, evidenceId, onPickPath }: { caseId: string; evide
                 {items.map((row, idx) => (
                   <tr key={row.document_id || `${row.offset}-${idx}`} data-testid="memory-file-browser-row">
                     <td className="break-all px-2 py-1 font-mono text-ink">{row.name || "—"}</td>
+                    {platform === "linux" ? (
+                      <>
+                        <td className="px-2 py-1 text-muted">{row.file_type || "—"}</td>
+                        <td className="px-2 py-1 text-muted">{typeof row.file_size === "number" ? formatBytes(row.file_size) : "—"}</td>
+                        <td className="px-2 py-1 text-muted">{row.cached_pages ?? "—"}</td>
+                        <td className="px-2 py-1 font-mono text-muted">{row.modified_at ? row.modified_at.slice(0, 19).replace("T", " ") : "—"}</td>
+                      </>
+                    ) : null}
                     <td className="px-2 py-1 font-mono text-muted">{row.offset || "—"}</td>
                     <td className="px-2 py-1">
                       <button
@@ -157,7 +212,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function ExtractionCard({ caseId, evidenceId, extraction }: { caseId: string; evidenceId: string; extraction: MemoryFileExtraction }) {
+function ExtractionCard({ caseId, evidenceId, platform, extraction }: { caseId: string; evidenceId: string; platform: Platform; extraction: MemoryFileExtraction }) {
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
   async function handleDownload(resultIndex: number, filename: string) {
@@ -187,7 +242,7 @@ function ExtractionCard({ caseId, evidenceId, extraction }: { caseId: string; ev
       </div>
 
       {ACTIVE_STATUSES.has(extraction.status) ? (
-        <p className="mt-2 text-xs text-muted">Running windows.filescan, then windows.dumpfiles for any match. This can take a few minutes on a large image.</p>
+        <p className="mt-2 text-xs text-muted">{COPY[platform].running}</p>
       ) : null}
 
       {extraction.status === "not_found" ? (
@@ -243,6 +298,7 @@ function ExtractionCard({ caseId, evidenceId, extraction }: { caseId: string; ev
 
 export function MemoryFilesTab({ caseId, evidenceId }: Props) {
   const queryClient = useQueryClient();
+  const platform = usePlatform(caseId, evidenceId);
   const [path, setPath] = useState("");
 
   const extractionsQuery = useQuery({
@@ -282,15 +338,11 @@ export function MemoryFilesTab({ caseId, evidenceId }: Props) {
 
   return (
     <div className="space-y-4">
-      <FileBrowser caseId={caseId} evidenceId={evidenceId} onPickPath={setPath} />
+      <FileBrowser caseId={caseId} evidenceId={evidenceId} platform={platform} onPickPath={setPath} />
 
       <section className="rounded-[28px] border border-line bg-panel/70 p-5 shadow-panel">
         <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Recover a file from memory</h3>
-        <p className="mt-1 max-w-2xl text-xs text-muted">
-          Enter a Windows path seen elsewhere in the case (an event log, a JumpList, a persistence hit) that has no hash yet. This runs windows.filescan
-          to locate it in memory, then windows.dumpfiles to recover whatever cached pages Windows still had for it. Recovery is best effort -- the file may
-          no longer be cached.
-        </p>
+        <p className="mt-1 max-w-2xl text-xs text-muted">{COPY[platform].recover}</p>
         <form onSubmit={handleSubmit} className="mt-3 flex flex-wrap items-end gap-2">
           <label className="min-w-[20rem] flex-1 text-xs text-muted" htmlFor="memory-file-path">
             File path
@@ -299,7 +351,7 @@ export function MemoryFilesTab({ caseId, evidenceId }: Props) {
               type="text"
               value={path}
               onChange={(event) => setPath(event.target.value)}
-              placeholder="C:\Schtask\check-updates.ps1"
+              placeholder={COPY[platform].pathPlaceholder}
               className="mt-1 w-full rounded-xl border border-line bg-abyss/70 px-3 py-2 font-mono text-sm text-ink outline-none focus:border-accent/50"
               data-testid="memory-file-path-input"
             />
@@ -324,7 +376,7 @@ export function MemoryFilesTab({ caseId, evidenceId }: Props) {
       ) : (
         <div className="space-y-3">
           {extractions.map((extraction) => (
-            <ExtractionCard key={extraction.id} caseId={caseId} evidenceId={evidenceId} extraction={extraction} />
+            <ExtractionCard key={extraction.id} caseId={caseId} evidenceId={evidenceId} platform={platform} extraction={extraction} />
           ))}
         </div>
       )}

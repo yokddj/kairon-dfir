@@ -4,7 +4,7 @@ import { MEMORY_TABS } from "./memoryWorkspaceState";
 
 const LINUX = {
   presentation_families: [
-    "memory_findevil", "memory_handle", "memory_kernel_module", "memory_network_connection", "memory_process",
+    "memory_file_object", "memory_findevil", "memory_handle", "memory_kernel_module", "memory_network_connection", "memory_process",
     "memory_shell_history", "memory_suspicious_region",
   ],
   frameworks: ["volatility3"],
@@ -23,7 +23,7 @@ describe("memoryPlatformViews", () => {
     const tabs = MEMORY_TABS.filter((t) => memoryTabApplies(t.key, LINUX)).map((t) => t.key);
     expect(tabs).toEqual([
       "overview", "processes", "graph", "find_evil", "shell_history", "timeline", "network", "handles", "kernel",
-      "suspicious", "runs", "raw",
+      "suspicious", "files", "runs", "raw",
     ]);
   });
 

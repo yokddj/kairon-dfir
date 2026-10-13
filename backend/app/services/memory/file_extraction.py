@@ -4,12 +4,14 @@ Some artifacts in a case (a Sysmon FileCreate event, a JumpList entry, a
 persistence hit) name a file that was never hashed at ingest time -- the
 source log simply never captured file bytes. If the case also has a memory
 image for the same host, taken close enough in time, Windows may still hold
-that file's pages cached in memory. This module runs Volatility 3's
+that file's pages cached in memory. On Windows this module runs Volatility 3's
 ``windows.filescan`` (locate matching ``_FILE_OBJECT``s by path) followed by
 ``windows.dumpfiles --virtaddr <offsets>`` (recover whatever cached pages
 Volatility can reconstruct for them) to try to pull the actual bytes back
 out, so an analyst can hash/inspect a file the original evidence never
-captured.
+captured. On Linux the same is done from the kernel's page cache:
+``linux.pagecache.Files`` finds the inode by path (or name), and
+``linux.pagecache.InodePages --dump`` writes its cached pages.
 
 Deliberately isolated from the bulk "run a profile" scan machinery in
 execution.py: this is a single, on-demand, evidence-scoped action (one
@@ -53,6 +55,10 @@ DUMPFILES_TIMEOUT_SECONDS = 120
 # invocation -- every match still shows up in filescan_matches even if it
 # was not attempted.
 MAX_DUMP_CANDIDATES = 10
+# Linux: linux.pagecache.Files walks every mounted filesystem's cached inodes (about a minute on a
+# 4 GB desktop image); InodePages then reads one inode's cached pages.
+LINUX_FILES_TIMEOUT_SECONDS = 1200
+LINUX_DUMP_TIMEOUT_SECONDS = 300
 
 
 def _normalize_windows_path(path: str) -> str:
@@ -77,6 +83,82 @@ def _match_filescan_rows(rows: list[dict[str, Any]], requested_path: str) -> lis
     if not requested_basename:
         return []
     return [row for row in candidates if _basename(row["Name"]) == requested_basename]
+
+
+def _match_linux_rows(rows: list[dict[str, Any]], requested_path: str) -> list[dict[str, Any]]:
+    """Regular files whose path is the requested one, else whose name is (Linux paths are
+    case-sensitive)."""
+    requested = str(requested_path or "").strip()
+    regular = [row for row in rows if isinstance(row.get("FilePath"), str) and str(row.get("FileType") or "REG") == "REG"]
+    exact = [row for row in regular if row["FilePath"] == requested]
+    if exact:
+        return exact
+    name = requested.rstrip("/").rsplit("/", 1)[-1]
+    if not name:
+        return []
+    return [row for row in regular if row["FilePath"].rsplit("/", 1)[-1] == name]
+
+
+def _isf_hint(db, evidence_id: str) -> str:
+    """Why Volatility cannot read cached pages with this evidence's ISF, when that is known."""
+    from app.services.memory.linux_symbol_evidence import get_linux_symbol_link
+    from app.services.memory.linux_symbols import isf_producer, predates_anonymous_member_names
+
+    link = get_linux_symbol_link(db, evidence_id)
+    producer = isf_producer(Path(link.isf_path)) if link and link.isf_path else None
+    if producer and predates_anonymous_member_names(producer):
+        return (
+            f" This image's symbols (ISF) were made by {producer[0]} {producer[1]}, which drops fields of nested anonymous"
+            " structures (such as struct page's mapping) that reading the page cache needs; regenerate the ISF with"
+            " dwarf2json 0.8 or later and upload it again."
+        )
+    return ""
+
+
+def _extract_linux(db, extraction: MemoryFileExtraction, image_path: Path, work_dir: Path) -> list[dict[str, Any]]:
+    requested = extraction.requested_path.strip()
+    rows: list[dict[str, Any]] = []
+    if requested.startswith("/"):
+        found = run_plugin("linux.pagecache.Files", image_path, work_dir, timeout_seconds=LINUX_FILES_TIMEOUT_SECONDS, extra_args=["--find", requested])
+        rows = _rows(json.loads(found.stdout.decode("utf-8") or "[]"))
+    matches = _match_linux_rows(rows, requested)
+    if not matches:
+        listed = run_plugin("linux.pagecache.Files", image_path, work_dir, timeout_seconds=LINUX_FILES_TIMEOUT_SECONDS)
+        matches = _match_linux_rows(_rows(json.loads(listed.stdout.decode("utf-8") or "[]")), requested)
+    extraction.filescan_matches = [
+        {"offset": f"0x{row['InodeAddr']:x}" if isinstance(row.get("InodeAddr"), int) else None, "name": row.get("FilePath")}
+        for row in matches
+    ]
+    db.commit()
+    results: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for row in matches[:MAX_DUMP_CANDIDATES]:
+        address = row.get("InodeAddr")
+        if not isinstance(address, int):
+            continue
+        try:
+            run_plugin("linux.pagecache.InodePages", image_path, work_dir, timeout_seconds=LINUX_DUMP_TIMEOUT_SECONDS, extra_args=["--inode", str(address), "--dump"])
+        except VolatilityRunnerError as exc:
+            errors.append(exc.message)
+        output_path = work_dir / f"inode_0x{address:x}.dmp"
+        if not output_path.is_file() or output_path.stat().st_size <= 0:
+            output_path.unlink(missing_ok=True)
+            continue
+        cached, size = row.get("CachedPages"), row.get("InodeSize")
+        results.append(
+            {
+                "offset": f"0x{address:x}",
+                "cache_type": f"page cache: {cached} page(s) cached, file size {size} bytes" if cached is not None else "page cache",
+                "original_filename": row.get("FilePath"),
+                "output_filename": output_path.name,
+                "output_relative_path": relative_to_data_dir(output_path),
+                "sha256": sha256_file(output_path),
+                "size_bytes": output_path.stat().st_size,
+            }
+        )
+    if not results and errors:
+        raise VolatilityRunnerError("PLUGIN_FAILED", "Volatility could not read the cached pages of the matching file." + _isf_hint(db, extraction.evidence_id))
+    return results
 
 
 def create_memory_file_extraction(db, evidence_id: str, path: str) -> MemoryFileExtraction:
@@ -133,6 +215,19 @@ def execute_memory_file_extraction(extraction_id: str) -> None:
                 raise MemoryExecutionValidationError(exc.code, exc.message) from None
 
             work_dir = memory_extraction_dir(extraction.case_id, extraction.evidence_id, extraction.id)
+
+            from app.services.memory.analysis_plan import build_memory_analysis_plan
+            from app.services.memory.platform import PlatformFamily
+
+            if build_memory_analysis_plan(validated.evidence).detected_platform == PlatformFamily.LINUX:
+                results = _extract_linux(db, extraction, validated.path, work_dir)
+                extraction.results_json = results
+                extraction.status = "completed" if results else "not_found"
+                extraction.completed_at = utc_now_naive()
+                extraction.duration_ms = int((extraction.completed_at - extraction.started_at).total_seconds() * 1000)
+                db.commit()
+                logger.info("memory file extraction finished", extra={"extraction_id": extraction.id, "status": extraction.status, "recovered_count": len(results)})
+                return
 
             filescan_result = run_plugin(
                 "windows.filescan",

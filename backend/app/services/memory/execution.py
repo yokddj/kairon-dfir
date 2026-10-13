@@ -31,6 +31,7 @@ from app.services.memory.artifact_normalizers import (
     normalize_linux_bash,
     normalize_linux_lsmod,
     normalize_linux_lsof,
+    normalize_linux_pagecache_files,
     normalize_linux_sockstat,
     normalize_windows_dlllist,
     normalize_windows_driverscan,
@@ -116,6 +117,7 @@ ARTIFACT_PLUGIN_NORMALIZER = {
     "linux.lsmod": "memory_kernel_module",
     "linux.malware.malfind": "memory_suspicious_region",
     "kairon.linux_findevil": "memory_findevil",
+    "linux.pagecache.Files": "memory_file_object",
 }
 ARTIFACT_PLUGIN_LIMITS = {
     # Per-plugin guard-rails to keep offline execution bounded.
@@ -182,6 +184,9 @@ ARTIFACT_PLUGIN_LIMITS = {
     "linux.malware.check_idt": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "linux.malware.tty_check": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "linux.malware.check_afinfo": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    # Walks every mounted filesystem's cached inodes: about a minute on a 4 GB desktop image
+    # (39,582 files).
+    "linux.pagecache.Files": {"timeout_seconds": 1200, "max_output_bytes": 64 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     # Kairon's Linux checks run the twelve plugins above; each keeps its own bound inside this one.
     "kairon.linux_findevil": {"timeout_seconds": 3600, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
 }
@@ -963,6 +968,8 @@ def _normalize_artifact_payload(
         return normalize_memprocfs_findevil(payload, source_plugin=plugin, platform="linux", **common)
     if plugin == "linux.lsof":
         return normalize_linux_lsof(payload, source_plugin=plugin, **common)
+    if plugin == "linux.pagecache.Files":
+        return normalize_linux_pagecache_files(payload, source_plugin=plugin, **common)
     if plugin == "linux.lsmod":
         return normalize_linux_lsmod(payload, source_plugin=plugin, **common)
     if plugin == "linux.malware.malfind":

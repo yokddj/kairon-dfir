@@ -36,15 +36,23 @@ The analyses, tabs and Overview families offered for a memory image follow its d
 | Kernel modules | `linux.lsmod` | Kernel Modules |
 | Suspicious memory | `linux.malware.malfind` | Suspicious Memory |
 | Shell history | `linux.bash` | Shell History |
+| Files | `linux.pagecache.Files` (the kernel's page cache, every mounted filesystem including tmpfs) | Files |
 | Find Evil | `kairon.linux_findevil` | Find Evil |
 
-Windows-only views (Modules & DLLs, Drivers, VADs, Files, System, MemProcFS) are not listed. An image whose platform is not identified yet keeps every view.
+Windows-only views (Modules & DLLs, Drivers, VADs, System, MemProcFS) are not listed.
+
+**Retrieve file** works on Linux too: `linux.pagecache.Files --find <path>` (or the whole list, matched by file name) locates the inode, and `linux.pagecache.InodePages --inode <address> --dump` writes the pages the kernel still held; pages that were not cached come out as zeros. Files that only ever lived in memory (tmpfs: `/tmp`, `/dev/shm`, `/run`) and deleted files a process still had open are typical finds. An image whose platform is not identified yet keeps every view.
 
 ### Linux Find Evil
 
 `app.services.memory.kairon_linux_findevil` runs the plugins above plus Volatility's rootkit checks (`check_modules`, `hidden_modules`, `check_syscall`, `check_idt`, `tty_check`, `check_afinfo`) and reports leads to review: hidden processes and kernel modules, shells whose standard input/output is a socket (reverse or bind shells), shells started by network services, user processes posing as kernel threads, root processes started by unprivileged ones that are not meant to change user, programs run from `/tmp`, `/dev/shm` or hidden folders, suspicious command lines (reverse shells, download cradles, history wiping, miners), hooked system calls, interrupts, terminal and `/proc/net` handlers, and ELF programs or executable code in anonymous memory. A plugin that fails on an image only removes its own checks.
 
 Kernel hook checks compare handler addresses with the kernel's symbols. When most system call handlers have no symbol, the symbols' addresses are not those of this exact kernel build (a Volatility 2 profile made from a near build, for example): the hook checks are skipped and the run says why, instead of reporting every handler as hooked.
+
+## ISF limitations
+
+- An ISF made by **dwarf2json before 0.8.0** names every anonymous member of a structure `unnamed_field_0`, so all but one of a union's anonymous structs are lost (`struct page`'s `mapping` and `index` among them). Processes, network, files lists and most checks work, but retrieving file contents and the hidden-module check cannot. Kairon says so when the ISF is accepted and when a retrieval fails; regenerate the ISF with dwarf2json 0.8 or later to fix it.
+- A **Volatility 2 profile** describes only the structures its `module.dwarf` defines. If it only declares `struct mnt_namespace` (as old profiles do), the mounted filesystems cannot be walked and the Files list and Retrieve file are unavailable on that image.
 
 ## Kernels before 2.6.29
 

@@ -159,6 +159,9 @@ ALLOWED_VOLATILITY_PLUGINS = {
     "linux.malware.check_idt",
     "linux.malware.tty_check",
     "linux.malware.check_afinfo",
+    "linux.pagecache.Files",
+    # Run on demand by file_extraction ("Retrieve file") only.
+    "linux.pagecache.InodePages",
 }
 
 
@@ -500,6 +503,8 @@ VOLATILITY_PLUGIN_CLASSES = {
     "linux.malware.check_idt": ("volatility3.plugins.linux.malware.check_idt", "Check_idt"),
     "linux.malware.tty_check": ("volatility3.plugins.linux.malware.tty_check", "Tty_Check"),
     "linux.malware.check_afinfo": ("volatility3.plugins.linux.malware.check_afinfo", "Check_afinfo"),
+    "linux.pagecache.Files": ("volatility3.plugins.linux.pagecache", "Files"),
+    "linux.pagecache.InodePages": ("volatility3.plugins.linux.pagecache", "InodePages"),
 }
 
 
