@@ -201,6 +201,11 @@ def plan_run_all(
                 )
                 skipped.append({"profile": profile, "reason": reason})
                 continue
+            if analysis_plan.detected_platform != PlatformFamily.WINDOWS and analysis_plan.readiness == ReadinessState.BLOCKED_SYMBOLS:
+                # Every plugin on these platforms needs the kernel's symbols;
+                # queued without them, each profile would only fail.
+                skipped.append({"profile": profile, "reason": SkipReason.SYMBOLS_UNAVAILABLE.value})
+                continue
         ok, reason = _profile_available(profile)
         if not ok:
             skipped.append({"profile": profile, "reason": reason or "unavailable"})
