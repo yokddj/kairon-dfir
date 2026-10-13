@@ -411,7 +411,7 @@ def _bounded_volatility_fallback(canonical_path: Path) -> MemoryProbeResult | No
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-_LINUX_BANNER_PATTERN = re.compile(rb"Linux version (\S+)[^\x00-\x08\x0e-\x1f\x7f]{0,220}")
+_LINUX_BANNER_PATTERN = re.compile(rb"Linux version (\S+)[^\x00-\x08\x0e-\x1f\x7f]{0,480}")
 _LINUX_BANNER_SCAN_CHUNK_BYTES = 64 * 1024 * 1024
 _LINUX_BANNER_SCAN_OVERLAP_BYTES = 256
 _LINUX_BANNER_SCAN_MAX_SECONDS = 20.0

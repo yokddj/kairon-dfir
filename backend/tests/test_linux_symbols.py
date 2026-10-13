@@ -297,3 +297,55 @@ def test_linux_import_endpoint_returns_typed_error_for_invalid_upload(tmp_path: 
 
     assert response.status_code == 400
     assert response.json()["detail"]["error_code"] == "SYMBOL_PARSE_FAILED"
+
+
+# --- ISFs made by dwarf2json, banners cut short by the memory scan, newer conversions ---
+
+FULL_BANNER = (
+    "Linux version 6.5.0-41-generic (buildd@lcy02-amd64-120) (x86_64-linux-gnu-gcc-12 (Ubuntu 12.3.0-1ubuntu1~22.04) 12.3.0, "
+    "GNU ld (GNU Binutils for Ubuntu) 2.38) #41~22.04.2-Ubuntu SMP PREEMPT_DYNAMIC Mon Jun  3 11:32:55 UTC 2 (Ubuntu 6.5.0-41.41~22.04.2-generic 6.5.13)"
+)
+
+
+def _dwarf2json_isf(path: Path) -> Path:
+    import base64
+
+    # What dwarf2json writes: no banner or architecture in metadata, only in the symbols.
+    path.write_text(json.dumps({
+        "metadata": {"format": "6.2.0", "producer": {"name": "dwarf2json", "version": "0.7.0"}, "linux": {"symbols": [{"kind": "system-map", "name": "System.map-6.5.0-41-generic"}]}},
+        "base_types": {"pointer": {"size": 8, "signed": False, "kind": "int", "endian": "little"}},
+        "symbols": {"linux_banner": {"address": 1, "constant_data": base64.b64encode(FULL_BANNER.encode() + b"\n\0").decode()}},
+        "user_types": {},
+        "enums": {},
+    }))
+    return path
+
+
+def test_a_dwarf2json_isf_matches_an_image_whose_banner_the_scan_cut_short(tmp_path: Path) -> None:
+    from app.services.memory.linux_symbols import inspect_linux_isf
+
+    identity = inspect_linux_isf(_dwarf2json_isf(tmp_path / "ubuntu.json"), settings=_settings(tmp_path))
+    assert (identity.kernel_release, identity.architecture, identity.banner) == ("6.5.0-41-generic", "x64", FULL_BANNER)
+    required = LinuxSymbolIdentity(architecture="x86_64", kernel_release="6.5.0-41-generic", banner=FULL_BANNER[:250])
+    assert identity.compatible_with(required)
+    other_build = LinuxSymbolIdentity(architecture="x64", kernel_release="6.5.0-41-generic", banner=FULL_BANNER.replace("#41~22.04.2", "#41~22.04.1"))
+    assert not identity.compatible_with(other_build)
+    assert not identity.compatible_with(LinuxSymbolIdentity(architecture="x86", kernel_release="6.5.0-41-generic"))
+
+
+def test_a_newer_kairon_conversion_replaces_the_cached_one(tmp_path: Path) -> None:
+    def converted(path: Path, version: str, marker: str) -> Path:
+        path.write_text(json.dumps({
+            "metadata": {"producer": {"name": "kairon-vol2-profile", "version": version}, "linux": {"kernel_release": "2.6.26-2-686", "banner": "Linux version 2.6.26-2-686", "architecture": "x86"}},
+            "symbols": {"marker": {"address": 1, "note": marker}},
+            "types": {},
+        }))
+        return path
+
+    settings = _settings(tmp_path)
+    first = import_linux_isf(converted(tmp_path / "a.json", "1", "old"), original_filename="a.json", settings=settings)
+    second = import_linux_isf(converted(tmp_path / "b.json", "2", "new"), original_filename="b.json", settings=settings)
+    assert second.path == first.path
+    assert "new" in Path(second.path).read_text()
+    with pytest.raises(LinuxSymbolError):  # an older conversion never replaces a newer one
+        import_linux_isf(converted(tmp_path / "c.json", "1", "older"), original_filename="c.json", settings=settings)
