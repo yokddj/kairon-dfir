@@ -1067,6 +1067,19 @@ class TestEvidenceIdFieldQuery:
         # An exact term match must not also be present -- that was the bug.
         assert not any("term" in f and "process_name" in f.get("term", {}) for f in filters)
 
+    def test_search_artifact_documents_file_path_filter_matches_across_separators(self) -> None:
+        """A file path search spanning a separator ("/tmp/x", "Temp\\a.ps1") matches the
+        whole path (name.keyword): the analysed name field only holds single segments."""
+        from app.services.memory.artifact_indexing import search_artifact_documents
+
+        fake = _CaptureSearchClient(items=[], total=0)
+        p1, p2 = self._patch_client(fake)
+        with p1, p2:
+            search_artifact_documents(case_id="case-1", document_type="memory_file_object", run_id="run-1", evidence_id="ev-1", filters={"name": "/tmp/.x"})
+        filters = fake.last_body["query"]["bool"]["filter"]
+        wildcard = {"value": "*/tmp/.x*", "case_insensitive": True}
+        assert {"bool": {"should": [{"wildcard": {"name.keyword": wildcard}}, {"wildcard": {"name": wildcard}}], "minimum_should_match": 1}} in filters
+
     def test_search_artifact_documents_process_name_filter_strips_wildcard_metacharacters(self) -> None:
         """User-typed ``*``/``?`` must not be interpreted as wildcard
         syntax -- they are stripped so a literal search for e.g.
@@ -1106,7 +1119,8 @@ class TestEvidenceIdFieldQuery:
             )
         assert fake.last_body is not None
         filters = fake.last_body["query"]["bool"]["filter"]
-        assert {"wildcard": {"name": {"value": "*check-updates*", "case_insensitive": True}}} in filters
+        wildcard = {"value": "*check-updates*", "case_insensitive": True}
+        assert {"bool": {"should": [{"wildcard": {"name.keyword": wildcard}}, {"wildcard": {"name": wildcard}}], "minimum_should_match": 1}} in filters
         assert not any("term" in f and "name" in f.get("term", {}) for f in filters)
 
     # ------------------------------------------------------------------

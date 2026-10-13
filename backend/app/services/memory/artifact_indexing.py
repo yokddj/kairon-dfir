@@ -273,7 +273,14 @@ def search_artifact_documents(
                     # search box in the app. "name" is memory_file_object's
                     # full path field (Files/windows.filescan).
                     needle = value.strip().replace("*", "").replace("?", "")
-                    query_filters.append({"wildcard": {key: {"value": f"*{needle}*", "case_insensitive": True}}})
+                    wildcard = {"value": f"*{needle}*", "case_insensitive": True}
+                    if key == "name":
+                        # name is analysed text: its words are path segments, so a search that
+                        # spans a separator ("/tmp/x", "Temp\\a.ps1") only matches the whole
+                        # path, kept in name.keyword.
+                        query_filters.append({"bool": {"should": [{"wildcard": {"name.keyword": wildcard}}, {"wildcard": {"name": wildcard}}], "minimum_should_match": 1}})
+                    else:
+                        query_filters.append({"wildcard": {key: wildcard}})
                     continue
                 query_key = key
                 field = query_key if query_key in _EXACT_TERM_FIELDS else f"{query_key}.keyword"
