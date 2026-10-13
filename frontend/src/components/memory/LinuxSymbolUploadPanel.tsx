@@ -151,7 +151,7 @@ export function LinuxSymbolUploadPanel({ caseId, evidenceId, architecture, uploa
           Architecture: <span className="text-ink">{architecture}</span>
         </p>
         <p className="sm:col-span-2">
-          Accepted formats: <span className="text-ink">.json, .json.xz, .zip (Volatility 2 profile)</span>
+          Accepted formats: <span className="text-ink">.json, .json.xz, .zip (a zipped ISF or a Volatility 2 profile)</span>
         </p>
       </div>
 

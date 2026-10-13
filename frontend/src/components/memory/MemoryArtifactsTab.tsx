@@ -48,10 +48,10 @@ type SubView =
 const SUBVIEWS: ReadonlyArray<{ key: SubView; label: string; testId: string; description: string; family: string }> = [
   { key: "network", label: "Network", testId: "memory-artifacts-subview-network", description: "TCP/UDP endpoints observed in memory.", family: "network" },
   { key: "modules", label: "Modules", testId: "memory-artifacts-subview-modules", description: "DLLs and per-process modules (dlllist + ldrmodules).", family: "modules" },
-  { key: "handles", label: "Handles", testId: "memory-artifacts-subview-handles", description: "Kernel handles per process.", family: "handles" },
+  { key: "handles", label: "Handles", testId: "memory-artifacts-subview-handles", description: "Open handles per process (Windows) or open files (Linux).", family: "handles" },
   { key: "drivers", label: "Drivers", testId: "memory-artifacts-subview-drivers", description: "Loaded drivers (driverscan, scan-only).", family: "drivers" },
-  { key: "kernel", label: "Kernel modules", testId: "memory-artifacts-subview-kernel", description: "Kernel modules (windows.modules).", family: "kernel_modules" },
-  { key: "suspicious", label: "Suspicious regions", testId: "memory-artifacts-subview-suspicious", description: "Indicators (windows.malfind), needs review.", family: "suspicious_regions" },
+  { key: "kernel", label: "Kernel modules", testId: "memory-artifacts-subview-kernel", description: "Kernel modules loaded in memory.", family: "kernel_modules" },
+  { key: "suspicious", label: "Suspicious regions", testId: "memory-artifacts-subview-suspicious", description: "Executable memory flagged by malfind, needs review.", family: "suspicious_regions" },
   { key: "vads", label: "VADs", testId: "memory-artifacts-subview-vads", description: "Virtual Address Descriptors (windows.vadinfo).", family: "vads" },
 ];
 
@@ -467,7 +467,7 @@ function HandlesTable({ items, onModal, onOpen, onGraph, onTree }: {
               <td className="px-2 py-1 text-ink">{reported(row.object_type)}</td>
               <td className="max-w-[420px] truncate px-2 py-1 text-muted" title={reported(row.object_name)}>{reported(row.object_name)}</td>
               <td className="px-2 py-1 text-muted">{reported(row.handle_value)}</td>
-              <td className="px-2 py-1 text-muted">{reported(row.granted_access)}</td>
+              <td className="px-2 py-1 text-muted">{reported(row.granted_access ?? row.file_mode)}</td>
               <td className="px-2 py-1">
                 <ProcessActions
                   entity={{ pid: row.pid, name: row.process_name, process_entity_id: row.process_entity_id }}
@@ -521,7 +521,7 @@ function DriversTable({ items, onModal, testId, type }: {
               <tr key={row.document_id} data-testid={`memory-artifacts-${type}-row`}>
                 <td className="px-2 py-1 text-ink">{reported(name)}</td>
                 <td className="max-w-[420px] truncate px-2 py-1 text-muted" title={reported(row.path)}>{reported(row.path)}</td>
-                <td className="px-2 py-1 text-muted">{reported(type === "drivers" ? row.start_address : row.base_address)}</td>
+                <td className="px-2 py-1 text-muted">{reported(type === "drivers" ? row.start_address : row.base_address_hex ?? row.base_address)}</td>
                 <td className="px-2 py-1 text-muted">{reported(row.size)}</td>
                 <td className="px-2 py-1 text-muted">{reported(row.source_plugin)}</td>
                 <td className="px-2 py-1 text-muted">{row.visibility?.scan_only ? "scan_only" : row.visibility?.listed ? "listed" : "—"}</td>

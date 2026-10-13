@@ -90,6 +90,9 @@ c03bc000 B swapper_pg_dir
 c040a4c0 b pkmap_count
 c03f5190 B wall_to_monotonic
 c03f519c b total_sleep_time
+c0300000 T _etext
+c0380000 D tty_drivers
+c0390000 D module_kset
 """
 
 
@@ -144,6 +147,42 @@ def test_what_the_profile_lacks_is_filled_in(tmp_path):
     # socket_alloc = socket + inode, the inode aligned after the socket.
     assert types["socket_alloc"]["fields"]["vfs_inode"]["offset"] == 40
     assert types["socket_alloc"]["size"] == 380
+    # Globals Volatility's rootkit checks read get their type when the profile describes it...
+    assert symbols["tty_drivers"]["type"] == {"kind": "struct", "name": "list_head"}
+    assert symbols["_etext"]["type"] == {"kind": "base", "name": "char"}
+    # ...and stay untyped (the plugin reports it cannot run) when it does not.
+    assert "type" not in symbols["module_kset"]
+
+
+@pytest.mark.parametrize("member", ["Ubuntu22.04.6.5.0-41-generic.json", "linux/kernel.json.xz"])
+def test_a_zipped_isf_is_unpacked_as_is(tmp_path, member):
+    import lzma
+
+    content = json.dumps({"metadata": {"format": "6.2.0"}, "symbols": {}}).encode()
+    path = tmp_path / "isf.zip"
+    with zipfile.ZipFile(path, "w") as bundle:
+        bundle.writestr(member, lzma.compress(content) if member.endswith(".xz") else content)
+    out = tmp_path / "out.json"
+    # No banner is needed: the validation that follows checks the ISF against the image.
+    result = subprocess.run([sys.executable, "-m", "app.services.memory.linux_vol2_profile", str(path), str(_raw_image(tmp_path)), "", str(out)], capture_output=True, check=True)
+    assert json.loads(result.stdout)["ok"] is True
+    assert out.read_bytes() == content
+
+
+def test_a_zipped_isf_over_the_limit_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(vol2, "MAX_ISF_BYTES", 10)
+    path = tmp_path / "isf.zip"
+    with zipfile.ZipFile(path, "w") as bundle:
+        bundle.writestr("kernel.json", "{" + " " * 100 + "}")
+    with pytest.raises(Vol2ProfileError):
+        vol2.extract_zipped_isf(path, tmp_path / "out.json")
+    assert not (tmp_path / "out.json").exists()
+
+
+def test_a_profile_without_a_known_banner_is_refused(tmp_path):
+    with pytest.raises(Vol2ProfileError) as error:
+        convert_profile(_profile(tmp_path), _raw_image(tmp_path), "")
+    assert error.value.code == "SYMBOL_BANNER_UNKNOWN"
 
 
 def test_a_profile_for_another_kernel_build_is_refused(tmp_path):

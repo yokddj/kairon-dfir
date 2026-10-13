@@ -162,7 +162,7 @@ def test_processes_basic_is_accepted_for_linux_evidence(db: Session) -> None:
 
     plugins = resolve_profile_plugins("processes_basic", plan=plan)
 
-    assert plugins == ["linux.pslist", "linux.pstree"]
+    assert plugins == ["linux.pslist", "linux.pstree", "linux.psaux"]
 
 
 # ---------------------------------------------------------------------------

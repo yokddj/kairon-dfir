@@ -685,9 +685,124 @@ def normalize_windows_handles(
     }
 
 
+def normalize_linux_lsof(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "linux.lsof",
+    max_records: int = 200000,
+) -> dict[str, Any]:
+    """linux.lsof's open files as memory_handle documents: Linux's file
+    descriptors are what Windows handles are, so the Handles view shows both
+    (FD as the handle value, the file type -- REG, SOCK, FIFO, CHR... -- as
+    the object type, the path as its name)."""
+    rows = _rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    dropped = 0
+    for row in rows:
+        pid = _int_or_none(_lookup(row, "PID"))
+        if pid is None:
+            dropped += 1
+            warnings.append("handle_row_missing_pid")
+            continue
+        tid = _int_or_none(_lookup(row, "TID"))
+        if tid is not None and tid != pid:
+            # Threads share their process's file table; listed once.
+            dropped += 1
+            continue
+        fd = _int_or_none(_lookup(row, "FD"))
+        object_type = _str_or_none(_lookup(row, "Type"), 64)
+        object_name = _str_or_none(_lookup(row, "Path"), MAX_OBJECT_NAME_LENGTH)
+        identity = _identity_pid_offset(pid, fd if fd is not None else -1, object_type or "Unknown", object_name or "no_name")
+        items.append({
+            "document_id": _document_id(prefix="memory_handle", case_id=case_id, run_id=scan_run_id, identity=identity),
+            "document_type": "memory_handle",
+            "case_id": case_id,
+            "evidence_id": evidence_id,
+            "scan_run_id": scan_run_id,
+            "plugin_run_id": plugin_run_id,
+            "pid": pid,
+            "process_entity_id": None,
+            "process_name": _str_or_none(_lookup(row, "Process"), MAX_NAME_LENGTH),
+            "handle_value": fd,
+            "object_type": object_type,
+            "object_name": object_name,
+            "granted_access": None,
+            "file_mode": _str_or_none(_lookup(row, "Mode"), 16),
+            "inode": _int_or_none(_lookup(row, "Inode")),
+            "file_size": _int_or_none(_lookup(row, "Size")),
+            "modified_at": _str_or_none(_lookup(row, "Modified"), 64),
+            "source_plugin": source_plugin,
+            "confidence": "reported_by_plugin",
+            "provenance": _provenance(case_id=case_id, evidence_id=evidence_id, scan_run_id=scan_run_id, plugin_run_id=plugin_run_id, source_plugin=source_plugin),
+            "normalization_version": NORMALIZATION_VERSION,
+        })
+        if len(items) >= max_records:
+            warnings.append("handle_max_records_reached")
+            break
+    return {"items": items, "warnings": warnings, "raw_count": len(rows), "accepted_count": len(items), "dropped_count": dropped, "conflicts": 0, "normalization_version": NORMALIZATION_VERSION}
+
+
 # ---------------------------------------------------------------------------
 # kernel_basic -> memory_kernel_module + memory_driver
 # ---------------------------------------------------------------------------
+
+
+def normalize_linux_lsmod(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "linux.lsmod",
+    max_records: int = 200000,
+) -> dict[str, Any]:
+    """linux.lsmod's loaded kernel modules as memory_kernel_module documents."""
+    rows = _rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    dropped = 0
+    for row in rows:
+        name = _str_or_none(_lookup(row, "Module Name", "Name"), MAX_NAME_LENGTH)
+        if not name:
+            dropped += 1
+            warnings.append("kernel_module_missing_name")
+            continue
+        raw_base = _lookup(row, "Offset")
+        raw_base = raw_base if isinstance(raw_base, int) and not isinstance(raw_base, bool) else None
+        size = _int_or_none(_lookup(row, "Code Size", "Size"))
+        identity = _identity_pid_offset(name, raw_base or 0, size or 0)
+        items.append({
+            "document_id": _document_id(prefix="memory_kernel_module", case_id=case_id, run_id=scan_run_id, identity=identity),
+            "document_type": "memory_kernel_module",
+            "case_id": case_id,
+            "evidence_id": evidence_id,
+            "scan_run_id": scan_run_id,
+            "plugin_run_id": plugin_run_id,
+            "module_name": name,
+            "path": None,
+            # 64-bit kernel addresses (0xffffffff...) do not fit the index's signed long.
+            "base_address": raw_base if raw_base is not None and 0 <= raw_base < 2**63 else None,
+            "base_address_hex": f"0x{raw_base:x}" if raw_base is not None else None,
+            "size": size,
+            "load_arguments": _str_or_none(_lookup(row, "Load Arguments"), MAX_OBJECT_NAME_LENGTH) or None,
+            "taints": _str_or_none(_lookup(row, "Taints"), 128) or None,
+            "source_plugin": source_plugin,
+            "visibility": {"listed": True, "scan_only": False, "terminated": False, "unknown": False},
+            "findings": [],
+            "confidence": "reported_by_plugin",
+            "provenance": _provenance(case_id=case_id, evidence_id=evidence_id, scan_run_id=scan_run_id, plugin_run_id=plugin_run_id, source_plugin=source_plugin),
+            "normalization_version": NORMALIZATION_VERSION,
+        })
+        if len(items) >= max_records:
+            warnings.append("kernel_module_max_records_reached")
+            break
+    return {"items": items, "warnings": warnings, "raw_count": len(rows), "accepted_count": len(items), "dropped_count": dropped, "conflicts": 0, "normalization_version": NORMALIZATION_VERSION}
 
 
 def normalize_windows_modules(
@@ -862,7 +977,7 @@ def normalize_windows_malfind(
         commit_charge = _int_or_none(_lookup(row, "CommitCharge"))
         private_memory = _bool_or_none(_lookup(row, "PrivateMemory"))
         hexdump_preview = _bounded_preview(_lookup(row, "Hexdump", "HexDump", "Hex"), max_preview_bytes)
-        disasm_preview = _bounded_preview(_lookup(row, "Disassembly", "Disassembled"), max_preview_bytes)
+        disasm_preview = _bounded_preview(_lookup(row, "Disassembly", "Disassembled", "Disasm"), max_preview_bytes)
         if pid is None and not (start_address or end_address):
             dropped += 1
             warnings.append("malfind_row_missing_identity")
@@ -1717,6 +1832,16 @@ FINDEVIL_TYPES: dict[str, tuple[str, str, str]] = {
     "PROC_LOCATION": ("medium", "process", "Program running from a temporary or user-writable folder."),
     "PROC_TERMINATED": ("low", "process", "Process that had already exited when memory was captured, still found by scanning memory: shows what ran recently."),
     "PE_PATCHED": ("low", "module", "Executable page of a module differs from the file on disk: hooking or patching, also done by Windows and JIT runtimes."),
+    # Kairon's Linux checks (app.services.memory.kairon_linux_findevil).
+    "SHELL_SOCKET": ("high", "process", "Shell whose standard input/output is a network socket: a reverse or bind shell."),
+    "PROC_KTHREAD_MASQ": ("high", "process", "User process whose command line imitates a kernel thread: typical masquerading."),
+    "PROC_ROOT": ("medium", "process", "Process running as root started by a non-root process that is not meant to change user: possible privilege escalation."),
+    "MODULE_HIDDEN": ("high", "module", "Kernel module missing from the kernel's module list: typical of a rootkit hiding itself."),
+    "SYSCALL_HOOK": ("high", "kernel", "System call handler pointing outside the kernel's code: a hooked system call (rootkit)."),
+    "IDT_HOOK": ("high", "kernel", "Interrupt handler pointing outside the kernel: a hooked interrupt (rootkit)."),
+    "TTY_HOOK": ("high", "kernel", "Terminal receive handler pointing outside the kernel: a keylogger or input hook."),
+    "AFINFO_HOOK": ("high", "kernel", "Network /proc handler pointing outside the kernel and its modules: hides connections (rootkit)."),
+    "ELF_INJECT": ("high", "module", "ELF program found in anonymous memory: a program loaded without a file (injected or fileless)."),
 }
 FINDEVIL_PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 # "Process base address mismatch: PEB.ImageBaseAddress != EPROCESS.SectionBaseAddress (0x140 != 0x7ff6...)"
@@ -1749,6 +1874,7 @@ def normalize_memprocfs_findevil(
     scan_run_id: str,
     plugin_run_id: str,
     source_plugin: str = "memprocfs.findevil",
+    platform: str = "windows",
     max_records: int = 200000,
 ) -> dict[str, Any]:
     rows = _rows(payload)
@@ -1785,7 +1911,7 @@ def normalize_memprocfs_findevil(
             "evidence_id": evidence_id,
             "scan_run_id": scan_run_id,
             "plugin_run_id": plugin_run_id,
-            "platform": "windows",
+            "platform": platform,
             # PID 0 is MemProcFS's "not tied to a process" (Defender events).
             "pid": pid if pid else None,
             "process_entity_id": None,

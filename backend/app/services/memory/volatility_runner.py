@@ -147,6 +147,18 @@ ALLOWED_VOLATILITY_PLUGINS = {
     "linux.pstree",
     "linux.sockstat",
     "linux.bash",
+    "linux.psaux",
+    "linux.psscan",
+    "linux.lsof",
+    "linux.lsmod",
+    "linux.malware.malfind",
+    # Run by kairon.linux_findevil only (app.services.memory.kairon_linux_findevil).
+    "linux.malware.check_modules",
+    "linux.malware.hidden_modules",
+    "linux.malware.check_syscall",
+    "linux.malware.check_idt",
+    "linux.malware.tty_check",
+    "linux.malware.check_afinfo",
 }
 
 
@@ -476,6 +488,18 @@ VOLATILITY_PLUGIN_CLASSES = {
     "linux.pstree": ("volatility3.plugins.linux.pstree", "PsTree"),
     "linux.sockstat": ("volatility3.plugins.linux.sockstat", "Sockstat"),
     "linux.bash": ("volatility3.plugins.linux.bash", "Bash"),
+    "linux.psaux": ("volatility3.plugins.linux.psaux", "PsAux"),
+    "linux.psscan": ("volatility3.plugins.linux.psscan", "PsScan"),
+    "linux.lsof": ("volatility3.plugins.linux.lsof", "Lsof"),
+    "linux.lsmod": ("volatility3.plugins.linux.lsmod", "Lsmod"),
+    "linux.malware.malfind": ("volatility3.plugins.linux.malware.malfind", "Malfind"),
+    # Read by kairon.linux_findevil (app.services.memory.kairon_linux_findevil).
+    "linux.malware.check_modules": ("volatility3.plugins.linux.malware.check_modules", "Check_modules"),
+    "linux.malware.hidden_modules": ("volatility3.plugins.linux.malware.hidden_modules", "Hidden_modules"),
+    "linux.malware.check_syscall": ("volatility3.plugins.linux.malware.check_syscall", "Check_syscall"),
+    "linux.malware.check_idt": ("volatility3.plugins.linux.malware.check_idt", "Check_idt"),
+    "linux.malware.tty_check": ("volatility3.plugins.linux.malware.tty_check", "Tty_Check"),
+    "linux.malware.check_afinfo": ("volatility3.plugins.linux.malware.check_afinfo", "Check_afinfo"),
 }
 
 
@@ -499,6 +523,12 @@ def probe_volatility_plugin(plugin: str) -> bool:
         from app.services.memory.memprocfs_runner import memprocfs_available
 
         return memprocfs_available()
+    if plugin.startswith("kairon."):
+        # Kairon's own checks (kairon.findevil, kairon.linux_findevil,
+        # kairon.psreadline) only run standard Volatility plugins.
+        import importlib.util
+
+        return importlib.util.find_spec("volatility3") is not None
     import functools
     cache_attr = "_volatility_plugin_cache"
     cache: dict[str, bool] | None = getattr(probe_volatility_plugin, cache_attr, None)

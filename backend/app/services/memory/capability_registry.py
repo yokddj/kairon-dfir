@@ -174,6 +174,17 @@ _LINUX: tuple[CapabilityPluginSpec, ...] = (
     CapabilityPluginSpec(MemoryCapability.PROCESSES, PlatformFamily.LINUX, FRAMEWORK_VOLATILITY3, "linux.pstree", presentation_family="memory_process"),
     CapabilityPluginSpec(MemoryCapability.NETWORK, PlatformFamily.LINUX, FRAMEWORK_VOLATILITY3, "linux.sockstat", presentation_family="memory_network_connection"),
     CapabilityPluginSpec(MemoryCapability.SHELL_HISTORY, PlatformFamily.LINUX, FRAMEWORK_VOLATILITY3, "linux.bash", presentation_family="memory_shell_history"),
+    # Full command lines (the arguments, not just the 16-character comm name).
+    CapabilityPluginSpec(MemoryCapability.PROCESSES, PlatformFamily.LINUX, FRAMEWORK_VOLATILITY3, "linux.psaux", presentation_family="memory_process"),
+    # Task structures found by scanning memory: exited processes, and ones unlinked from the task list.
+    CapabilityPluginSpec(MemoryCapability.PROCESSES_EXTENDED, PlatformFamily.LINUX, FRAMEWORK_VOLATILITY3, "linux.psscan", presentation_family="memory_process"),
+    # Open files per process (regular files, sockets, pipes, devices): Linux's counterpart of handles.
+    CapabilityPluginSpec(MemoryCapability.HANDLES, PlatformFamily.LINUX, FRAMEWORK_VOLATILITY3, "linux.lsof", presentation_family="memory_handle"),
+    CapabilityPluginSpec(MemoryCapability.KERNEL_MODULES, PlatformFamily.LINUX, FRAMEWORK_VOLATILITY3, "linux.lsmod", presentation_family="memory_kernel_module"),
+    CapabilityPluginSpec(MemoryCapability.SUSPICIOUS_REGIONS, PlatformFamily.LINUX, FRAMEWORK_VOLATILITY3, "linux.malware.malfind", presentation_family="memory_suspicious_region"),
+    # Kairon's Linux checks (app.services.memory.kairon_linux_findevil): hidden processes and
+    # modules, kernel hooks, shells on sockets, suspicious command lines and injected code.
+    CapabilityPluginSpec(MemoryCapability.FIND_EVIL, PlatformFamily.LINUX, FRAMEWORK_VOLATILITY3, "kairon.linux_findevil", presentation_family="memory_findevil"),
 )
 
 MEMORY_CAPABILITY_REGISTRY: tuple[CapabilityPluginSpec, ...] = _WINDOWS + _LINUX

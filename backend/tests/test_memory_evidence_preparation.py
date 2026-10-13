@@ -567,7 +567,8 @@ class TestPreparationEndpoint:
         from app.services.memory.platform import PlatformFamily
 
         linux = platform_result_views(PlatformFamily.LINUX)
-        assert set(linux["presentation_families"]) == {"memory_process", "memory_network_connection", "memory_shell_history"}
+        assert "memory_handle" in linux["presentation_families"]
+        assert not {"memory_vad", "memory_driver", "memory_file_object", "memory_system_info"} & set(linux["presentation_families"])
         assert linux["frameworks"] == ["volatility3"]
         assert platform_result_views(PlatformFamily.UNKNOWN) is None
 

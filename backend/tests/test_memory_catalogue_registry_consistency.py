@@ -240,9 +240,11 @@ def _linux_catalogue(db: Session, *, readiness: ReadinessState = ReadinessState.
 
     case = _make_case(db)
     ev = _make_evidence(db, case.id)
-    eligible = (MemoryCapability.PROCESSES, MemoryCapability.NETWORK, MemoryCapability.SHELL_HISTORY)
+    from app.services.memory.capability_registry import capabilities_for_platform, specs_for_platform
+
+    eligible = tuple(capabilities_for_platform(PlatformFamily.LINUX))
     plan = replace(
-        _plan(PlatformFamily.LINUX, eligible=eligible, selected=("linux.pslist", "linux.pstree", "linux.sockstat", "linux.bash")),
+        _plan(PlatformFamily.LINUX, eligible=eligible, selected=tuple(spec.plugin for spec in specs_for_platform(PlatformFamily.LINUX))),
         readiness=readiness,
     )
     settings = _settings_with_process_profiles_enabled()
@@ -255,10 +257,14 @@ def _linux_catalogue(db: Session, *, readiness: ReadinessState = ReadinessState.
 def test_linux_catalogue_marks_profiles_without_a_linux_plugin_as_not_applying(db: Session) -> None:
     items = _linux_catalogue(db)
     applying = {profile for profile, item in items.items() if item["applies_to_platform"]}
-    assert applying == {"processes_basic", "network_basic", "shell_history_basic"}
-    assert items["processes_basic"]["plugins"] == ["linux.pslist", "linux.pstree"]
+    assert applying == {
+        "processes_basic", "processes_extended", "network_basic", "handles_basic", "kernel_basic",
+        "suspicious_memory", "shell_history_basic", "find_evil",
+    }
+    assert items["processes_basic"]["plugins"] == ["linux.pslist", "linux.pstree", "linux.psaux"]
     assert items["processes_basic"]["available"] is True
-    for profile in ("handles_basic", "suspicious_memory", "files_basic", "find_evil", "metadata_only"):
+    assert items["handles_basic"]["title"] == "Open files"
+    for profile in ("modules_basic", "files_basic", "metadata_only"):
         assert items[profile]["available"] is False
         assert items[profile]["gate_type"] == "unavailable"
         assert items[profile]["detected_platform"] == "linux"

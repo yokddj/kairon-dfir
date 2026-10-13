@@ -88,6 +88,20 @@ def _supported_os_families(profile: str) -> list[str]:
         if resolved_plugins_for_capability(platform, capability)
     ]
 
+# How a profile reads on a platform other than Windows (the catalogue's own
+# title and description describe the Windows plugins).
+PLATFORM_COPY: dict[str, dict[str, dict[str, str]]] = {
+    "linux": {
+        "processes_basic": {"description": "Processes from the kernel's task list, the process tree and full command lines (linux.pslist, linux.pstree, linux.psaux)."},
+        "processes_extended": {"description": "Task structures found by scanning memory: processes that had exited and ones unlinked from the task list (linux.psscan)."},
+        "handles_basic": {"title": "Open files", "description": "Files each process has open: regular files, sockets, pipes and devices (linux.lsof)."},
+        "kernel_basic": {"title": "Kernel modules", "description": "Kernel modules loaded when memory was captured (linux.lsmod)."},
+        "suspicious_memory": {"description": "Anonymous executable memory in processes, where injected code lives (linux.malware.malfind)."},
+        "network_basic": {"description": "Sockets open in each process: TCP, UDP and Unix (linux.sockstat)."},
+        "find_evil": {"description": "Indicators to review from Kairon's checks over Volatility: hidden processes and kernel modules, shells connected to sockets, suspicious command lines (reverse shells, download cradles, history wiping), programs run from /tmp or /dev/shm, shells started by network services, root processes started by unprivileged ones, hooked system calls, interrupts and terminal handlers, and injected code."},
+    },
+}
+
 # Profiles in stable order.  ``family`` maps to the active-result
 # resolver family.  ``plugins`` mirrors the runtime plugin list.
 PROFILE_CATALOGUE: list[dict[str, Any]] = [
@@ -480,12 +494,13 @@ def build_analysis_catalogue(
         # Do not pre-block on symbols or preparation state.  Volatility
         # resolves symbols at plugin execution time and reports the real
         # plugin stderr if resolution fails.
+        copy = PLATFORM_COPY.get(detected_platform.value, {}).get(profile, {}) if platform_known else {}
         items.append(
             {
                 "profile": profile,
                 "family": family,
-                "title": profile_def["title"],
-                "description": profile_def["description"],
+                "title": copy.get("title", profile_def["title"]),
+                "description": copy.get("description", profile_def["description"]),
                 "cost_label": profile_def["cost_label"],
                 "est_duration_seconds": profile_def["est_duration_seconds"],
                 "available": available,

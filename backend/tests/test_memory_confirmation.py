@@ -397,8 +397,8 @@ def test_run_all_preview_skips_profiles_that_do_not_apply_to_the_platform(db: Se
     ev = _make_evidence(db, case.id)
     plan = get_run_all_preview(case_id=case.id, evidence_id=ev.id, mode="missing_or_failed", db=db)
     skipped = {s["profile"]: s["reason"] for s in plan["skipped_profiles"]}
-    assert skipped["handles_basic"] == "platform_mismatch"
-    assert "handles_basic" not in plan["selected_profiles"]
+    assert skipped["modules_basic"] == "platform_mismatch"
+    assert "modules_basic" not in plan["selected_profiles"]
     assert plan["detected_platform"] == "linux"
 
 

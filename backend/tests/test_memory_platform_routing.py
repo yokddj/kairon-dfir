@@ -79,7 +79,7 @@ def test_linux_evidence_never_selects_windows_plugins(tmp_path: Path) -> None:
     assert plan.detected_platform == PlatformFamily.LINUX
     assert plan.selected_plugins, "expected at least one selected Linux plugin"
     assert all(not plugin.startswith("windows.") for plugin in plan.selected_plugins)
-    assert all(plugin.startswith("linux.") for plugin in plan.selected_plugins)
+    assert all(plugin.startswith(("linux.", "kairon.linux_")) for plugin in plan.selected_plugins)
 
 
 def test_windows_evidence_never_selects_linux_plugins(tmp_path: Path) -> None:
@@ -164,12 +164,12 @@ def test_requesting_a_capability_absent_for_the_platform_is_platform_mismatch_no
     plan = build_memory_analysis_plan(
         evidence,
         canonical_path=path,
-        requested_capabilities=[MemoryCapability.HANDLES],  # Windows-only capability
+        requested_capabilities=[MemoryCapability.MODULES],  # Windows-only capability
     )
 
     assert plan.detected_platform == PlatformFamily.LINUX
     assert plan.eligible_capabilities == ()
-    assert plan.ineligible_capabilities == ((MemoryCapability.HANDLES, SkipReason.PLATFORM_MISMATCH),)
+    assert plan.ineligible_capabilities == ((MemoryCapability.MODULES, SkipReason.PLATFORM_MISMATCH),)
     assert plan.readiness != ReadinessState.BLOCKED_SYMBOLS
 
 
@@ -240,10 +240,11 @@ def test_linux_process_readiness_distinguishes_plugins_from_missing_symbols(tmp_
     readiness = _memory_capability_readiness(
         plan,
         {
-            "supported_plugins": ["linux.pslist", "linux.pstree"],
+            "supported_plugins": ["linux.pslist", "linux.pstree", "linux.psaux"],
             "plugins": {
                 "linux.pslist": {"state": "available"},
                 "linux.pstree": {"state": "available"},
+                "linux.psaux": {"state": "available"},
             },
         },
         {"can_analyze": True},
@@ -343,7 +344,7 @@ def test_linux_process_readiness_exposes_symbol_provenance(tmp_path: Path, monke
     plan = build_memory_analysis_plan(evidence, canonical_path=path, requested_capabilities=[MemoryCapability.PROCESSES])
     readiness = routes_memory._memory_capability_readiness(
         plan,
-        {"supported_plugins": ["linux.pslist", "linux.pstree"]},
+        {"supported_plugins": ["linux.pslist", "linux.pstree", "linux.psaux"]},
         {"can_analyze": True},
     )
 
@@ -376,7 +377,9 @@ def test_registry_never_binds_a_windows_plugin_name_to_linux_or_vice_versa() -> 
         if spec.platform == PlatformFamily.WINDOWS:
             assert spec.plugin.startswith(("windows.", "memprocfs.", "kairon.")), spec.plugin
         elif spec.platform == PlatformFamily.LINUX:
-            assert not spec.plugin.startswith(("windows.", "memprocfs.", "kairon.")), spec.plugin
+            assert not spec.plugin.startswith(("windows.", "memprocfs.")), spec.plugin
+            # Kairon's own checks are per platform: the Windows ones never run on Linux.
+            assert not spec.plugin.startswith("kairon.") or spec.plugin.startswith("kairon.linux_"), spec.plugin
 
 
 def test_resolved_plugins_for_capability_reproduces_legacy_profile_plugins_exactly() -> None:
@@ -427,7 +430,7 @@ def test_resolve_profile_plugins_maps_process_profile_to_linux_process_capabilit
 
     plugins = resolve_profile_plugins("processes_basic", plan=plan)
 
-    assert plugins == ["linux.pslist", "linux.pstree"]
+    assert plugins == ["linux.pslist", "linux.pstree", "linux.psaux"]
     assert all(not plugin.startswith("windows.") for plugin in plugins)
 
 

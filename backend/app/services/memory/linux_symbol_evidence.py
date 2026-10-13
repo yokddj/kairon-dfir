@@ -72,7 +72,8 @@ TERMINAL_STATUSES = {STATUS_VALID, STATUS_INVALID, STATUS_UNSUPPORTED, STATUS_VA
 # back to VALIDATION_FAILED rather than crashing the request.
 _UNSUPPORTED_CODES = {"SYMBOL_UNSUPPORTED_PLATFORM", "SYMBOL_UNSUPPORTED_FORMAT"}
 _ACCEPTED_EXTENSIONS = (".json", ".json.xz")
-# A Volatility 2 Linux profile (module.dwarf + System.map), converted on the worker.
+# A Volatility 2 Linux profile (module.dwarf + System.map), converted on the
+# worker, or a zipped ISF, unpacked there (app.services.memory.linux_vol2_profile).
 _VOL2_PROFILE_EXTENSION = ".zip"
 VOL2_CONVERSION_TIMEOUT_SECONDS = 600
 
@@ -342,9 +343,8 @@ def _convert_vol2_profile(
     from app.services.memory.evidence_access import resolve_memory_evidence_path
     from app.services.memory.subprocess_isolation import SubprocessIsolationTimeout, run_isolated
 
-    banner = required_identity.banner if required_identity else None
-    if not banner:
-        return None, STATUS_VALIDATION_FAILED, "Kairon has not found this memory image's kernel banner, which a Volatility 2 profile needs to be matched."
+    # A zipped ISF needs no banner; a Volatility 2 profile without one is refused by the converter.
+    banner = (required_identity.banner if required_identity else None) or ""
     try:
         image_path = resolve_memory_evidence_path(evidence, settings=settings)
     except Exception:  # noqa: BLE001

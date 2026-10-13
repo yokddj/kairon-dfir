@@ -127,13 +127,17 @@ def _process_from_row(row: dict[str, Any], plugin: str, *, command_limit: int = 
             process_fields["user"] = user
         if status is not None:
             process_fields["status"] = status
+        # psscan: a task that has exited keeps its structure until its parent reaps it.
+        exit_state = _str_or_none(_lookup(row, "EXIT_STATE"), 64)
+        if exit_state and exit_state not in ("TASK_RUNNING", "0"):
+            process_fields["exit_state"] = exit_state
     return {
         "identity": identity,
         "plugins": [plugin],
         "process": process_fields,
         "memory": {"offset": offset, "virtual_offset": _str_or_none(_lookup(row, "Offset(V)", "Offset(Virtual)"), 128), "physical_offset": _str_or_none(_lookup(row, "Offset(P)", "Offset(Physical)"), 128)},
         "visibility": {"pslist": plugin_kind == "pslist", "psscan": plugin_kind == "psscan", "pstree": plugin_kind == "pstree"},
-        "state": {"active_candidate": exit_time is None, "terminated_candidate": exit_time is not None, "hidden_candidate": False},
+        "state": {"active_candidate": exit_time is None and "exit_state" not in process_fields, "terminated_candidate": exit_time is not None or "exit_state" in process_fields, "hidden_candidate": False},
         "warnings": warnings,
         "raw": {"fields": _raw_subset_limited(row, raw_limit), "process_pid": _bounded(raw_pid), "process_ppid": _bounded(raw_ppid)},
     }, warnings
@@ -177,6 +181,17 @@ def normalize_windows_cmdline(payload: Any, **kwargs: Any) -> dict[str, Any]:
 
 def normalize_linux_pslist(payload: Any, **kwargs: Any) -> dict[str, Any]:
     return _normalize_process_plugin(payload, "linux.pslist", **kwargs)
+
+
+def normalize_linux_psaux(payload: Any, **kwargs: Any) -> dict[str, Any]:
+    return _normalize_process_plugin(payload, "linux.psaux", **kwargs)
+
+
+def normalize_linux_psscan(payload: Any, **kwargs: Any) -> dict[str, Any]:
+    # psscan reports every task structure, threads included; a thread
+    # (TID != PID) is not a process of its own.
+    rows = [row for row in _rows(payload) if _int_or_none(_lookup(row, "TID")) in (None, _int_or_none(_lookup(row, "PID")))]
+    return _normalize_process_plugin(rows, "linux.psscan", **kwargs)
 
 
 def normalize_linux_pstree(payload: Any, **kwargs: Any) -> dict[str, Any]:
