@@ -6,12 +6,32 @@ import type { MemoryActiveResult } from "../../api/client";
 import { MemoryFindEvilTab } from "./MemoryFindEvilTab";
 
 const getMemoryActiveResultMock = vi.fn();
+const getMemoryFindEvilProcessesMock = vi.fn();
+const markEventMock = vi.fn();
+const deleteEventMarkingMock = vi.fn();
 
 vi.mock("../../api/client", () => ({
   api: {
     getMemoryActiveResult: (...args: unknown[]) => getMemoryActiveResultMock(...args),
+    getMemoryFindEvilProcesses: (...args: unknown[]) => getMemoryFindEvilProcessesMock(...args),
+    markEvent: (...args: unknown[]) => markEventMock(...args),
+    deleteEventMarking: (...args: unknown[]) => deleteEventMarkingMock(...args),
   },
 }));
+
+function triageProcess(pid: number | null, name: string | null, counts: { high?: number; medium?: number; low?: number }, marking: { id: string; status: string } | null = null) {
+  const priority_counts = { high: counts.high ?? 0, medium: counts.medium ?? 0, low: counts.low ?? 0 };
+  return {
+    triage_id: `memory-findevil-process:ev-1:${pid ?? ""}:${name ?? ""}`,
+    pid,
+    process_name: name,
+    indicator_count: priority_counts.high + priority_counts.medium + priority_counts.low,
+    priority_counts,
+    top_priority: priority_counts.high ? "high" : priority_counts.medium ? "medium" : "low",
+    indicator_types: [{ value: "PROC_NOLINK", count: 1 }],
+    marking: marking ? { ...marking, note: null } : null,
+  };
+}
 
 function activeResult(overrides: Partial<MemoryActiveResult> = {}): MemoryActiveResult {
   return {
@@ -49,7 +69,10 @@ const ROWS = [
 ];
 
 describe("MemoryFindEvilTab", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getMemoryFindEvilProcessesMock.mockResolvedValue({ case_id: "case-1", evidence_id: "ev-1", active_run: { id: "run-1" }, analysis_state: "analyzed_with_results", marking_artifact_type: "memory_findevil_process", processes: [] });
+  });
 
   it("says when Find Evil has not been run", async () => {
     getMemoryActiveResultMock.mockResolvedValue(activeResult());
@@ -60,6 +83,7 @@ describe("MemoryFindEvilTab", () => {
   it("lists indicators with their priority, details and meaning", async () => {
     getMemoryActiveResultMock.mockResolvedValue(activeResult({ analysis_state: "analyzed_with_results", total: 3, items: ROWS as unknown as MemoryActiveResult["items"] }));
     renderTab();
+    fireEvent.click(await screen.findByTestId("findevil-view-all"));
     await waitFor(() => expect(screen.getAllByTestId("findevil-row")).toHaveLength(3));
     expect(screen.getAllByTestId("findevil-priority").map((cell) => cell.textContent)).toEqual(["high", "high", "low"]);
     const table = screen.getByTestId("findevil-table");
@@ -78,6 +102,7 @@ describe("MemoryFindEvilTab", () => {
       },
     });
     renderTab();
+    fireEvent.click(await screen.findByTestId("findevil-view-all"));
     await waitFor(() => expect(screen.getAllByTestId("findevil-row")).toHaveLength(3));
     expect(getMemoryActiveResultMock).toHaveBeenLastCalledWith("case-1", "ev-1", "find_evil", undefined, expect.objectContaining({ facet_fields: ["indicator_type", "review_priority"] }));
     // Each priority shows how many indicators it has; "All" the total.
@@ -99,8 +124,80 @@ describe("MemoryFindEvilTab", () => {
     ];
     getMemoryActiveResultMock.mockResolvedValue(activeResult({ analysis_state: "partial", total: 2, items: rows as unknown as MemoryActiveResult["items"] }));
     renderTab();
+    fireEvent.click(await screen.findByTestId("findevil-view-all"));
     await waitFor(() => expect(screen.getAllByTestId("findevil-row")).toHaveLength(2));
     expect(screen.getAllByTestId("findevil-source").map((cell) => cell.textContent)).toEqual(["Kairon + MemProcFS", "MemProcFS"]);
     expect(screen.getByTestId("findevil-partial")).toHaveTextContent("Runs tab");
+  });
+
+  describe("by process", () => {
+    beforeEach(() => {
+      getMemoryActiveResultMock.mockResolvedValue(activeResult({ analysis_state: "analyzed_with_results", total: 3, items: ROWS as unknown as MemoryActiveResult["items"] }));
+    });
+
+    it("triages one row per process, most important first, and keeps settled ones apart", async () => {
+      getMemoryFindEvilProcessesMock.mockResolvedValue({
+        case_id: "case-1", evidence_id: "ev-1", active_run: { id: "run-1" }, analysis_state: "analyzed_with_results", marking_artifact_type: "memory_findevil_process",
+        processes: [
+          triageProcess(null, null, { high: 1 }),
+          triageProcess(52, "WmiPrvSE.exe", { high: 1 }, { id: "m-s", status: "suspicious" }),
+          triageProcess(2152, "msedge.exe", { low: 40 }, { id: "m-n", status: "not_relevant" }),
+        ],
+      });
+      renderTab();
+
+      await waitFor(() => expect(screen.getAllByTestId("findevil-process-row")).toHaveLength(2));
+      expect(screen.getByTestId("findevil-processes-summary")).toHaveTextContent("2 processes to review · 1 reviewed or not relevant");
+      const rows = screen.getAllByTestId("findevil-process-row");
+      expect(rows[0]).toHaveTextContent("Not tied to a process");
+      expect(rows[1]).toHaveTextContent("WmiPrvSE.exe (52)");
+      expect(rows[1]).toHaveTextContent("Suspicious");
+
+      fireEvent.click(screen.getByTestId("findevil-processes-toggle-settled"));
+      expect(screen.getAllByTestId("findevil-process-row")).toHaveLength(3);
+    });
+
+    it("marks a process with a run-independent identity", async () => {
+      getMemoryFindEvilProcessesMock.mockResolvedValue({
+        case_id: "case-1", evidence_id: "ev-1", active_run: { id: "run-1" }, analysis_state: "analyzed_with_results", marking_artifact_type: "memory_findevil_process",
+        processes: [triageProcess(2152, "msedge.exe", { low: 40 })],
+      });
+      markEventMock.mockResolvedValue({});
+      renderTab();
+
+      fireEvent.click(await screen.findByTestId("findevil-process-mark-not_relevant"));
+
+      await waitFor(() =>
+        expect(markEventMock).toHaveBeenCalledWith("memory-findevil-process:ev-1:2152:msedge.exe", expect.objectContaining({ case_id: "case-1", evidence_id: "ev-1", artifact_type: "memory_findevil_process", status: "not_relevant" })),
+      );
+      await waitFor(() => expect(getMemoryFindEvilProcessesMock).toHaveBeenCalledTimes(2));
+    });
+
+    it("opens a process's indicators in the full list", async () => {
+      getMemoryFindEvilProcessesMock.mockResolvedValue({
+        case_id: "case-1", evidence_id: "ev-1", active_run: { id: "run-1" }, analysis_state: "analyzed_with_results", marking_artifact_type: "memory_findevil_process",
+        processes: [triageProcess(52, "WmiPrvSE.exe", { high: 1 })],
+      });
+      renderTab();
+
+      fireEvent.click(await screen.findByTestId("findevil-process-show"));
+
+      await waitFor(() => expect(getMemoryActiveResultMock).toHaveBeenLastCalledWith("case-1", "ev-1", "find_evil", undefined, expect.objectContaining({ pid: 52 })));
+      expect(screen.getByTestId("findevil-view-all")).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("filters processes by priority", async () => {
+      getMemoryFindEvilProcessesMock.mockResolvedValue({
+        case_id: "case-1", evidence_id: "ev-1", active_run: { id: "run-1" }, analysis_state: "analyzed_with_results", marking_artifact_type: "memory_findevil_process",
+        processes: [triageProcess(52, "WmiPrvSE.exe", { high: 1 }), triageProcess(2152, "msedge.exe", { low: 40 })],
+      });
+      renderTab();
+      await waitFor(() => expect(screen.getAllByTestId("findevil-process-row")).toHaveLength(2));
+
+      fireEvent.click(screen.getByTestId("findevil-priority-high"));
+
+      await waitFor(() => expect(screen.getAllByTestId("findevil-process-row")).toHaveLength(1));
+      expect(screen.getByTestId("findevil-process-row")).toHaveTextContent("WmiPrvSE.exe");
+    });
   });
 });

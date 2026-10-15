@@ -1122,6 +1122,27 @@ export type MemoryMemProcFSTable = {
   available: boolean;
 };
 
+export type MemoryFindEvilProcess = {
+  // Run-independent identity used as the EventMarking event id.
+  triage_id: string;
+  pid: number | null;
+  process_name: string | null;
+  indicator_count: number;
+  priority_counts: { high: number; medium: number; low: number };
+  top_priority: "high" | "medium" | "low" | null;
+  indicator_types: Array<{ value: string; count: number }>;
+  marking: { id: string; status: EventMarkingStatus; note: string | null } | null;
+};
+
+export type MemoryFindEvilProcesses = {
+  case_id: string;
+  evidence_id: string;
+  active_run: { id: string } | null;
+  analysis_state: string | null;
+  marking_artifact_type: string;
+  processes: MemoryFindEvilProcess[];
+};
+
 export type MemoryActiveResult = {
   case_id: string;
   evidence_id: string;
@@ -6767,6 +6788,8 @@ export const api = {
     if (params.page_size) query.set("page_size", String(params.page_size));
     return request<MemoryEvidenceTimeline>(`/cases/${caseId}/memory/evidences/${evidenceId}/timeline?${query.toString()}`);
   },
+  getMemoryFindEvilProcesses: (caseId: string, evidenceId: string) =>
+    request<MemoryFindEvilProcesses>(`/cases/${caseId}/memory/evidences/${evidenceId}/findevil/processes`),
   getMemoryPowerShellLog: (caseId: string, evidenceId: string, params: { q?: string; page?: number; page_size?: number } = {}) => {
     const query = new URLSearchParams();
     if (params.q) query.set("q", params.q);
@@ -7872,7 +7895,7 @@ export const api = {
       finding_id?: string | null;
       created_by?: string;
     },
-  ) => request<EventMarking>(`/events/${eventId}/mark`, { method: "POST", body: JSON.stringify(payload) }),
+  ) => request<EventMarking>(`/events/${encodeURIComponent(eventId)}/mark`, { method: "POST", body: JSON.stringify(payload) }),
   updateEventMarking: (markingId: string, payload: Partial<Pick<EventMarking, "status" | "labels" | "note" | "finding_id">>) =>
     request<EventMarking>(`/event-markings/${markingId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteEventMarking: (markingId: string) => request<void>(`/event-markings/${markingId}`, { method: "DELETE" }),

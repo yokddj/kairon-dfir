@@ -832,6 +832,30 @@ def get_memory_evidence_timeline(
 
 
 @router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/findevil/processes",
+    response_model=None,
+)
+def get_memory_findevil_processes(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> dict:
+    """Find Evil indicators grouped by process, with the analyst's triage mark for each."""
+    from app.services.memory.active_result import resolve_active_memory_result
+    from app.services.memory.findevil_triage import MARKING_ARTIFACT_TYPE, findevil_processes
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    active = resolve_active_memory_result(db, case_id=case_id, evidence_id=evidence_id, family="find_evil", page=1, page_size=1)
+    run = active.get("active_run") or {}
+    processes = findevil_processes(db, case_id=case_id, evidence_id=evidence_id, run_id=str(run["id"])) if run.get("id") else []
+    return {
+        "case_id": case_id,
+        "evidence_id": evidence_id,
+        "active_run": run or None,
+        "analysis_state": active.get("analysis_state"),
+        "marking_artifact_type": MARKING_ARTIFACT_TYPE,
+        "processes": processes,
+    }
+
+
+@router.get(
     "/cases/{case_id}/memory/evidences/{evidence_id}/powershell-log",
     response_model=None,
 )
