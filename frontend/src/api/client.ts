@@ -989,9 +989,11 @@ export type MemoryEvidence = {
 export type MemoryEvidenceReadiness = {
   exists: boolean;
   regular_file: boolean;
-  readable_by_memory_worker: boolean;
+  // null until the memory worker has checked access itself.
+  readable_by_memory_worker: boolean | null;
   size_matches: boolean;
-  output_writable_by_memory_worker: boolean;
+  output_writable_by_memory_worker: boolean | null;
+  access_verified?: boolean;
   worker_online: boolean;
   backend_ready: boolean;
   can_analyze: boolean;

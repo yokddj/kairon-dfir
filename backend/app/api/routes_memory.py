@@ -258,7 +258,7 @@ def get_memory_evidence_diagnostics(
     if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
         raise HTTPException(status_code=404, detail="Memory evidence was not found.")
     backend = check_volatility3_backend()
-    readiness = evidence_readiness(evidence)
+    readiness = evidence_readiness(evidence, redis_conn=_access_probe_redis(backend))
     file_present = bool(readiness.get("exists") and readiness.get("regular_file"))
     file_size = int(evidence.size_bytes or 0) if file_present else 0
     size_match = bool(readiness.get("size_matches"))
@@ -420,6 +420,15 @@ def direct_metadata_probe(
     }
 
 
+def _access_probe_redis(backend: dict):
+    # Only an online worker can answer; asking an offline one would just wait.
+    if not backend.get("dedicated_worker_online"):
+        return None
+    from app.services.memory.worker_access_probe import probe_redis
+
+    return probe_redis()
+
+
 @router.get("/cases/{case_id}/memory/evidences/{evidence_id}/readiness", response_model=MemoryEvidenceReadinessRead)
 def get_memory_evidence_readiness(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> dict:
     _require_case(db, case_id)
@@ -427,7 +436,7 @@ def get_memory_evidence_readiness(case_id: str, evidence_id: str, db: Session = 
     if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
         raise HTTPException(status_code=404, detail="Memory evidence was not found.")
     backend = check_volatility3_backend()
-    result = evidence_readiness(evidence)
+    result = evidence_readiness(evidence, redis_conn=_access_probe_redis(backend))
     result["worker_online"] = bool(backend.get("dedicated_worker_online"))
     result["backend_ready"] = bool(backend.get("ready"))
     result["can_analyze"] = bool(result["can_analyze"] and result["worker_online"] and result["backend_ready"])
