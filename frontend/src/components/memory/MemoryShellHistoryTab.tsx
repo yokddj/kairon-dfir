@@ -145,9 +145,12 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
   const [visibility, setVisibility] = useState("");
   const [ppid, setPpid] = useState("");
   const [sortOrder, setSortOrder] = useState<"oldest_first" | "newest_first">("oldest_first");
+  // Command lines that differ only in numbers (service hosts, kernel workers)
+  // are one row with their count, run-once ones first.
+  const [grouped, setGrouped] = useState(true);
   const pageSize = 50;
   const query = useQuery({
-    queryKey: ["memory-command-line-history", caseId, evidenceId, page, search, visibility, ppid, sortOrder],
+    queryKey: ["memory-command-line-history", caseId, evidenceId, page, search, visibility, ppid, sortOrder, grouped],
     queryFn: () =>
       api.getCommandLineHistory(caseId, {
         evidence_id: evidenceId || "",
@@ -155,11 +158,13 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
         visibility: visibility || undefined,
         ppid: ppid ? Number(ppid) : undefined,
         sort_order: sortOrder,
+        group_identical: grouped || undefined,
         page,
         page_size: pageSize,
       }),
     enabled: Boolean(caseId && evidenceId),
     refetchOnWindowFocus: false,
+    placeholderData: (previous) => previous,
   });
   const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;
@@ -215,16 +220,27 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
           className={`w-28 ${INPUT}`}
           data-testid="shell-history-launched-ppid"
         />
-        <select
-          value={sortOrder}
-          onChange={(event) => { setSortOrder(event.target.value as "oldest_first" | "newest_first"); setPage(1); }}
-          aria-label="Order"
-          className={INPUT}
-          data-testid="shell-history-launched-order"
-        >
-          <option value="oldest_first">Oldest first</option>
-          <option value="newest_first">Newest first</option>
-        </select>
+        <label className="flex items-center gap-1 text-muted">
+          <input
+            type="checkbox"
+            checked={grouped}
+            onChange={(event) => { setGrouped(event.target.checked); setPage(1); }}
+            data-testid="shell-history-launched-grouped"
+          />
+          Group similar
+        </label>
+        {!grouped ? (
+          <select
+            value={sortOrder}
+            onChange={(event) => { setSortOrder(event.target.value as "oldest_first" | "newest_first"); setPage(1); }}
+            aria-label="Order"
+            className={INPUT}
+            data-testid="shell-history-launched-order"
+          >
+            <option value="oldest_first">Oldest first</option>
+            <option value="newest_first">Newest first</option>
+          </select>
+        ) : null}
         {filtered ? (
           <button type="button" onClick={reset} className="rounded-xl border border-line bg-abyss/70 px-3 py-1 text-xs" data-testid="shell-history-launched-reset">
             Reset
@@ -249,8 +265,45 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
       {!query.isLoading && !query.error && items.length > 0 ? (
         <>
           <p className="mt-3 text-xs text-muted" data-testid="shell-history-launched-summary">
-            {total} command line{total === 1 ? "" : "s"} · page {page} of {totalPages}
+            {total} {query.data?.grouped ? "distinct command line" : "command line"}{total === 1 ? "" : "s"}
+            {query.data?.grouped ? " (similar ones grouped, run fewest times first)" : ""} · page {page} of {totalPages}
           </p>
+          {query.data?.grouped ? (
+            <div className="mt-2 max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
+              <table className="w-full min-w-[860px] divide-y divide-line text-xs" data-testid="shell-history-launched-grouped-table">
+                <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted">
+                  <tr>
+                    <th className="px-2 py-1 text-right">Times</th>
+                    <th className="px-2 py-1">Command line</th>
+                    <th className="px-2 py-1">Process</th>
+                    <th className="px-2 py-1">PIDs</th>
+                    <th className="px-2 py-1">First started</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {items.map((item) => (
+                    <tr key={item.process_entity_id || item.command_line} data-testid="shell-history-launched-group-row">
+                      <td className="px-2 py-1 text-right tabular-nums text-ink">{item.count ?? 1}</td>
+                      <td className="px-2 py-1">
+                        <CommandCell command={item.command_line} />
+                        {(item.variants ?? 1) > 1 ? (
+                          <span className="text-[10px] text-muted" data-testid="shell-history-launched-variants">
+                            {item.variants} variants differing only in numbers
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-2 py-1 text-ink">{(item.process_names ?? [item.process_name]).filter(Boolean).join(", ") || "—"}</td>
+                      <td className="px-2 py-1 text-muted">
+                        {(item.pids ?? []).slice(0, 5).join(", ")}
+                        {(item.pids?.length ?? 0) > 5 ? ` +${(item.pids?.length ?? 0) - 5}` : ""}
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-1 text-muted">{item.first_start ? item.first_start.replace("T", " ").slice(0, 19) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
           <div className="mt-2 max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
             <table className="w-full min-w-[860px] divide-y divide-line text-xs" data-testid="shell-history-launched-table">
               <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted">
@@ -290,6 +343,7 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
               </tbody>
             </table>
           </div>
+          )}
           <div className="mt-3 flex items-center justify-end text-xs">
             <MemoryPaginationControls
               page={page}

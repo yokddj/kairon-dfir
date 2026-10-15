@@ -23,6 +23,7 @@ import {
 import { HostFilter } from "../HostFilter";
 import { MemoryPaginationControls } from "./MemoryPaginationControls";
 import { FacetSelect } from "./FacetSelect";
+import { MemoryStackView } from "./MemoryStackView";
 
 type Props = {
   caseId: string;
@@ -698,6 +699,12 @@ export function MemoryArtifactsTab({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [filter, setFilter] = useState("");
+  // Modules and handles open stacked (one row per value, rarest first): tens
+  // of thousands of records are mostly the same values in every process.
+  const stackable = subView === "modules" || subView === "handles";
+  const [stackView, setStackView] = useState(true);
+  // Exact path (modules) or object name (handles) opened from the stack.
+  const [valueFilter, setValueFilter] = useState("");
   const [pidFilter, setPidFilter] = useState("");
   const [objectTypeFilter, setObjectTypeFilter] = useState("");
   const [reviewFilter, setReviewFilter] = useState("");
@@ -795,8 +802,10 @@ export function MemoryArtifactsTab({
     if (pidFilter) params.pid = Number(pidFilter);
     if (objectTypeFilter) params.object_type = objectTypeFilter;
     if (reviewFilter) params.review_status = reviewFilter;
+    if (valueFilter && subView === "modules") params.path = valueFilter;
+    if (valueFilter && subView === "handles") params.object_name = valueFilter;
     return params;
-  }, [effectiveRunId, subView, evidenceId, page, filter, pidFilter, objectTypeFilter, reviewFilter,
+  }, [effectiveRunId, subView, evidenceId, page, filter, pidFilter, objectTypeFilter, reviewFilter, valueFilter,
       networkActiveQuery.data, modulesActiveQuery.data, handlesActiveQuery.data,
       driversActiveQuery.data, kernelActiveQuery.data, suspiciousActiveQuery.data, vadsActiveQuery.data]);
 
@@ -953,6 +962,37 @@ export function MemoryArtifactsTab({
       </section>
 
       <section className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel">
+        {stackable ? (
+          <div className="mb-3 flex rounded-xl border border-line bg-abyss/60 p-0.5 text-xs w-fit" role="group" aria-label="View">
+            {([[true, "Stack"], [false, "Rows"]] as const).map(([value, label]) => (
+              <button
+                key={label}
+                type="button"
+                aria-pressed={stackView === value}
+                onClick={() => setStackView(value)}
+                className={`rounded-lg px-3 py-1 ${stackView === value ? "bg-accent/15 text-accent" : "text-muted hover:text-ink"}`}
+                data-testid={`memory-artifacts-view-${label.toLowerCase()}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {stackable && stackView && evidenceId ? (
+          <MemoryStackView
+            caseId={caseId}
+            evidenceId={evidenceId}
+            family={subView as "modules" | "handles"}
+            groupFacets={handlesActiveQuery.data?.facets?.object_type ?? []}
+            onOpenValue={(value, group) => {
+              setValueFilter(value);
+              if (subView === "handles" && group) setObjectTypeFilter(group);
+              setPage(1);
+              setStackView(false);
+            }}
+          />
+        ) : (
+        <>
         <div className="flex flex-wrap items-center gap-2" data-testid="memory-artifacts-filters">
           <Filter className="h-3.5 w-3.5 text-muted" />
           {subView === "network" ? (
@@ -995,9 +1035,15 @@ export function MemoryArtifactsTab({
             className="w-20 rounded-xl border border-line bg-abyss/70 px-3 py-1 text-xs"
             data-testid="memory-artifacts-filter-pid"
           />
+          {valueFilter ? (
+            <span className="flex max-w-[420px] items-center gap-1 rounded-xl border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-ink" data-testid="memory-artifacts-filter-value">
+              <span className="truncate font-mono text-[11px]" title={valueFilter}>{valueFilter}</span>
+              <button type="button" onClick={() => { setValueFilter(""); setPage(1); }} className="text-muted hover:text-ink" aria-label="Clear">×</button>
+            </span>
+          ) : null}
           <button
             type="button"
-            onClick={() => { setFilter(""); setPidFilter(""); setObjectTypeFilter(""); setReviewFilter(""); setPage(1); }}
+            onClick={() => { setFilter(""); setPidFilter(""); setObjectTypeFilter(""); setReviewFilter(""); setValueFilter(""); setPage(1); }}
             className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs"
             data-testid="memory-artifacts-filter-reset"
           >
@@ -1074,6 +1120,8 @@ export function MemoryArtifactsTab({
             testId="memory-artifacts-pagination"
           />
         </div>
+        </>
+        )}
       </section>
 
       {inspect ? (

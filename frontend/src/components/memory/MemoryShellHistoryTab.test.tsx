@@ -352,7 +352,9 @@ describe("MemoryShellHistoryTab", () => {
       getCommandLineHistoryMock.mockResolvedValue(commandLines([{ process_entity_id: "p1", pid: 4, ppid: 1, process_name: "cmd.exe", command_line: "x", create_time: null, visibility: {} }]));
       renderTab();
       await screen.findByTestId("shell-history-launched-table");
+      expect(getCommandLineHistoryMock).toHaveBeenLastCalledWith(CASE, expect.objectContaining({ group_identical: true }));
 
+      fireEvent.click(screen.getByTestId("shell-history-launched-grouped"));
       fireEvent.change(screen.getByTestId("shell-history-launched-state"), { target: { value: "terminated" } });
       fireEvent.change(screen.getByTestId("shell-history-launched-ppid"), { target: { value: "1" } });
       fireEvent.change(screen.getByTestId("shell-history-launched-order"), { target: { value: "newest_first" } });
@@ -360,9 +362,25 @@ describe("MemoryShellHistoryTab", () => {
       await waitFor(() =>
         expect(getCommandLineHistoryMock).toHaveBeenLastCalledWith(
           CASE,
-          expect.objectContaining({ visibility: "terminated", ppid: 1, sort_order: "newest_first", page: 1 }),
+          expect.objectContaining({ visibility: "terminated", ppid: 1, sort_order: "newest_first", group_identical: undefined, page: 1 }),
         ),
       );
     });
+  });
+
+  it("groups command lines that differ only in numbers, with their count and variants", async () => {
+    getMemoryActiveResultMock.mockResolvedValue(activeResult());
+    getCommandLineHistoryMock.mockResolvedValue({
+      ...commandLines([
+        { process_entity_id: "p1", pid: 21, ppid: 2, process_name: "kworker/0:1", command_line: "[kworker/0:1]", create_time: null, visibility: {}, count: 33, variants: 33, pids: [21, 22, 23, 24, 25, 26], process_names: ["kworker/0:1"], first_start: null },
+      ]),
+      grouped: true,
+    });
+    renderTab();
+
+    const row = await screen.findByTestId("shell-history-launched-group-row");
+    expect(row).toHaveTextContent("33");
+    expect(row).toHaveTextContent("21, 22, 23, 24, 25 +1");
+    expect(screen.getByTestId("shell-history-launched-variants")).toHaveTextContent("33 variants");
   });
 });
