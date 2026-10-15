@@ -30,6 +30,7 @@ const getMemorySuspiciousRegionsMock = vi.fn();
 const getMemoryArtifactDetailMock = vi.fn();
 const getMemoryEvidenceLandingMock = vi.fn();
 const getMemoryActiveResultMock = vi.fn();
+const getMemoryStackMock = vi.fn(() => Promise.resolve({ family: "modules", items: [], total_values: 0, truncated: false, run_process_count: 0, page: 1, page_size: 50 }));
 const getMemoryAnalysisCatalogueMock = vi.fn();
 
 const emptyArtifactList = {
@@ -87,6 +88,7 @@ vi.mock("../api/client", () => ({
     getMemoryArtifactDetail: (...args: unknown[]) => getMemoryArtifactDetailMock(...args),
     getMemoryEvidenceLanding: (...args: unknown[]) => getMemoryEvidenceLandingMock(...args),
     getMemoryActiveResult: (...args: unknown[]) => getMemoryActiveResultMock(...args),
+    getMemoryStack: (...args: unknown[]) => getMemoryStackMock(...(args as [])),
     getMemoryAnalysisCatalogue: (...args: unknown[]) => getMemoryAnalysisCatalogueMock(...args),
   },
 }));
@@ -847,6 +849,9 @@ describe("Memory analysis UX fixes v1", () => {
   it("renders the Modules empty state when no rows", async () => {
     renderArtifactsFamilyPage("modules");
     await screen.findByTestId("memory-artifacts-tab");
+    // Opens stacked; the per-record rows are one click away.
+    expect(await screen.findByTestId("memory-stack-modules")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("memory-artifacts-view-rows"));
     expect(await screen.findByTestId("memory-artifacts-modules-empty")).toBeInTheDocument();
   });
 
@@ -854,6 +859,9 @@ describe("Memory analysis UX fixes v1", () => {
   it("renders the Handles empty state when no rows", async () => {
     renderArtifactsFamilyPage("handles");
     await screen.findByTestId("memory-artifacts-tab");
+    // Opens stacked; the per-record rows are one click away.
+    expect(await screen.findByTestId("memory-stack-handles")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("memory-artifacts-view-rows"));
     expect(await screen.findByTestId("memory-artifacts-handles-empty")).toBeInTheDocument();
   });
 

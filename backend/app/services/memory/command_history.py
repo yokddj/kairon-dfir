@@ -6,11 +6,54 @@ normalized canonical process entities and command-line observations.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.core.database import SessionLocal
 from app.models.memory import MemoryScanRun
 from app.services.memory.process_entities import fetch_canonical_entities
+
+
+_NUMBER = re.compile(r"\d+")
+
+
+def _command_key(command_line: str) -> str:
+    # Same command up to whitespace, letter case (Windows paths ignore case)
+    # and numbers: instances of one program that differ only in a worker
+    # index, PID, session or port ("[kworker/0:1]", "-ServerName:...{n}")
+    # are one row with their count.
+    return _NUMBER.sub("#", " ".join(command_line.split()).casefold())
+
+
+def group_identical_command_lines(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse command lines that are the same but for numbers into one row
+    each (keeping the first as its example, and how many distinct variants
+    there were), with how many processes ran it, the PIDs, process names and
+    first/last start. The ones run fewest times come first: a command line
+    seen once stands out from dozens of service hosts or kernel workers.
+    Nothing is dropped."""
+    groups: dict[str, dict[str, Any]] = {}
+    for item in items:
+        key = _command_key(item["command_line"])
+        group = groups.get(key)
+        if group is None:
+            group = groups[key] = {**item, "count": 0, "variants": 0, "pids": [], "process_names": [], "first_start": None, "last_start": None, "_seen": set()}
+        group["count"] += 1
+        exact = " ".join(item["command_line"].split()).casefold()
+        if exact not in group["_seen"]:
+            group["_seen"].add(exact)
+            group["variants"] += 1
+        if item.get("pid") is not None and len(group["pids"]) < 50:
+            group["pids"].append(item["pid"])
+        if item.get("process_name") and item["process_name"] not in group["process_names"]:
+            group["process_names"].append(item["process_name"])
+        start = item.get("create_time")
+        if start:
+            group["first_start"] = min(filter(None, [group["first_start"], start]))
+            group["last_start"] = max(filter(None, [group["last_start"], start]))
+    for group in groups.values():
+        group.pop("_seen", None)
+    return sorted(groups.values(), key=lambda g: (g["count"], g["first_start"] is None, g["first_start"] or ""))
 
 
 def build_command_line_history(
@@ -28,6 +71,7 @@ def build_command_line_history(
     time_to: str | None = None,
     profile: str | None = None,
     sort_order: str = "oldest_first",
+    group_identical: bool = False,
     page: int = 1,
     page_size: int = 50,
 ) -> dict[str, Any]:
@@ -117,9 +161,10 @@ def build_command_line_history(
         dated = [i for i in items if i["create_time"] is not None]
         ordered = dated + unknown if sort_order == "oldest_first" else unknown + dated
 
-        total = len(ordered)
+        listed = group_identical_command_lines(ordered) if group_identical else ordered
+        total = len(listed)
         start = (page - 1) * page_size
-        paged = ordered[start:start + page_size]
+        paged = listed[start:start + page_size]
 
         run_info = None
         if effective_run_id:
@@ -133,6 +178,7 @@ def build_command_line_history(
             "page": page,
             "page_size": page_size,
             "sort_order": sort_order,
+            "grouped": group_identical,
             "selected_run": run_info,
             "contributing_runs": [],
             "coverage": {

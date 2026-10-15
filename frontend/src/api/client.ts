@@ -1122,6 +1122,21 @@ export type MemoryMemProcFSTable = {
   available: boolean;
 };
 
+// A family's records grouped by value, with how many processes have each.
+export type MemoryStack = {
+  family: string;
+  field?: string;
+  group_field?: string | null;
+  order?: "rare" | "common";
+  total_values: number;
+  truncated: boolean;
+  run_process_count: number;
+  page: number;
+  page_size: number;
+  analysis_state?: string | null;
+  items: Array<{ value: string; group: string | null; occurrences: number; process_count: number; process_names: string[] }>;
+};
+
 export type MemoryFindEvilProcess = {
   // Run-independent identity used as the EventMarking event id.
   triage_id: string;
@@ -5841,6 +5856,13 @@ export type CommandLineHistoryItem = {
   parent_entity_id: string | null;
   findings: string[];
   record_refs: string[];
+  // Only when grouped (group_identical): the processes that ran this command line.
+  count?: number;
+  variants?: number;
+  pids?: number[];
+  process_names?: string[];
+  first_start?: string | null;
+  last_start?: string | null;
 };
 
 export type CommandLineHistoryResponse = {
@@ -5848,6 +5870,7 @@ export type CommandLineHistoryResponse = {
   total: number;
   page: number;
   page_size: number;
+  grouped?: boolean;
   sort_order: string;
   selected_run: { id: string; profile: string; status: string } | null;
   contributing_runs: { id: string; profile: string }[];
@@ -6788,6 +6811,11 @@ export const api = {
     if (params.page_size) query.set("page_size", String(params.page_size));
     return request<MemoryEvidenceTimeline>(`/cases/${caseId}/memory/evidences/${evidenceId}/timeline?${query.toString()}`);
   },
+  getMemoryStack: (
+    caseId: string,
+    evidenceId: string,
+    params: { family: "modules" | "handles"; q?: string; group?: string; order?: "rare" | "common"; page?: number; page_size?: number },
+  ) => request<MemoryStack>(buildArtifactQuery(`/cases/${caseId}/memory/evidences/${evidenceId}/stack`, params)),
   getMemoryFindEvilProcesses: (caseId: string, evidenceId: string) =>
     request<MemoryFindEvilProcesses>(`/cases/${caseId}/memory/evidences/${evidenceId}/findevil/processes`),
   getMemoryPowerShellLog: (caseId: string, evidenceId: string, params: { q?: string; page?: number; page_size?: number } = {}) => {
@@ -7138,6 +7166,8 @@ export const api = {
       time_to?: string;
       profile?: string;
       sort_order?: string;
+      // Collapse command lines that differ only in numbers into one row.
+      group_identical?: boolean;
       page?: number;
       page_size?: number;
     },

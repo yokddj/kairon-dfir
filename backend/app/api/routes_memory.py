@@ -832,6 +832,38 @@ def get_memory_evidence_timeline(
 
 
 @router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/stack",
+    response_model=None,
+)
+def get_memory_stack(
+    case_id: str,
+    evidence_id: str,
+    family: str = Query(...),
+    q: str | None = Query(default=None),
+    group: str | None = Query(default=None),
+    order: str = Query(default="rare", pattern="^(rare|common)$"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> dict:
+    """A family's records grouped by value, with how many processes have each, rarest first."""
+    from app.services.memory.active_result import resolve_active_memory_result
+    from app.services.memory.stacking import STACK_SPECS, stack_family
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    if family not in STACK_SPECS:
+        raise HTTPException(status_code=400, detail=f"Family '{family}' cannot be stacked.")
+    active = resolve_active_memory_result(db, case_id=case_id, evidence_id=evidence_id, family=family, page=1, page_size=1)
+    run = active.get("active_run") or {}
+    if not run.get("id"):
+        return {"family": family, "items": [], "total_values": 0, "truncated": False, "run_process_count": 0, "page": page, "page_size": page_size, "analysis_state": active.get("analysis_state")}
+    result = stack_family(case_id, family=family, run_id=str(run["id"]), evidence_id=evidence_id, q=q, group_value=group, order=order, page=page, page_size=page_size)
+    result["analysis_state"] = active.get("analysis_state")
+    return result
+
+
+@router.get(
     "/cases/{case_id}/memory/evidences/{evidence_id}/findevil/processes",
     response_model=None,
 )
@@ -4629,6 +4661,7 @@ def get_command_line_history(
     time_to: str | None = Query(default=None),
     profile: str | None = Query(default=None),
     sort_order: str = Query(default="oldest_first"),
+    group_identical: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -4650,6 +4683,7 @@ def get_command_line_history(
         time_to=time_to,
         profile=profile,
         sort_order=sort_order,
+        group_identical=group_identical,
         page=page,
         page_size=page_size,
     )
