@@ -63,9 +63,11 @@ class MemoryEvidenceRead(BaseModel):
 class MemoryEvidenceReadinessRead(BaseModel):
     exists: bool
     regular_file: bool
-    readable_by_memory_worker: bool
+    # None until the memory worker has checked access itself.
+    readable_by_memory_worker: bool | None = None
     size_matches: bool
-    output_writable_by_memory_worker: bool
+    output_writable_by_memory_worker: bool | None = None
+    access_verified: bool = False
     worker_online: bool
     backend_ready: bool
     can_analyze: bool

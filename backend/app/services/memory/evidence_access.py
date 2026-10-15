@@ -107,33 +107,22 @@ def validate_current_process_output_access() -> Path:
     return resolved
 
 
-def _has_permission(metadata: os.stat_result, uid: int, gids: set[int], owner_bit: int, group_bit: int, other_bit: int) -> bool:
-    mode = stat.S_IMODE(metadata.st_mode)
-    if uid == metadata.st_uid:
-        return bool(mode & owner_bit)
-    if metadata.st_gid in gids:
-        return bool(mode & group_bit)
-    return bool(mode & other_bit)
+def evidence_readiness(evidence: Evidence, *, settings=None, redis_conn=None) -> dict[str, object]:
+    """Whether a new analysis of ``evidence`` can run now.
 
+    The backend checks only what it observes the same way the worker does:
+    the file exists, is regular and has its registered size. Whether the
+    worker can read it and write its output is answered by the worker itself
+    (see ``worker_access_probe``); owner and mode bits are not a reliable
+    prediction on every storage. Until the worker has answered, access is
+    reported as unverified and does not block -- a problem is only reported
+    once it has been observed.
+    """
+    from app.services.memory.worker_access_probe import file_identity, worker_evidence_access
 
-def _worker_can_traverse(path: Path, uid: int, gids: set[int]) -> bool:
-    for parent in [path.anchor and Path(path.anchor), *path.parents[::-1]]:
-        if not parent:
-            continue
-        try:
-            metadata = parent.stat()
-        except OSError:
-            return False
-        if not _has_permission(metadata, uid, gids, stat.S_IXUSR, stat.S_IXGRP, stat.S_IXOTH):
-            return False
-    return True
-
-
-def evidence_readiness(evidence: Evidence, *, settings=None) -> dict[str, object]:
     settings = settings or get_settings()
-    uid = int(settings.memory_worker_uid)
-    gids = {int(settings.memory_evidence_shared_gid), int(settings.memory_worker_gid)}
-    exists = regular = readable = size_matches = False
+    exists = regular = size_matches = False
+    identity: str | None = None
     error_code: str | None = None
     message = "Memory evidence is available to the dedicated memory worker."
     try:
@@ -142,34 +131,34 @@ def evidence_readiness(evidence: Evidence, *, settings=None) -> dict[str, object
         exists = True
         regular = stat.S_ISREG(metadata.st_mode) and not path.is_symlink()
         size_matches = regular and metadata.st_size == int(evidence.size_bytes or 0)
-        readable = regular and _worker_can_traverse(path, uid, gids) and _has_permission(metadata, uid, gids, stat.S_IRUSR, stat.S_IRGRP, stat.S_IROTH)
-        if not readable:
-            error_code, message = "MEMORY_EVIDENCE_PERMISSION_DENIED", PERMISSION_MESSAGE
+        identity = file_identity(metadata)
+        if not regular:
+            error_code, message = "UNSAFE_EVIDENCE_FILE", "Memory evidence path must be a regular file."
         elif not size_matches:
             error_code, message = "EVIDENCE_SIZE_MISMATCH", "Memory evidence size does not match its registration metadata."
     except MemoryStorageAccessError as exc:
         error_code, message = exc.code, exc.message
 
-    output_writable = False
-    output_root = settings.memory_output_root
-    if output_root is not None:
-        try:
-            output_metadata = output_root.resolve(strict=True).stat()
-            output_path = output_root.resolve(strict=True)
-            output_writable = _worker_can_traverse(output_path, uid, gids) and _has_permission(output_metadata, uid, gids, stat.S_IWUSR, stat.S_IWGRP, stat.S_IWOTH) and _has_permission(output_metadata, uid, gids, stat.S_IXUSR, stat.S_IXGRP, stat.S_IXOTH)
-        except OSError:
-            output_writable = False
-    else:
-        output_writable = True
-    if readable and size_matches and not output_writable:
-        error_code, message = "MEMORY_OUTPUT_PERMISSION_DENIED", OUTPUT_PERMISSION_MESSAGE
-    can_analyze = bool(exists and regular and readable and size_matches and output_writable)
+    readable: bool | None = None
+    output_writable: bool | None = None
+    access_verified = False
+    if exists and regular and size_matches:
+        access = worker_evidence_access(redis_conn, str(evidence.id), identity)
+        if access is not None:
+            access_verified = True
+            readable = bool(access.get("readable"))
+            output_writable = bool(access.get("output_writable"))
+            if not (readable and output_writable):
+                error_code = str(access.get("error_code") or ("MEMORY_EVIDENCE_PERMISSION_DENIED" if not readable else "MEMORY_OUTPUT_PERMISSION_DENIED"))
+                message = str(access.get("message") or (PERMISSION_MESSAGE if not readable else OUTPUT_PERMISSION_MESSAGE))
+    can_analyze = bool(exists and regular and size_matches and readable is not False and output_writable is not False)
     return {
         "exists": exists,
         "regular_file": regular,
         "readable_by_memory_worker": readable,
         "size_matches": size_matches,
         "output_writable_by_memory_worker": output_writable,
+        "access_verified": access_verified,
         "can_analyze": can_analyze,
         "error_code": error_code,
         "sanitized_message": message,

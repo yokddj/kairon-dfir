@@ -5,6 +5,7 @@ from rq import Worker
 
 from app.core.config import get_settings
 from app.core.database import init_db
+from app.services.memory.worker_access_probe import start_access_probe_server
 from app.services.memory.worker_capability import publish_memory_worker_capability, start_memory_worker_heartbeat
 
 
@@ -17,6 +18,7 @@ def main() -> None:
     connection = Redis.from_url(settings.redis_url)
     publish_memory_worker_capability(connection)
     start_memory_worker_heartbeat(connection)
+    start_access_probe_server(connection)
     worker = Worker([settings.memory_queue_name], connection=connection)
     worker.work()
 
