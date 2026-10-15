@@ -108,9 +108,19 @@ def serve_access_requests(redis_conn: Redis, *, block_seconds: int = 5) -> None:
             time.sleep(1)
 
 
-def start_access_probe_server(redis_conn: Redis) -> threading.Thread:
+def start_access_probe_server(redis_conn: Redis, *, block_seconds: int = 5) -> threading.Thread:
+    # A connection of its own: a shared one may carry a socket timeout shorter
+    # than the blocking wait, which turns every idle BLPOP into an error and
+    # can drop a request Redis already handed out.
+    kwargs = dict(redis_conn.connection_pool.connection_kwargs)
+    kwargs["socket_timeout"] = block_seconds + 10
+    probe_conn = Redis(connection_pool=redis_conn.connection_pool.__class__(**kwargs))
     thread = threading.Thread(
-        target=serve_access_requests, args=(redis_conn,), name="memory-access-probe", daemon=True
+        target=serve_access_requests,
+        args=(probe_conn,),
+        kwargs={"block_seconds": block_seconds},
+        name="memory-access-probe",
+        daemon=True,
     )
     thread.start()
     return thread
