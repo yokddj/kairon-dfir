@@ -60,6 +60,51 @@ export const MEMORY_TABS: ReadonlyArray<{ key: MemoryTab; label: string; testId:
   { key: "raw", label: "Raw Observations", testId: "memory-tab-raw", routeSegment: "raw" },
 ];
 
+// The tab bar groups the tabs by what the analyst is doing, so the first row
+// stays short: a group with one view is a plain tab; a group with several
+// shows them as a second row when it is active. Groups only change the bar --
+// every tab keeps its own key and route, so links and deep links still work.
+export type MemoryTabGroup = {
+  key: string;
+  label: string;
+  tabs: ReadonlyArray<{ tab: MemoryTab; label: string }>;
+};
+
+export const MEMORY_TAB_GROUPS: ReadonlyArray<MemoryTabGroup> = [
+  { key: "overview", label: "Overview", tabs: [{ tab: "overview", label: "Overview" }] },
+  { key: "processes", label: "Processes", tabs: [{ tab: "processes", label: "List" }, { tab: "graph", label: "Graph" }] },
+  { key: "find_evil", label: "Find Evil", tabs: [{ tab: "find_evil", label: "Find Evil" }] },
+  { key: "shell_history", label: "Shell History", tabs: [{ tab: "shell_history", label: "Shell History" }] },
+  { key: "timeline", label: "Timeline", tabs: [{ tab: "timeline", label: "Timeline" }] },
+  { key: "network", label: "Network", tabs: [{ tab: "network", label: "Network" }] },
+  {
+    key: "code",
+    label: "Code in memory",
+    tabs: [
+      { tab: "suspicious", label: "Suspicious Memory" },
+      { tab: "modules", label: "Modules & DLLs" },
+      { tab: "handles", label: "Handles" },
+      { tab: "vads", label: "VADs" },
+    ],
+  },
+  { key: "kernel", label: "Kernel", tabs: [{ tab: "kernel", label: "Kernel Modules" }, { tab: "drivers", label: "Drivers" }] },
+  { key: "files", label: "Files", tabs: [{ tab: "files", label: "Files" }] },
+  { key: "memprocfs", label: "MemProcFS", tabs: [{ tab: "memprocfs", label: "MemProcFS" }] },
+  {
+    key: "more",
+    label: "More",
+    tabs: [
+      { tab: "system", label: "System" },
+      { tab: "runs", label: "Runs" },
+      { tab: "raw", label: "Raw Observations" },
+    ],
+  },
+];
+
+export function memoryTabGroupOf(tab: MemoryTab): MemoryTabGroup | undefined {
+  return MEMORY_TAB_GROUPS.find((group) => group.tabs.some((item) => item.tab === tab));
+}
+
 // "artifacts" is a real route/subview (registered in App.tsx, rendered by
 // MemoryWorkspace) but deliberately not a clickable tab in MEMORY_TABS --
 // it's reached via family links/CTAs, not the tab bar. It still has to be

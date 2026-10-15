@@ -3,7 +3,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import MemoryEvidencePage from "./MemoryEvidencePage";
-import { routeSegmentFromTab, type MemoryTab } from "../lib/memoryWorkspaceState";
+import { routeSegmentFromTab, type MemoryTab } from "../lib/memoryWorkspaceState";import { openMemoryTab } from "../test/memoryTabs";
+
 
 const getMemoryOverviewMock = vi.fn();
 const getMemoryBackendOverviewMock = vi.fn();
@@ -397,7 +398,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 2. System info separates Analysis engine and Guest system
   it("separates Analysis engine from Guest system in the System tab", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-system"));
+    await openMemoryTab("system");
     expect(await screen.findByTestId("memory-system-tab")).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByTestId("system-info-card-primary")).toBeInTheDocument();
@@ -410,7 +411,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 3. System info shows Windows build not Volatility version
   it("does not use the Volatility version as Windows build", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-system"));
+    await openMemoryTab("system");
     const primary = await screen.findByTestId("system-info-card-primary");
     const guestSection = primary.querySelector('[data-testid="guest-system-section"]');
     expect(guestSection).toBeTruthy();
@@ -422,7 +423,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 4. Processes table has internal scroll
   it("renders the Processes table with internal horizontal scroll", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     const container = await screen.findByTestId("canonical-process-table-container");
     expect(container.className).toContain("overflow-x-auto");
     expect(container.className).toContain("max-w-full");
@@ -431,7 +432,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 5. Inspect opens drawer
   it("opens the process detail drawer when clicking inspect", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     await waitFor(() => {
       expect(getCanonicalProcessEntitiesMock).toHaveBeenCalled();
     });
@@ -443,7 +444,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 6. Drawer closes with Escape
   it("closes the drawer with Escape", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     await waitFor(() => {
       expect(getCanonicalProcessEntitiesMock).toHaveBeenCalled();
     });
@@ -455,7 +456,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 7. Indented tree renders
   it("renders the Indented tree sub-view", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
+    await openMemoryTab("graph");
     await screen.findByTestId("memory-graph-tab");
     fireEvent.click(await screen.findByTestId("graph-subview-tree"));
     expect(await screen.findByTestId("indented-tree")).toBeInTheDocument();
@@ -464,7 +465,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 8. Indented tree shows PID 4 once
   it("shows PID 4 as a unique root in the Indented tree", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
+    await openMemoryTab("graph");
     await screen.findByTestId("memory-graph-tab");
     fireEvent.click(await screen.findByTestId("graph-subview-tree"));
     await screen.findByTestId("indented-tree");
@@ -476,7 +477,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 9. Indented tree expand/collapse
   it("expands a node when clicking the toggle", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
+    await openMemoryTab("graph");
     await screen.findByTestId("memory-graph-tab");
     fireEvent.click(await screen.findByTestId("graph-subview-tree"));
     await screen.findByTestId("indented-tree");
@@ -488,7 +489,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 10. Indented tree search
   it("searches PID in the Indented tree", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
+    await openMemoryTab("graph");
     await screen.findByTestId("memory-graph-tab");
     fireEvent.click(await screen.findByTestId("graph-subview-tree"));
     await screen.findByTestId("indented-tree");
@@ -502,7 +503,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 11. Indented tree search by name
   it("searches by partial name in the Indented tree", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
+    await openMemoryTab("graph");
     await screen.findByTestId("memory-graph-tab");
     fireEvent.click(await screen.findByTestId("graph-subview-tree"));
     await screen.findByTestId("indented-tree");
@@ -519,7 +520,7 @@ describe("Memory analysis UX fixes v1", () => {
       items: [], total: 200, page: 1, page_size: 50,
     });
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-raw"));
+    await openMemoryTab("raw");
     await screen.findByTestId("memory-raw-tab");
     await waitFor(() => {
       expect(screen.getByTestId("raw-pagination")).toBeInTheDocument();
@@ -536,7 +537,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 13. Raw filter resets
   it("resets raw filters when clicking Reset", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-raw"));
+    await openMemoryTab("raw");
     await screen.findByTestId("memory-raw-tab");
     const pidInput = screen.getByTestId("raw-pid-input");
     fireEvent.change(pidInput, { target: { value: "42" } });
@@ -552,7 +553,7 @@ describe("Memory analysis UX fixes v1", () => {
     await screen.findByTestId("memory-evidence-header");
     expect(screen.queryByTestId("memory-analyze-action")).not.toBeInTheDocument();
     expect(screen.queryByTestId("analyze-profile-select")).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     await screen.findByTestId("memory-processes-tab");
     expect(screen.queryByTestId("memory-analyze-action")).not.toBeInTheDocument();
   });
@@ -568,7 +569,7 @@ describe("Memory analysis UX fixes v1", () => {
   it("does not render private server paths anywhere", async () => {
     renderPage();
     expect(screen.queryByText(/\/opt\/private/)).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByTestId("memory-tab-system"));
+    await openMemoryTab("system");
     await screen.findByTestId("memory-system-tab");
     expect(screen.queryByText(/C:\\private/)).not.toBeInTheDocument();
   });
@@ -589,7 +590,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 18. Drawer Escape closes
   it("closes the drawer when Escape is pressed", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     await waitFor(() => {
       expect(getCanonicalProcessEntitiesMock).toHaveBeenCalled();
     });
@@ -607,13 +608,13 @@ describe("Memory analysis UX fixes v1", () => {
   // 20. Tabs persist selected entity
   it("keeps the selected entity in sync across tab switches", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     await waitFor(() => {
       expect(getCanonicalProcessEntitiesMock).toHaveBeenCalled();
     });
-    fireEvent.click(await screen.findByTestId("memory-tab-runs"));
+    await openMemoryTab("runs");
     await screen.findByTestId("memory-runs-tab");
-    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     await screen.findByTestId("memory-processes-tab");
   });
 
@@ -644,7 +645,7 @@ describe("Memory analysis UX fixes v1", () => {
       source_record_refs: ["obs-1"],
     });
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     await screen.findByTestId("memory-processes-tab");
     // The "Inspect" button is rendered in MemoryCanonicalView's table.
     const inspectButton = (await screen.findAllByText("Inspect"))[0];
@@ -657,7 +658,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 22. The old side drawer is no longer rendered
   it("does not render the legacy side drawer", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     await screen.findByTestId("memory-processes-tab");
     expect(screen.queryByTestId("process-detail-drawer")).not.toBeInTheDocument();
     expect(screen.queryByTestId("process-detail-drawer-panel")).not.toBeInTheDocument();
@@ -690,7 +691,7 @@ describe("Memory analysis UX fixes v1", () => {
       source_record_refs: ["obs-1"],
     });
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     await screen.findByTestId("memory-processes-tab");
     const inspectButton = (await screen.findAllByText("Inspect"))[0];
     fireEvent.click(inspectButton);
@@ -710,7 +711,7 @@ describe("Memory analysis UX fixes v1", () => {
       metrics: { ...treeResponse().metrics, orphans: 1 },
     }));
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
+    await openMemoryTab("graph");
     await screen.findByTestId("memory-graph-tab");
     fireEvent.click(await screen.findByTestId("graph-subview-tree"));
     await screen.findByTestId("indented-tree");
@@ -790,7 +791,7 @@ describe("Memory analysis UX fixes v1", () => {
       source_record_refs: ["obs-1"],
     });
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-raw"));
+    await openMemoryTab("raw");
     await screen.findByTestId("memory-raw-tab");
     const link = await screen.findByTestId("raw-link-canonical");
     fireEvent.click(link);
@@ -800,7 +801,7 @@ describe("Memory analysis UX fixes v1", () => {
   // 26. Metrics strip does not render 0 / 12 simultaneously
   it("renders a single metrics strip with consistent values", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
+    await openMemoryTab("graph");
     await screen.findByTestId("memory-graph-tab");
     const strip = await screen.findByTestId("metrics-strip");
     expect(strip).toBeInTheDocument();
@@ -821,11 +822,17 @@ describe("Memory analysis UX fixes v1", () => {
   // (the redundant internal Artifacts subview switcher was removed --
   // network/modules/handles/drivers/kernel/suspicious are each reached
   // directly, not via an in-page pill switcher).
-  it("lists every Artifacts subview as its own top-level tab", async () => {
+  it("reaches every Artifacts subview from the tab bar, grouped by what it covers", async () => {
     renderPage();
     await screen.findByTestId("memory-subview-tabs");
-    for (const sv of ["network", "modules", "handles", "drivers", "kernel", "suspicious"]) {
-      expect(screen.getByTestId(`memory-tab-${sv}`)).toBeInTheDocument();
+    // Network is a tab of its own; the others sit in the "Code in memory" and "Kernel" groups.
+    expect(screen.getByTestId("memory-tab-network")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-tab-group-code")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-tab-group-kernel")).toBeInTheDocument();
+    for (const sv of ["modules", "handles", "suspicious", "drivers", "kernel"] as const) {
+      const tab = await openMemoryTab(sv);
+      await waitFor(() => expect(screen.getByTestId(`memory-tab-${sv}`)).toHaveAttribute("aria-selected", "true"));
+      expect(tab).toBeInTheDocument();
     }
   });
 
@@ -948,9 +955,23 @@ describe("Memory analysis UX fixes v1", () => {
   });
 
   // 40. Runs tab shows the new profile names
+  it("reopens a group on the view last used in it", async () => {
+    renderPage();
+    await screen.findByTestId("memory-subview-tabs");
+    await openMemoryTab("handles");
+    await waitFor(() => expect(screen.getByTestId("memory-tab-handles")).toHaveAttribute("aria-selected", "true"));
+    fireEvent.click(screen.getByTestId("memory-tab-overview"));
+    await waitFor(() => expect(screen.queryByTestId("memory-subview-group-tabs")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("memory-tab-group-code"));
+
+    await waitFor(() => expect(screen.getByTestId("memory-tab-handles")).toHaveAttribute("aria-selected", "true"));
+  });
+
   it("renders the Runs tab without errors", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-runs"));
-    expect(await screen.findByTestId("memory-runs-tab")).toBeInTheDocument();
+    await openMemoryTab("runs");
+    // Re-rendered as its runs query settles: wait for the settled tab, not the first paint.
+    await waitFor(() => expect(screen.getByTestId("memory-runs-tab")).toBeInTheDocument());
   });
 });
