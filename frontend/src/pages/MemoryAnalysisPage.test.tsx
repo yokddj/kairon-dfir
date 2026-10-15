@@ -2,7 +2,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import MemoryEvidencePage from "./MemoryEvidencePage";
+import MemoryEvidencePage from "./MemoryEvidencePage";import { openMemoryTab } from "../test/memoryTabs";
+import type { MemoryTab } from "../lib/memoryWorkspaceState";
+
 
 // Exposes the router's current pathname+search as a testid so tests can
 // assert on location.pathname the same way a real click-through in the
@@ -451,7 +453,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 2. Processes tab shows the canonical table
   it("renders the Processes tab with the canonical table", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     expect(await screen.findByTestId("memory-processes-tab")).toBeInTheDocument();
     await waitFor(() => {
       expect(getCanonicalProcessEntitiesMock).toHaveBeenCalled();
@@ -461,7 +463,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 3. Graph tab shows graph
   it("renders the Graph tab with the interactive graph", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
+    await openMemoryTab("graph");
     expect(await screen.findByTestId("memory-graph-tab")).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByTestId("memory-process-canvas")).toBeInTheDocument();
@@ -472,7 +474,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 4. System tab shows only latest successful by default
   it("renders the System tab with the latest successful windows.info", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-system"));
+    await openMemoryTab("system");
     expect(await screen.findByTestId("memory-system-tab")).toBeInTheDocument();
     const primary = await screen.findByTestId("system-info-card-primary");
     expect(primary).toHaveTextContent("WS01");
@@ -481,7 +483,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 5. Runs tab contains history
   it("renders the Runs tab with the full history", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-runs"));
+    await openMemoryTab("runs");
     expect(await screen.findByTestId("memory-runs-tab")).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByTestId("runs-table")).toBeInTheDocument();
@@ -506,7 +508,9 @@ describe("MemoryAnalysisPage workspace", () => {
     // this doubles as the "reload keeps Runs active" check from the spec.
     expect(screen.getByTestId("memory-tab-runs")).toHaveAttribute("aria-selected", "true");
     expect(screen.getByTestId("memory-tab-overview")).toHaveAttribute("aria-selected", "false");
-    expect(screen.getByTestId("memory-tab-processes")).toHaveAttribute("aria-selected", "false");
+    // Runs lives in the "More" group; Processes is a closed group here.
+    expect(screen.getByTestId("memory-tab-group-more")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("memory-tab-group-processes")).toHaveAttribute("aria-selected", "false");
   });
 
   it("never widens the Runs query to case-wide when loaded for a specific evidence", async () => {
@@ -557,7 +561,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 6. Raw tab contains legacy views
   it("renders the Raw tab with legacy plugin observations", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-raw"));
+    await openMemoryTab("raw");
     expect(await screen.findByTestId("memory-raw-tab")).toBeInTheDocument();
     expect(screen.getByTestId("raw-plugin-filter")).toBeInTheDocument();
   });
@@ -568,7 +572,7 @@ describe("MemoryAnalysisPage workspace", () => {
       plugin_facets: [{ value: "linux.psaux", count: 12 }, { value: "linux.pslist", count: 10 }],
     });
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-raw"));
+    await openMemoryTab("raw");
     await waitFor(() =>
       expect(getCaseMemoryProcessesMock).toHaveBeenCalledWith("case-1", expect.objectContaining({ evidence_id: "ev-memory", include_facets: true })),
     );
@@ -608,18 +612,18 @@ describe("MemoryAnalysisPage workspace", () => {
   // 9. Tab navigation preserves run
   it("preserves the run selection when switching tabs", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-runs"));
+    await openMemoryTab("runs");
     expect(await screen.findByTestId("memory-runs-tab")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     expect(await screen.findByTestId("memory-processes-tab")).toBeInTheDocument();
   });
 
   // 10. Tab navigation preserves filters (processName stays in URL or shared state)
   it("preserves shared state across tabs", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     expect(await screen.findByTestId("memory-processes-tab")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("memory-tab-raw"));
+    await openMemoryTab("raw");
     expect(await screen.findByTestId("memory-raw-tab")).toBeInTheDocument();
   });
 
@@ -634,14 +638,14 @@ describe("MemoryAnalysisPage workspace", () => {
   // 12. Graph detail panel appears on the right in desktop
   it("renders a single shared metrics strip in the Graph tab", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
+    await openMemoryTab("graph");
     expect(await screen.findByTestId("metrics-strip")).toBeInTheDocument();
   });
 
   // 13. Renamed graph metrics
   it("renames graph metrics in the Graph tab header", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
+    await openMemoryTab("graph");
     expect(await screen.findByTestId("metrics-strip-visible")).toBeInTheDocument();
     expect(screen.getByTestId("metrics-strip-orphans")).toBeInTheDocument();
   });
@@ -649,7 +653,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 14. Case roots vs current-view roots differentiated
   it("differentiates case roots and current-view roots in the Graph tab", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
+    await openMemoryTab("graph");
     await screen.findByTestId("metrics-strip-case-roots");
     expect(screen.getByTestId("metrics-strip-case-roots")).toBeInTheDocument();
     expect(screen.getByTestId("metrics-strip-view-roots")).toBeInTheDocument();
@@ -695,14 +699,15 @@ describe("MemoryAnalysisPage workspace", () => {
     const overview = await screen.findByTestId("memory-tab-overview");
     expect(overview.getAttribute("role")).toBe("tab");
     expect(overview.getAttribute("aria-selected")).toBe("true");
-    const processes = screen.getByTestId("memory-tab-processes");
+    const processes = screen.getByTestId("memory-tab-group-processes");
+    expect(processes.getAttribute("role")).toBe("tab");
     expect(processes.getAttribute("aria-selected")).toBe("false");
   });
 
   // 20. Existing MemoryCanonicalView behavior preserved
   it("keeps the canonical MemoryCanonicalView mounted inside the Processes tab", async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
+    await openMemoryTab("processes");
     await waitFor(() => {
       expect(getCanonicalProcessEntitiesMock).toHaveBeenCalled();
     });
@@ -727,10 +732,10 @@ describe("MemoryAnalysisPage workspace", () => {
     { key: "raw", segment: "raw", tabTestId: "memory-tab-raw", panelTestId: "memory-tabpanel-raw" },
   ];
 
-  it.each(ALL_TABS)("clicking $key navigates to the evidence-scoped URL, activates the tab, and renders its subview", async ({ segment, tabTestId, panelTestId }) => {
+  it.each(ALL_TABS)("clicking $key navigates to the evidence-scoped URL, activates the tab, and renders its subview", async ({ key, segment, tabTestId, panelTestId }) => {
     renderPage();
     await screen.findByTestId("memory-overview");
-    fireEvent.click(screen.getByTestId(tabTestId));
+    await openMemoryTab(key as MemoryTab);
 
     await waitFor(() => {
       expect(screen.getByTestId("current-location")).toHaveTextContent(`/cases/case-1/m/ev-memory/${segment}`);
@@ -779,13 +784,13 @@ describe("MemoryAnalysisPage workspace", () => {
     renderPage("/cases/case-1/m/ev-memory/processes?tab=overview");
     await screen.findByTestId("memory-tabpanel-processes");
 
-    fireEvent.click(screen.getByTestId("memory-tab-graph"));
+    await openMemoryTab("graph");
     expect(await screen.findByTestId("memory-tabpanel-graph")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId("memory-tab-network"));
+    await openMemoryTab("network");
     expect(await screen.findByTestId("memory-tabpanel-network")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId("memory-tab-runs"));
+    await openMemoryTab("runs");
     expect(await screen.findByTestId("memory-tabpanel-runs")).toBeInTheDocument();
   });
 

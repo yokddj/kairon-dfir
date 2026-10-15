@@ -7,7 +7,7 @@ import {
   api,
 } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
-import { MEMORY_TABS, useMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
+import { MEMORY_TAB_GROUPS, MEMORY_TABS, memoryTabGroupOf, useMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 import { memoryTabApplies } from "../lib/memoryPlatformViews";
 import { MemoryOverviewTab } from "./memory/MemoryOverviewTab";
 import { MemoryProcessesTab } from "./memory/MemoryProcessesTab";
@@ -134,6 +134,20 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
   });
   const resultViews = evidenceIdProp ? evidencePreparationQuery.data?.result_views ?? null : null;
   const visibleTabs = MEMORY_TABS.filter((item) => item.key === tab || memoryTabApplies(item.key, resultViews));
+  const testIdOf = new Map(MEMORY_TABS.map((item) => [item.key, item.testId]));
+  const visibleKeys = new Set(visibleTabs.map((item) => item.key));
+  // Groups with none of their views on this platform disappear; a group with
+  // one remaining view is a plain tab.
+  const visibleGroups = MEMORY_TAB_GROUPS
+    .map((group) => ({ ...group, tabs: group.tabs.filter((item) => visibleKeys.has(item.tab)) }))
+    .filter((group) => group.tabs.length > 0);
+  const activeGroup = visibleGroups.find((group) => group.tabs.some((item) => item.tab === tab)) ?? null;
+  // Reopening a group returns to the view last used in it.
+  const [lastTabByGroup, setLastTabByGroup] = useState<Record<string, MemoryTab>>({});
+  useEffect(() => {
+    const group = memoryTabGroupOf(tab);
+    if (group) setLastTabByGroup((prev) => (prev[group.key] === tab ? prev : { ...prev, [group.key]: tab }));
+  }, [tab]);
 
   const overview = overviewQuery.data;
 
@@ -281,27 +295,63 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
         className="flex flex-wrap gap-2 rounded-[28px] border border-line bg-panel/60 p-3 shadow-panel"
         data-testid="memory-subview-tabs"
       >
-        {visibleTabs.map((item) => (
-          <button
-            key={item.key}
-            type="button"
-            id={`memory-tab-${item.key}`}
-            role="tab"
-            aria-selected={tab === item.key}
-            aria-controls={`memory-tabpanel-${item.key}`}
-            data-testid={item.testId}
-            onClick={() => onTabChange(item.key)}
-            className={
-              "rounded-xl px-3 py-2 text-xs transition " +
-              (tab === item.key
-                ? "bg-accent text-abyss"
-                : "border border-line bg-abyss/70 text-muted hover:text-ink")
-            }
-          >
-            {item.label}
-          </button>
-        ))}
+        {visibleGroups.map((group) => {
+          const single = group.tabs.length === 1;
+          const selected = activeGroup?.key === group.key;
+          const target = (lastTabByGroup[group.key] && group.tabs.some((item) => item.tab === lastTabByGroup[group.key]))
+            ? lastTabByGroup[group.key]
+            : group.tabs[0].tab;
+          return (
+            <button
+              key={group.key}
+              type="button"
+              id={single ? `memory-tab-${group.tabs[0].tab}` : `memory-tab-group-${group.key}`}
+              role="tab"
+              aria-selected={selected}
+              aria-controls={`memory-tabpanel-${tab}`}
+              data-testid={single ? testIdOf.get(group.tabs[0].tab) : `memory-tab-group-${group.key}`}
+              onClick={() => onTabChange(target)}
+              className={
+                "rounded-xl px-3 py-2 text-xs transition " +
+                (selected
+                  ? "bg-accent text-abyss"
+                  : "border border-line bg-abyss/70 text-muted hover:text-ink")
+              }
+            >
+              {group.label}
+              {single ? null : <span className="ml-1 opacity-70" aria-hidden="true">▾</span>}
+            </button>
+          );
+        })}
       </nav>
+
+      {activeGroup && activeGroup.tabs.length > 1 ? (
+        <nav
+          role="tablist"
+          aria-label={activeGroup.label}
+          className="-mt-3 flex flex-wrap gap-1 px-3"
+          data-testid="memory-subview-group-tabs"
+        >
+          {activeGroup.tabs.map((item) => (
+            <button
+              key={item.tab}
+              type="button"
+              id={`memory-tab-${item.tab}`}
+              role="tab"
+              aria-selected={tab === item.tab}
+              aria-controls={`memory-tabpanel-${item.tab}`}
+              data-testid={testIdOf.get(item.tab)}
+              onClick={() => onTabChange(item.tab)}
+              className={
+                "rounded-lg px-3 py-1.5 text-xs transition " +
+                (tab === item.tab ? "bg-accent/15 text-accent" : "text-muted hover:text-ink")
+              }
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+      ) : null}
 
       <div role="tabpanel"
         id={`memory-tabpanel-${tab}`}
