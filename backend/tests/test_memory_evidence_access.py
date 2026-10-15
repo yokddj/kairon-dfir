@@ -235,3 +235,25 @@ def test_missing_canonical_storage_reports_storage_failure_without_path(tmp_path
 
     assert exc_info.value.code == "EVIDENCE_FILE_NOT_FOUND"
     assert str(canonical_path) not in exc_info.value.message
+
+
+def test_probe_server_waits_longer_than_its_blocking_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    from redis import Redis
+
+    started = {}
+
+    class _Thread:
+        def __init__(self, target, args, kwargs, name, daemon):
+            started.update(conn=args[0], block=kwargs["block_seconds"])
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(worker_access_probe.threading, "Thread", _Thread)
+    shared = Redis.from_url("redis://127.0.0.1:1/0", socket_timeout=2)
+
+    worker_access_probe.start_access_probe_server(shared, block_seconds=5)
+
+    timeout = started["conn"].connection_pool.connection_kwargs["socket_timeout"]
+    assert timeout > started["block"]
+    assert started["conn"].connection_pool is not shared.connection_pool
