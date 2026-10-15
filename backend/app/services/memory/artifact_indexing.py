@@ -231,10 +231,30 @@ def _source_clause(value: str) -> dict[str, Any]:
     """Where a document was recovered from: ``recovered_from`` when the
     normalizer records it (Windows consoles, PSReadLine), otherwise the
     plugin that produced it (e.g. linux.bash)."""
+    # Case indexes created before these fields were declared hold them as
+    # text with a keyword sub-field; newer ones as keyword. Match either.
+    def term(field: str) -> dict[str, Any]:
+        return {"bool": {"should": [{"term": {field: value}}, {"term": {f"{field}.keyword": value}}], "minimum_should_match": 1}}
+
     return {"bool": {"should": [
-        {"term": {"recovered_from": value}},
-        {"bool": {"filter": [{"term": {"source_plugin": value}}], "must_not": [{"exists": {"field": "recovered_from"}}]}},
+        term("recovered_from"),
+        {"bool": {"filter": [term("source_plugin")], "must_not": [{"exists": {"field": "recovered_from"}}]}},
     ], "minimum_should_match": 1}}
+
+
+def _aggregatable_field(client: Any, index: str, field: str) -> str:
+    """``field`` when the index maps it as keyword, else its ``.keyword``
+    sub-field (indexes that mapped it dynamically as text)."""
+    try:
+        mapping = client.indices.get_field_mapping(index=index, fields=field, params={"ignore_unavailable": "true"})
+    except Exception:  # noqa: BLE001
+        return field
+    for index_mapping in (mapping or {}).values():
+        leaf = field.rsplit(".", 1)[-1]
+        definition = (((index_mapping or {}).get("mappings") or {}).get(field) or {}).get("mapping", {}).get(leaf, {})
+        if definition.get("type") == "text":
+            return f"{field}.keyword"
+    return field
 
 
 def artifact_source_facets(case_id: str, *, document_type: str, run_id: str, evidence_id: str | None = None) -> list[dict[str, Any]]:
@@ -247,19 +267,23 @@ def artifact_source_facets(case_id: str, *, document_type: str, run_id: str, evi
     ]
     if evidence_id:
         query_filters.append({"term": {"evidence_id": evidence_id}})
+    client = get_opensearch_client()
+    index = get_memory_index(case_id)
+    recovered_from = _aggregatable_field(client, index, "recovered_from")
+    source_plugin = _aggregatable_field(client, index, "source_plugin")
     body = {
         "size": 0,
         "timeout": "5s",
         "query": {"bool": {"filter": query_filters}},
         "aggs": {
-            "recovered_from": {"terms": {"field": "recovered_from", "size": 50}},
+            "recovered_from": {"terms": {"field": recovered_from, "size": 50}},
             "plugin_only": {
                 "filter": {"bool": {"must_not": [{"exists": {"field": "recovered_from"}}]}},
-                "aggs": {"source_plugin": {"terms": {"field": "source_plugin", "size": 50}}},
+                "aggs": {"source_plugin": {"terms": {"field": source_plugin, "size": 50}}},
             },
         },
     }
-    response = get_opensearch_client().search(index=get_memory_index(case_id), body=body, params={"ignore_unavailable": "true"})
+    response = client.search(index=index, body=body, params={"ignore_unavailable": "true"})
     aggs = response.get("aggregations") or {}
     buckets = list((aggs.get("recovered_from") or {}).get("buckets") or [])
     buckets += list(((aggs.get("plugin_only") or {}).get("source_plugin") or {}).get("buckets") or [])
