@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { type MemoryRunSelector, api } from "../../api/client";
+import { FacetSelect } from "./FacetSelect";
 import { MemoryPaginationControls } from "./MemoryPaginationControls";
 
 type Props = {
@@ -84,13 +85,16 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
     queryFn: () =>
       api.getMemoryActiveResult(caseId, evidenceId || "", "find_evil", selectedRunId || undefined, {
         review_priority: priority || undefined,
-        indicator_type: indicatorType.trim().toUpperCase() || undefined,
+        indicator_type: indicatorType || undefined,
         pid: pidFilter ? Number(pidFilter) : undefined,
+        facet_fields: ["indicator_type", "review_priority"],
         page,
         page_size: pageSize,
       }),
     enabled: Boolean(caseId && evidenceId),
     refetchOnWindowFocus: false,
+    // Keep the previous page (and its filter options) while a new filter loads.
+    placeholderData: (previous) => previous,
   });
 
   const result = activeResultQuery.data;
@@ -99,6 +103,9 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const state = result?.analysis_state ?? "not_analyzed";
   const filtered = Boolean(priority || indicatorType || pidFilter);
+  const typeFacets = result?.facets?.indicator_type ?? [];
+  const priorityCounts = new Map((result?.facets?.review_priority ?? []).map((f) => [f.value, f.count]));
+  const priorityTotal = [...priorityCounts.values()].reduce((sum, n) => sum + n, 0);
 
   return (
     <div className="space-y-4" data-testid="memory-findevil-tab">
@@ -106,12 +113,14 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div className="max-w-3xl">
             <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Find Evil</h3>
-            <p className="mt-1 text-xs leading-5 text-muted">
-              Indicators to review from two sources. Kairon's checks over Volatility's output: processes hidden from the process
-              list, with an unexpected parent or masquerading as a system binary, programs run from temporary folders, suspicious
-              command lines, injected code and unlinked modules. MemProcFS FindEvil, when its scan finishes: patched modules,
-              unusual threads and Defender detections still in memory. They are leads, not verdicts: browsers and JIT runtimes
-              produce many low-priority ones on a clean system. The list is sorted with the indicators most worth a look first.
+            <p className="mt-1 text-xs text-muted">
+              Leads to review, most worth a look first.{" "}
+              <span
+                className="cursor-help underline decoration-dotted"
+                title="From two sources. Kairon's checks over Volatility's output: processes hidden from the process list, with an unexpected parent or masquerading as a system binary, programs run from temporary folders, suspicious command lines, injected code and unlinked modules. MemProcFS FindEvil, when its scan finishes: patched modules, unusual threads and Defender detections still in memory. They are leads, not verdicts: browsers and JIT runtimes produce many low-priority ones on a clean system."
+              >
+                ⓘ
+              </span>
             </p>
           </div>
           <RunPicker runOptions={runOptions} selectedRunId={selectedRunId} onSelectRunId={(next) => { onSelectRunId(next); setPage(1); }} />
@@ -129,17 +138,22 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
                 data-testid={`findevil-priority-${option.value || "all"}`}
               >
                 {option.label}
+                {priorityCounts.size > 0 ? (
+                  <span className="ml-1 tabular-nums opacity-70">
+                    {(option.value ? priorityCounts.get(option.value) ?? 0 : priorityTotal).toLocaleString("en-US")}
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>
-          <label className="text-muted" htmlFor="findevil-type">Type</label>
-          <input
-            id="findevil-type"
+          <FacetSelect
             value={indicatorType}
-            onChange={(event) => { setIndicatorType(event.target.value); setPage(1); }}
-            placeholder="PROC_NOLINK"
-            className="w-36 rounded-xl border border-line bg-abyss/70 px-2 py-1 font-mono text-sm"
-            data-testid="findevil-type-input"
+            onChange={(next) => { setIndicatorType(next); setPage(1); }}
+            facets={typeFacets}
+            allLabel="Any type"
+            ariaLabel="Indicator type"
+            testId="findevil-type-input"
+            className="rounded-xl border border-line bg-abyss/70 px-2 py-1 font-mono text-xs"
           />
           <label className="text-muted" htmlFor="findevil-pid">PID</label>
           <input

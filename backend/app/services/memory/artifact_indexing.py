@@ -291,6 +291,38 @@ def artifact_source_facets(case_id: str, *, document_type: str, run_id: str, evi
     return sorted(facets, key=lambda f: -f["count"])
 
 
+# Fields with a small set of values, offered as pickers in the UI.
+FACETABLE_FIELDS = frozenset({
+    "object_type", "review_status", "indicator_type", "review_priority",
+    "protocol", "connection_state", "load_state",
+})
+
+
+def artifact_field_facets(case_id: str, *, document_type: str, run_id: str, field: str, evidence_id: str | None = None) -> list[dict[str, Any]]:
+    """The values ``field`` takes in a run's documents, with counts, so a
+    filter offers what the data has instead of free text the analyst must
+    already know (or a fixed list from one platform)."""
+    if field not in FACETABLE_FIELDS:
+        raise ValueError(f"field {field!r} cannot be faceted")
+    query_filters: list[dict[str, Any]] = [
+        {"term": {"document_type": document_type}},
+        {"term": {"scan_run_id.keyword": run_id}},
+    ]
+    if evidence_id:
+        query_filters.append({"term": {"evidence_id": evidence_id}})
+    client = get_opensearch_client()
+    index = get_memory_index(case_id)
+    body = {
+        "size": 0,
+        "timeout": "5s",
+        "query": {"bool": {"filter": query_filters}},
+        "aggs": {"values": {"terms": {"field": _aggregatable_field(client, index, field), "size": 100}}},
+    }
+    response = client.search(index=index, body=body, params={"ignore_unavailable": "true"})
+    buckets = ((response.get("aggregations") or {}).get("values") or {}).get("buckets") or []
+    return [{"value": str(b["key"]), "count": int(b.get("doc_count") or 0)} for b in buckets if b.get("key") not in (None, "")]
+
+
 def search_artifact_documents(
     case_id: str,
     *,
@@ -359,9 +391,14 @@ def search_artifact_documents(
                     else:
                         query_filters.append({"wildcard": {key: wildcard}})
                     continue
-                query_key = key
-                field = query_key if query_key in _EXACT_TERM_FIELDS else f"{query_key}.keyword"
-                query_filters.append({"term": {field: value}})
+                # Exact value (pickers offer the values the data has). Case indexes
+                # map a field either as keyword or, when it was added dynamically
+                # before being declared, as text with a keyword sub-field: match
+                # both forms so a picked value is found on every index.
+                query_filters.append({"bool": {"should": [
+                    {"term": {key: value}},
+                    {"term": {f"{key}.keyword": value}},
+                ], "minimum_should_match": 1}})
     body = {
         "query": {"bool": {"filter": query_filters}},
         "from": (page - 1) * page_size,

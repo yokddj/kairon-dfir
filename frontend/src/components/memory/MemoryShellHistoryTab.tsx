@@ -424,6 +424,8 @@ function TypedCommands({ caseId, evidenceId, runOptions, selectedRunId, onSelect
       }),
     enabled: Boolean(caseId && evidenceId),
     refetchOnWindowFocus: false,
+    // Keep the previous page (and its filter options) while a new filter loads.
+    placeholderData: (previous) => previous,
   });
 
   const result = activeResultQuery.data;

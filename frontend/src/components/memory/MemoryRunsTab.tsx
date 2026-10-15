@@ -8,8 +8,14 @@ type Props = {
   landingItems: MemoryEvidenceLandingItem[];
 };
 
-type StatusFilter = "all" | "completed" | "failed" | "running" | "queued" | "pending";
-type ProfileFilter = "all" | "metadata_only" | "processes_basic" | "processes_extended";
+// Filter options come from the runs themselves: profiles and statuses are
+// whatever this evidence has actually run (they grow with every new profile
+// and differ per platform), each with its count.
+function countBy(runs: MemoryScanRun[], key: (run: MemoryScanRun) => string): Array<{ value: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const run of runs) counts.set(key(run), (counts.get(key(run)) ?? 0) + 1);
+  return [...counts.entries()].map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+}
 
 function durationLabel(value: number | null | undefined): string {
   if (!value) return "Not reported";
@@ -19,9 +25,9 @@ function durationLabel(value: number | null | undefined): string {
 
 function memoryRunError(run: MemoryScanRun): string {
   const code = String(run.error_log?.code || "");
-  if (code === "SYMBOLS_UNAVAILABLE") return "windows.info could not resolve the required Windows symbols under offline-only mode.";
-  if (code === "UNSUPPORTED_MEMORY_IMAGE" || code === "INVALID_MEMORY_LAYER") return "Volatility could not construct a supported Windows memory layer for this image.";
-  if (code === "VOLATILITY_OUTPUT_INVALID") return "windows.info executed, but its output could not be parsed.";
+  if (code === "SYMBOLS_UNAVAILABLE") return "Volatility could not resolve the symbols this image's kernel needs under offline-only mode.";
+  if (code === "UNSUPPORTED_MEMORY_IMAGE" || code === "INVALID_MEMORY_LAYER") return "Volatility could not construct a supported memory layer for this image.";
+  if (code === "VOLATILITY_OUTPUT_INVALID") return "Volatility ran, but its output could not be parsed.";
   if (code === "MEMORY_SYMBOL_CACHE_NOT_WRITABLE") return "The controlled Volatility symbol cache is not writable.";
   if (["MEMORY_EVIDENCE_PERMISSION_DENIED", "MEMORY_OUTPUT_PERMISSION_DENIED"].includes(code)) return "Evidence unavailable to memory worker. No plugin was executed.";
   return typeof run.error_log?.message === "string" ? run.error_log.message : "None";
@@ -64,8 +70,10 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export function MemoryRunsTab({ evidenceId, runs, landingItems }: Props) {
-  const [status, setStatus] = useState<StatusFilter>("all");
-  const [profile, setProfile] = useState<ProfileFilter>("all");
+  const [status, setStatus] = useState("all");
+  const [profile, setProfile] = useState("all");
+  const statusOptions = useMemo(() => countBy(runs, (run) => run.status), [runs]);
+  const profileOptions = useMemo(() => countBy(runs, (run) => run.profile), [runs]);
   const [failuresOnly, setFailuresOnly] = useState(false);
   const [query, setQuery] = useState("");
 
@@ -118,29 +126,27 @@ export function MemoryRunsTab({ evidenceId, runs, landingItems }: Props) {
             <select
               id="runs-status"
               value={status}
-              onChange={(event) => setStatus(event.target.value as StatusFilter)}
+              onChange={(event) => setStatus(event.target.value)}
               className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm"
               data-testid="runs-status-filter"
             >
               <option value="all">All</option>
-              <option value="completed">Completed</option>
-              <option value="failed">Failed</option>
-              <option value="running">Running</option>
-              <option value="queued">Queued</option>
-              <option value="pending">Pending</option>
+              {statusOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.value} ({option.count})</option>
+              ))}
             </select>
             <label className="text-muted" htmlFor="runs-profile">Profile</label>
             <select
               id="runs-profile"
               value={profile}
-              onChange={(event) => setProfile(event.target.value as ProfileFilter)}
+              onChange={(event) => setProfile(event.target.value)}
               className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm"
               data-testid="runs-profile-filter"
             >
               <option value="all">All</option>
-              <option value="metadata_only">metadata_only</option>
-              <option value="processes_basic">processes_basic</option>
-              <option value="processes_extended">processes_extended</option>
+              {profileOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.value} ({option.count})</option>
+              ))}
             </select>
             <label className="flex items-center gap-1 text-muted">
               <input

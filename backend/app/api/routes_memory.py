@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 import json
 import logging
+import re
 from datetime import datetime, date
 from pathlib import Path
 from typing import Any
@@ -874,6 +875,28 @@ def get_memory_memprocfs_table(
     return memprocfs_table(db, case_id=case_id, evidence_id=evidence_id, table=table, q=q, page=page, page_size=page_size)
 
 
+def _active_result_facets(case_id: str, evidence_id: str, family: str, result: dict, fields: list[str]) -> dict[str, list[dict]]:
+    # Over the whole active run, not the current filters: the options must
+    # not disappear while one of them is selected.
+    from app.services.memory.artifact_indexing import FACETABLE_FIELDS, artifact_field_facets
+    from app.services.memory.counts import FAMILY_TO_DOCUMENT_TYPE
+
+    run = result.get("active_run") or {}
+    document_type = FAMILY_TO_DOCUMENT_TYPE.get(family)
+    facets: dict[str, list[dict]] = {}
+    for field in dict.fromkeys(fields):
+        if field not in FACETABLE_FIELDS:
+            raise HTTPException(status_code=400, detail=f"Field '{field}' cannot be used as a filter facet.")
+        facets[field] = []
+        if not run.get("id") or not document_type:
+            continue
+        try:
+            facets[field] = artifact_field_facets(case_id, document_type=document_type, run_id=str(run["id"]), field=field, evidence_id=evidence_id)
+        except Exception:  # noqa: BLE001 -- the picker just offers no options
+            logger.warning("facets unavailable: family=%s field=%s", family, field, exc_info=True)
+    return facets
+
+
 def _shell_history_source_facets(case_id: str, evidence_id: str, result: dict) -> list[dict]:
     # Unfiltered by the user's filters on purpose: the options must not
     # disappear while one of them is selected.
@@ -913,6 +936,7 @@ def get_memory_active_result(
     process_name: str | None = Query(default=None),
     command: str | None = Query(default=None),
     source: str | None = Query(default=None),
+    facet_fields: list[str] = Query(default=[]),
     module_name: str | None = Query(default=None),
     path: str | None = Query(default=None),
     load_state: str | None = Query(default=None),
@@ -982,6 +1006,8 @@ def get_memory_active_result(
     )
     if family == "shell_history":
         result["source_facets"] = _shell_history_source_facets(case_id, evidence_id, result)
+    if facet_fields:
+        result["facets"] = _active_result_facets(case_id, evidence_id, family, result, facet_fields)
     return result
 
 
@@ -2708,16 +2734,28 @@ def get_case_memory_processes(
     present_in_psscan: bool | None = Query(default=None),
     has_command_line: bool | None = Query(default=None),
     active: bool | None = Query(default=None),
+    include_facets: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> dict:
     _require_case(db, case_id)
-    if source_plugin and source_plugin not in PROCESS_SOURCE_PLUGIN_FILTERS:
+    # Any plugin name the data can hold (the options come from the run's own
+    # documents); the value is only ever used as an exact term.
+    if source_plugin and not re.fullmatch(r"[a-z0-9_]+(\.[a-z0-9_]+)+", source_plugin):
         raise HTTPException(status_code=400, detail="Unsupported memory process source plugin filter.")
     if run_id:
         _require_memory_run(db, run_id, case_id=case_id)
-    return search_memory_processes(case_id, run_id=run_id, evidence_id=evidence_id, pid=pid, ppid=ppid, process_name=process_name, source_plugin=source_plugin, present_in_pslist=present_in_pslist, present_in_psscan=present_in_psscan, has_command_line=has_command_line, active=active, page=page, page_size=page_size)
+    result = search_memory_processes(case_id, run_id=run_id, evidence_id=evidence_id, pid=pid, ppid=ppid, process_name=process_name, source_plugin=source_plugin, present_in_pslist=present_in_pslist, present_in_psscan=present_in_psscan, has_command_line=has_command_line, active=active, page=page, page_size=page_size)
+    if include_facets:
+        from app.services.memory.indexing import memory_process_plugin_facets
+
+        try:
+            result["plugin_facets"] = memory_process_plugin_facets(case_id, run_id=run_id, evidence_id=evidence_id)
+        except Exception:  # noqa: BLE001 -- the filter just offers no options
+            logger.warning("memory process plugin facets unavailable", exc_info=True)
+            result["plugin_facets"] = []
+    return result
 
 
 @router.get("/memory/runs/{run_id}/process-tree", response_model=MemoryProcessTreeRead)

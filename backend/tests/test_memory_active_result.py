@@ -1040,8 +1040,12 @@ class TestEvidenceIdFieldQuery:
             )
         assert fake.last_body is not None
         filters = fake.last_body["query"]["bool"]["filter"]
-        assert {"term": {"protocol": "TCPv4"}} in filters
-        assert {"term": {"local_address": "192.168.20.41"}} in filters
+        def either(field: str, value: str) -> dict:
+            # keyword on newer indexes, text + .keyword on indexes that mapped it dynamically
+            return {"bool": {"should": [{"term": {field: value}}, {"term": {f"{field}.keyword": value}}], "minimum_should_match": 1}}
+
+        assert either("protocol", "TCPv4") in filters
+        assert either("local_address", "192.168.20.41") in filters
         assert {"wildcard": {"process_name": {"value": "*svchost.exe*", "case_insensitive": True}}} in filters
         assert {"bool": {"should": [{"term": {"connection_state": "ESTABLISHED"}}, {"term": {"connection_state.keyword": "ESTABLISHED"}}], "minimum_should_match": 1}} in filters
 

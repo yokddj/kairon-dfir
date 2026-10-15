@@ -149,6 +149,21 @@ def search_memory_processes(case_id: str, *, run_id: str | None = None, evidence
     return {"items": [hit.get("_source", {}) | {"document_id": hit.get("_id")} for hit in hits.get("hits", [])], "total": total_value, "page": page, "page_size": page_size}
 
 
+def memory_process_plugin_facets(case_id: str, *, run_id: str | None = None, evidence_id: str | None = None) -> list[dict[str, Any]]:
+    """The plugins that observed this run's processes, with counts, so a
+    plugin filter offers what the data has (linux.psaux on Linux, never a
+    Windows plugin there) instead of a fixed list."""
+    filters: list[dict[str, Any]] = [{"term": {"memory_artifact_type": "memory_process"}}]
+    if run_id:
+        filters.append({"term": {"memory_run_id": run_id}})
+    if evidence_id:
+        filters.append({"term": {"evidence_id": evidence_id}})
+    body = {"size": 0, "timeout": "5s", "query": {"bool": {"filter": filters}}, "aggs": {"plugins": {"terms": {"field": "plugins", "size": 50}}}}
+    response = get_opensearch_client().search(index=get_memory_index(case_id), body=body, params={"ignore_unavailable": "true"})
+    buckets = ((response.get("aggregations") or {}).get("plugins") or {}).get("buckets") or []
+    return [{"value": str(b["key"]), "count": int(b.get("doc_count") or 0)} for b in buckets if b.get("key")]
+
+
 def search_memory_edges(case_id: str, *, run_id: str) -> list[dict[str, Any]]:
     body = {"query": {"bool": {"filter": [{"term": {"memory_artifact_type": "memory_process_edge"}}, {"term": {"memory_run_id": run_id}}]}}, "size": 10000, "sort": [{"parent_pid": "asc"}, {"child_pid": "asc"}], "timeout": "5s"}
     client = get_opensearch_client()
