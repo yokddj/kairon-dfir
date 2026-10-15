@@ -562,6 +562,34 @@ describe("MemoryAnalysisPage workspace", () => {
     expect(screen.getByTestId("raw-plugin-filter")).toBeInTheDocument();
   });
 
+  it("asks for the selected evidence's raw observations and offers the plugins the data has", async () => {
+    getCaseMemoryProcessesMock.mockResolvedValue({
+      items: [], total: 0, page: 1, page_size: 50,
+      plugin_facets: [{ value: "linux.psaux", count: 12 }, { value: "linux.pslist", count: 10 }],
+    });
+    renderPage();
+    fireEvent.click(await screen.findByTestId("memory-tab-raw"));
+    await waitFor(() =>
+      expect(getCaseMemoryProcessesMock).toHaveBeenCalledWith("case-1", expect.objectContaining({ evidence_id: "ev-memory", include_facets: true })),
+    );
+    await waitFor(() =>
+      expect(Array.from(screen.getByTestId("raw-plugin-filter").querySelectorAll("option")).map((o) => o.textContent)).toEqual(["All", "psaux (12)", "pslist (10)"]),
+    );
+  });
+
+  it("offers the profiles and statuses this evidence has actually run", async () => {
+    listMemoryRunsMock.mockResolvedValue([
+      { id: "run-a", case_id: "case-1", evidence_id: "ev-memory", backend: "volatility3", profile: "shell_history_basic", status: "completed", requested_plugin_count: 1, plugin_count: 1, plugins_completed: 1, plugins_failed: 0, plugins_skipped: 0, started_at: null, completed_at: null, duration_ms: 0, output_dir: null, metadata_json: {}, error_log: {}, backend_version: null, worker_task_id: null, cancellation_requested: false, created_at: "2026-06-16T00:00:00Z" },
+      { id: "run-b", case_id: "case-1", evidence_id: "ev-memory", backend: "volatility3", profile: "find_evil", status: "failed", requested_plugin_count: 1, plugin_count: 1, plugins_completed: 0, plugins_failed: 1, plugins_skipped: 0, started_at: null, completed_at: null, duration_ms: 0, output_dir: null, metadata_json: {}, error_log: {}, backend_version: null, worker_task_id: null, cancellation_requested: false, created_at: "2026-06-16T00:01:00Z" },
+      { id: "run-c", case_id: "case-1", evidence_id: "ev-memory", backend: "volatility3", profile: "find_evil", status: "completed", requested_plugin_count: 1, plugin_count: 1, plugins_completed: 1, plugins_failed: 0, plugins_skipped: 0, started_at: null, completed_at: null, duration_ms: 0, output_dir: null, metadata_json: {}, error_log: {}, backend_version: null, worker_task_id: null, cancellation_requested: false, created_at: "2026-06-16T00:02:00Z" },
+    ]);
+    renderPage("/cases/case-1/memory/ev-memory/runs");
+    await screen.findByTestId("runs-table");
+    const options = (testId: string) => Array.from(screen.getByTestId(testId).querySelectorAll("option")).map((o) => o.textContent);
+    expect(options("runs-profile-filter")).toEqual(["All", "find_evil (2)", "shell_history_basic (1)"]);
+    expect(options("runs-status-filter")).toEqual(["All", "completed (2)", "failed (1)"]);
+  });
+
   // 7. Legacy table is not in Overview
   it("does not show the legacy 'Analyze memory' instruction footer in Overview", async () => {
     renderPage();

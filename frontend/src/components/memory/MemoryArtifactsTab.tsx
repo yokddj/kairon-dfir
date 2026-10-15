@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { HostFilter } from "../HostFilter";
 import { MemoryPaginationControls } from "./MemoryPaginationControls";
+import { FacetSelect } from "./FacetSelect";
 
 type Props = {
   caseId: string;
@@ -739,9 +740,11 @@ export function MemoryArtifactsTab({
     queryKey: ["memory-active", caseId, evidenceId, "handles", page ,pageSize, objectTypeFilter],
     queryFn: () => api.getMemoryActiveResult(caseId, evidenceId || "", "handles", undefined, {
       object_type: objectTypeFilter || undefined,
+      facet_fields: ["object_type"],
     }),
     enabled: Boolean(evidenceId) && subView === "handles",
     refetchOnWindowFocus: false,
+    placeholderData: (previous) => previous,
   });
   const driversActiveQuery = useQuery({
     queryKey: ["memory-active", caseId, evidenceId, "drivers", page],
@@ -757,7 +760,7 @@ export function MemoryArtifactsTab({
   });
   const suspiciousActiveQuery = useQuery({
     queryKey: ["memory-active", caseId, evidenceId, "suspicious_regions", page],
-    queryFn: () => api.getMemoryActiveResult(caseId, evidenceId || "", "suspicious_regions", undefined),
+    queryFn: () => api.getMemoryActiveResult(caseId, evidenceId || "", "suspicious_regions", undefined, { facet_fields: ["review_status"] }),
     enabled: Boolean(evidenceId) && subView === "suspicious",
     refetchOnWindowFocus: false,
   });
@@ -956,21 +959,26 @@ export function MemoryArtifactsTab({
             <HostFilter hostId={hostId} onChange={(value) => { setHostId(value); setPage(1); }} className="rounded-xl border border-line bg-abyss/70 px-3 py-1 text-xs" />
           ) : null}
           {subView === "handles" ? (
-            <input
+            <FacetSelect
               value={objectTypeFilter}
-              onChange={(event) => { setObjectTypeFilter(event.target.value); setPage(1); }}
-              placeholder="Object type (File, Key, Mutant)"
+              onChange={(next) => { setObjectTypeFilter(next); setPage(1); }}
+              facets={handlesActiveQuery.data?.facets?.object_type ?? []}
+              allLabel="Any object type"
+              ariaLabel="Object type"
+              testId="memory-artifacts-filter-object-type"
               className="rounded-xl border border-line bg-abyss/70 px-3 py-1 text-xs"
-              data-testid="memory-artifacts-filter-object-type"
             />
           ) : null}
           {subView === "suspicious" ? (
-            <input
+            <FacetSelect
               value={reviewFilter}
-              onChange={(event) => { setReviewFilter(event.target.value); setPage(1); }}
-              placeholder="Review status (needs_review)"
+              onChange={(next) => { setReviewFilter(next); setPage(1); }}
+              facets={suspiciousActiveQuery.data?.facets?.review_status ?? []}
+              allLabel="Any review status"
+              ariaLabel="Review status"
+              testId="memory-artifacts-filter-review"
+              label={(value) => value.replace(/_/g, " ")}
               className="rounded-xl border border-line bg-abyss/70 px-3 py-1 text-xs"
-              data-testid="memory-artifacts-filter-review"
             />
           ) : null}
           <input

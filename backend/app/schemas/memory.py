@@ -471,6 +471,8 @@ class MemoryProcessListRead(BaseModel):
     total: int
     page: int
     page_size: int
+    # Only when requested (include_facets): the plugins present in the run.
+    plugin_facets: list[dict[str, Any]] | None = None
 
 
 class MemoryProcessEdgeRead(BaseModel):

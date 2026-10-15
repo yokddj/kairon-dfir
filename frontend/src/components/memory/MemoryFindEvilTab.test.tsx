@@ -70,12 +70,25 @@ describe("MemoryFindEvilTab", () => {
   });
 
   it("sends the priority and type filters to the API", async () => {
-    getMemoryActiveResultMock.mockResolvedValue(activeResult({ analysis_state: "analyzed_with_results", total: 3, items: ROWS as unknown as MemoryActiveResult["items"] }));
+    getMemoryActiveResultMock.mockResolvedValue({
+      ...activeResult({ analysis_state: "analyzed_with_results", total: 3, items: ROWS as unknown as MemoryActiveResult["items"] }),
+      facets: {
+        indicator_type: [{ value: "PROC_NOLINK", count: 2 }, { value: "PE_PATCHED", count: 1 }],
+        review_priority: [{ value: "high", count: 1 }, { value: "low", count: 2 }],
+      },
+    });
     renderTab();
     await waitFor(() => expect(screen.getAllByTestId("findevil-row")).toHaveLength(3));
+    expect(getMemoryActiveResultMock).toHaveBeenLastCalledWith("case-1", "ev-1", "find_evil", undefined, expect.objectContaining({ facet_fields: ["indicator_type", "review_priority"] }));
+    // Each priority shows how many indicators it has; "All" the total.
+    expect(screen.getByTestId("findevil-priority-high")).toHaveTextContent("1");
+    expect(screen.getByTestId("findevil-priority-all")).toHaveTextContent("3");
     fireEvent.click(screen.getByTestId("findevil-priority-high"));
     await waitFor(() => expect(getMemoryActiveResultMock).toHaveBeenLastCalledWith("case-1", "ev-1", "find_evil", undefined, expect.objectContaining({ review_priority: "high" })));
-    fireEvent.change(screen.getByTestId("findevil-type-input"), { target: { value: "proc_nolink" } });
+    // The type picker offers the types the run has, with their counts.
+    const typeSelect = screen.getByTestId("findevil-type-input");
+    expect(Array.from(typeSelect.querySelectorAll("option")).map((o) => o.textContent)).toEqual(["Any type", "PROC_NOLINK (2)", "PE_PATCHED (1)"]);
+    fireEvent.change(typeSelect, { target: { value: "PROC_NOLINK" } });
     await waitFor(() => expect(getMemoryActiveResultMock).toHaveBeenLastCalledWith("case-1", "ev-1", "find_evil", undefined, expect.objectContaining({ indicator_type: "PROC_NOLINK" })));
   });
 

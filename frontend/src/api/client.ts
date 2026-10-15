@@ -1137,6 +1137,10 @@ export type MemoryActiveResult = {
   page_size: number;
   count_source: string | null;
   analysis_state: MemoryFamilyState;
+  // Values of the requested facet_fields over the active run, with counts.
+  facets?: Record<string, Array<{ value: string; count: number }>>;
+  // Shell history only: where its commands were recovered from.
+  source_facets?: Array<{ value: string; count: number }>;
 };
 
 export type MemoryCatalogueGateType =
@@ -1840,6 +1844,7 @@ export type MemoryProcessList = {
   total: number;
   page: number;
   page_size: number;
+  plugin_facets?: Array<{ value: string; count: number }> | null;
 };
 
 export type MemoryProcessTree = {
@@ -6721,6 +6726,8 @@ export const api = {
       process_name?: string;
       command?: string;
       source?: string;
+      // Fields to return the active run's values for (with counts), for filter pickers.
+      facet_fields?: string[];
       module_name?: string;
       path?: string;
       load_state?: string;
@@ -6738,7 +6745,9 @@ export const api = {
     if (runId) query.set("run_id", runId);
     if (filters) {
       for (const [key, value] of Object.entries(filters)) {
-        if (value !== undefined && value !== null && value !== "") {
+        if (Array.isArray(value)) {
+          for (const item of value) query.append(key, String(item));
+        } else if (value !== undefined && value !== null && value !== "") {
           query.set(key, String(value));
         }
       }
@@ -6812,8 +6821,10 @@ export const api = {
   getMemoryRunSystemInfo: (runId: string) => request<MemorySystemInfo>(`/memory/runs/${runId}/system-info`),
   getCaseMemorySystemInfo: (caseId: string) => request<MemorySystemInfo[]>(`/cases/${caseId}/memory/system-info`),
   getEvidenceMemorySystemInfo: (caseId: string, evidenceId: string) => request<MemorySystemInfo[]>(`/cases/${caseId}/memory/evidences/${evidenceId}/system-info`),
-  getCaseMemoryProcesses: (caseId: string, params?: { run_id?: string; pid?: number; process_name?: string; source_plugin?: string; page?: number; page_size?: number }) => {
+  getCaseMemoryProcesses: (caseId: string, params?: { evidence_id?: string; run_id?: string; pid?: number; process_name?: string; source_plugin?: string; include_facets?: boolean; page?: number; page_size?: number }) => {
     const query = new URLSearchParams();
+    if (params?.evidence_id) query.set("evidence_id", params.evidence_id);
+    if (params?.include_facets) query.set("include_facets", "true");
     if (params?.run_id) query.set("run_id", params.run_id);
     if (params?.pid !== undefined) query.set("pid", String(params.pid));
     if (params?.process_name) query.set("process_name", params.process_name);

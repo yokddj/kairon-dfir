@@ -49,8 +49,8 @@ const FAMILIES: Array<{ family: string; title: string; tab: MemoryTab; artifact?
   { family: "shell_history", title: "Shell history", tab: "shell_history" },
   { family: "modules", title: "Modules and DLLs", tab: "modules" },
   { family: "handles", title: "Handles", tab: "handles" },
-  { family: "kernel_modules", title: "Kernel modules", tab: "modules" },
-  { family: "drivers", title: "Drivers", tab: "modules" },
+  { family: "kernel_modules", title: "Kernel modules", tab: "kernel" },
+  { family: "drivers", title: "Drivers", tab: "drivers" },
   { family: "suspicious_regions", title: "Suspicious memory regions", tab: "suspicious" },
   { family: "network", title: "Network connections", tab: "network" },
 ];

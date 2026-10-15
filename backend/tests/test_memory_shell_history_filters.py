@@ -92,3 +92,23 @@ def test_source_facets_aggregate_the_keyword_subfield_on_indexes_that_mapped_tex
     aggs = client.body["aggs"]
     assert aggs["recovered_from"]["terms"]["field"] == "recovered_from"
     assert aggs["plugin_only"]["aggs"]["source_plugin"]["terms"]["field"] == "source_plugin.keyword"
+
+
+def test_field_facets_list_the_values_present_using_the_keyword_form() -> None:
+    client = _Client(
+        {"aggregations": {"values": {"buckets": [{"key": "PROC_NOLINK", "doc_count": 4}, {"key": "", "doc_count": 1}]}}},
+        types={"indicator_type": "text"},
+    )
+    with patch.object(artifact_indexing, "get_opensearch_client", lambda: client):
+        facets = artifact_indexing.artifact_field_facets("case-1", document_type="memory_findevil", run_id="run-1", field="indicator_type")
+
+    assert facets == [{"value": "PROC_NOLINK", "count": 4}]
+    assert client.body is not None
+    assert client.body["aggs"]["values"]["terms"]["field"] == "indicator_type.keyword"
+
+
+def test_field_facets_refuse_fields_that_are_not_enumerations() -> None:
+    import pytest
+
+    with pytest.raises(ValueError):
+        artifact_indexing.artifact_field_facets("case-1", document_type="memory_handle", run_id="run-1", field="command")

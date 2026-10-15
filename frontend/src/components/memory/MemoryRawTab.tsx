@@ -13,15 +13,16 @@ type Props = {
   onSelectRunId: (next: string | null) => void;
 };
 
-type PluginFilter = "all" | "windows.pslist" | "windows.psscan" | "windows.pstree" | "windows.cmdline";
+type PluginFilter = string;
 
 function reported(value: unknown): string {
   if (value === null || value === undefined || value === "") return "Not reported";
   return String(value);
 }
 
+// "windows.pslist" -> "pslist", "linux.psaux" -> "psaux": the platform is the evidence's.
 function sourceBadge(plugin: string): string {
-  return plugin.replace("windows.", "");
+  return plugin.replace(/^(windows|linux|mac)\./, "");
 }
 
 export function MemoryRawTab({ caseId, evidenceId, runId, runOptions, selectedRunId, onSelectRunId }: Props) {
@@ -35,10 +36,12 @@ export function MemoryRawTab({ caseId, evidenceId, runId, runOptions, selectedRu
   const [inspectEntityId, setInspectEntityId] = useState<string | null>(null);
   const pageSize = 50;
 
-  const processQuery = useQuery<{ items: MemoryProcess[]; total: number; page: number; page_size: number }>({
-    queryKey: ["raw-processes", caseId, effectiveRunId, plugin, pid, processName, page],
+  const processQuery = useQuery<{ items: MemoryProcess[]; total: number; page: number; page_size: number; plugin_facets?: Array<{ value: string; count: number }> | null }>({
+    queryKey: ["raw-processes", caseId, evidenceId, effectiveRunId, plugin, pid, processName, page],
     queryFn: () => {
-      const params: { run_id?: string; pid?: number; process_name?: string; page: number; page_size: number; source_plugin?: string } = {
+      const params: { evidence_id: string; include_facets: boolean; run_id?: string; pid?: number; process_name?: string; page: number; page_size: number; source_plugin?: string } = {
+        evidence_id: evidenceId,
+        include_facets: true,
         run_id: effectiveRunId || undefined,
         page,
         page_size: pageSize,
@@ -46,7 +49,7 @@ export function MemoryRawTab({ caseId, evidenceId, runId, runOptions, selectedRu
       if (plugin !== "all") params.source_plugin = plugin;
       if (pid) params.pid = Number(pid);
       if (processName) params.process_name = processName;
-      return api.getCaseMemoryProcesses(caseId, params as any) as Promise<{ items: MemoryProcess[]; total: number; page: number; page_size: number }>;
+      return api.getCaseMemoryProcesses(caseId, params) as Promise<{ items: MemoryProcess[]; total: number; page: number; page_size: number; plugin_facets?: Array<{ value: string; count: number }> | null }>;
     },
     enabled: Boolean(effectiveRunId),
     refetchOnWindowFocus: false,
@@ -84,6 +87,7 @@ export function MemoryRawTab({ caseId, evidenceId, runId, runOptions, selectedRu
   });
 
   const totalPages = processQuery.data ? Math.max(1, Math.ceil(processQuery.data.total / pageSize)) : 1;
+  const pluginFacets = processQuery.data?.plugin_facets ?? [];
 
   function reset() {
     setPlugin("all");
@@ -124,15 +128,16 @@ export function MemoryRawTab({ caseId, evidenceId, runId, runOptions, selectedRu
             <select
               id="raw-plugin"
               value={plugin}
-              onChange={(event) => { setPlugin(event.target.value as PluginFilter); setPage(1); }}
+              onChange={(event) => { setPlugin(event.target.value); setPage(1); }}
               className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm"
               data-testid="raw-plugin-filter"
             >
               <option value="all">All</option>
-              <option value="windows.pslist">pslist</option>
-              <option value="windows.psscan">psscan</option>
-              <option value="windows.pstree">pstree</option>
-              <option value="windows.cmdline">cmdline</option>
+              {pluginFacets.map((facet) => (
+                <option key={facet.value} value={facet.value}>
+                  {sourceBadge(facet.value)} ({facet.count})
+                </option>
+              ))}
             </select>
           </div>
         </header>

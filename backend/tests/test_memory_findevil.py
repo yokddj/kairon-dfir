@@ -168,7 +168,12 @@ def test_listing_sorts_and_filters_on_fields_every_case_index_has(monkeypatch) -
     )
     fields = [next(iter(clause)) for clause in captured["sort"]]
     assert fields[:2] == ["review_rank", "indicator_type.keyword"]
-    terms = [clause["term"] for clause in captured["query"]["bool"]["filter"] if "term" in clause]
+    # Exact filters match the keyword sub-field (or the field itself on indexes that declare it keyword).
+    terms = [
+        should["term"]
+        for clause in captured["query"]["bool"]["filter"] if "bool" in clause
+        for should in clause["bool"].get("should", []) if "term" in should
+    ]
     assert {"indicator_type.keyword": "PROC_NOLINK"} in terms
     assert {"review_priority.keyword": "high"} in terms
     mapping = artifact_indexing.ARTIFACT_MAPPING["mappings"]["properties"]
