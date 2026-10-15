@@ -287,14 +287,6 @@ describe("Memory count integrity and batch runtime", () => {
     expect(drivers.textContent).not.toMatch(/304/);
   });
 
-  // 3: No discrepancy between Overview and Artifacts
-  it("Overview and Artifacts cards agree on counts", async () => {
-    renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
-    await screen.findByTestId("memory-overview");
-    const modules = screen.getByTestId("memory-artifact-card-modules");
-    expect(modules.textContent).toMatch(/21,339/);
-  });
-
   // 4-5: Batch progress and reconciled state
   it("shows the batch progress section while a batch is in flight", async () => {
     getActiveMemoryAnalysisBatchMock.mockResolvedValue({

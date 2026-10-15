@@ -940,11 +940,11 @@ describe("Memory analysis UX fixes v1", () => {
     expect(document.body.textContent || "").not.toContain("malware confirmed");
   });
 
-  // 39. Overview shows the Core memory artifacts cards
-  it("renders the Core memory artifacts card grid on Overview", async () => {
+  // 39. Overview shows each family once: no duplicate artifact cards
+  it("does not repeat the family results as a card grid on Overview", async () => {
     renderPage();
     expect(await screen.findByTestId("memory-overview")).toBeInTheDocument();
-    expect(screen.getByTestId("memory-overview-artifact-cards")).toBeInTheDocument();
+    expect(screen.queryByTestId("memory-overview-artifact-cards")).not.toBeInTheDocument();
   });
 
   // 40. Runs tab shows the new profile names
