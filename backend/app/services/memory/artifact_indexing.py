@@ -227,6 +227,46 @@ def _coerce_address_for_index(value: Any) -> int | None:
 # ---------------------------------------------------------------------------
 
 
+def _source_clause(value: str) -> dict[str, Any]:
+    """Where a document was recovered from: ``recovered_from`` when the
+    normalizer records it (Windows consoles, PSReadLine), otherwise the
+    plugin that produced it (e.g. linux.bash)."""
+    return {"bool": {"should": [
+        {"term": {"recovered_from": value}},
+        {"bool": {"filter": [{"term": {"source_plugin": value}}], "must_not": [{"exists": {"field": "recovered_from"}}]}},
+    ], "minimum_should_match": 1}}
+
+
+def artifact_source_facets(case_id: str, *, document_type: str, run_id: str, evidence_id: str | None = None) -> list[dict[str, Any]]:
+    """The sources present in a run's documents, with counts, so a source
+    filter only offers values the data actually has (no PowerShell option
+    on an image without PowerShell)."""
+    query_filters: list[dict[str, Any]] = [
+        {"term": {"document_type": document_type}},
+        {"term": {"scan_run_id.keyword": run_id}},
+    ]
+    if evidence_id:
+        query_filters.append({"term": {"evidence_id": evidence_id}})
+    body = {
+        "size": 0,
+        "timeout": "5s",
+        "query": {"bool": {"filter": query_filters}},
+        "aggs": {
+            "recovered_from": {"terms": {"field": "recovered_from", "size": 50}},
+            "plugin_only": {
+                "filter": {"bool": {"must_not": [{"exists": {"field": "recovered_from"}}]}},
+                "aggs": {"source_plugin": {"terms": {"field": "source_plugin", "size": 50}}},
+            },
+        },
+    }
+    response = get_opensearch_client().search(index=get_memory_index(case_id), body=body, params={"ignore_unavailable": "true"})
+    aggs = response.get("aggregations") or {}
+    buckets = list((aggs.get("recovered_from") or {}).get("buckets") or [])
+    buckets += list(((aggs.get("plugin_only") or {}).get("source_plugin") or {}).get("buckets") or [])
+    facets = [{"value": str(b.get("key")), "count": int(b.get("doc_count") or 0)} for b in buckets if b.get("key")]
+    return sorted(facets, key=lambda f: -f["count"])
+
+
 def search_artifact_documents(
     case_id: str,
     *,
@@ -262,6 +302,19 @@ def search_artifact_documents(
                         {"term": {"connection_state": value}},
                         {"term": {"connection_state.keyword": value}},
                     ], "minimum_should_match": 1}})
+                    continue
+                if key == "command":
+                    # Free text over the whole command: the keyword form holds commands up to
+                    # 1024 characters (substring match); longer ones only exist as analysed
+                    # text, matched as a phrase.
+                    needle = value.strip().replace("*", "").replace("?", "")
+                    query_filters.append({"bool": {"should": [
+                        {"wildcard": {"command.keyword": {"value": f"*{needle}*", "case_insensitive": True}}},
+                        {"match_phrase": {"command": needle}},
+                    ], "minimum_should_match": 1}})
+                    continue
+                if key == "source":
+                    query_filters.append(_source_clause(value))
                     continue
                 if key in ("process_name", "name"):
                     # Free-text search inputs, not value pickers -- an

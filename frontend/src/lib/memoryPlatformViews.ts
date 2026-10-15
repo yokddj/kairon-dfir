@@ -58,3 +58,16 @@ export function memoryTabApplies(tab: MemoryTab, views: MemoryPlatformResultView
 export function memoryFamilyApplies(family: string, views: MemoryPlatformResultViews | null | undefined): boolean {
   return satisfied(FAMILY_REQUIREMENTS[family], views);
 }
+
+// Sources inside the Shell History tab. PowerShell's event log records are
+// recovered by MemProcFS's forensic scan, so they can only exist where
+// MemProcFS runs for this platform.
+export type ShellHistorySource = "typed" | "powershell" | "executed";
+
+const SHELL_SOURCE_REQUIREMENTS: Partial<Record<ShellHistorySource, ViewRequirement>> = {
+  powershell: { frameworks: ["memprocfs"] },
+};
+
+export function shellHistorySourceApplies(source: ShellHistorySource, views: MemoryPlatformResultViews | null | undefined): boolean {
+  return satisfied(SHELL_SOURCE_REQUIREMENTS[source], views);
+}

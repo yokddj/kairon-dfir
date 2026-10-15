@@ -874,6 +874,24 @@ def get_memory_memprocfs_table(
     return memprocfs_table(db, case_id=case_id, evidence_id=evidence_id, table=table, q=q, page=page, page_size=page_size)
 
 
+def _shell_history_source_facets(case_id: str, evidence_id: str, result: dict) -> list[dict]:
+    # Unfiltered by the user's filters on purpose: the options must not
+    # disappear while one of them is selected.
+    run = result.get("active_run") or {}
+    if not run.get("id"):
+        return []
+    from app.services.memory.artifact_indexing import artifact_source_facets
+    from app.services.memory.counts import FAMILY_TO_DOCUMENT_TYPE
+
+    try:
+        return artifact_source_facets(
+            case_id, document_type=FAMILY_TO_DOCUMENT_TYPE["shell_history"], run_id=str(run["id"]), evidence_id=evidence_id
+        )
+    except Exception:  # noqa: BLE001 -- the filter just offers no options
+        logger.warning("shell history source facets unavailable", exc_info=True)
+        return []
+
+
 @router.get(
     "/cases/{case_id}/memory/evidences/{evidence_id}/active-result",
     response_model=None,
@@ -893,6 +911,8 @@ def get_memory_active_result(
     state: str | None = Query(default=None),
     pid: int | None = Query(default=None),
     process_name: str | None = Query(default=None),
+    command: str | None = Query(default=None),
+    source: str | None = Query(default=None),
     module_name: str | None = Query(default=None),
     path: str | None = Query(default=None),
     load_state: str | None = Query(default=None),
@@ -939,6 +959,8 @@ def get_memory_active_result(
         "state": state,
         "pid": pid,
         "process_name": process_name,
+        "command": command,
+        "source": source,
         "module_name": module_name,
         "path": path,
         "load_state": load_state,
@@ -948,7 +970,7 @@ def get_memory_active_result(
         "indicator_type": indicator_type,
         "review_priority": review_priority,
     }
-    return resolve_active_memory_result(
+    result = resolve_active_memory_result(
         db,
         case_id=case_id,
         evidence_id=evidence_id,
@@ -958,6 +980,9 @@ def get_memory_active_result(
         page_size=page_size,
         filters=filters,
     )
+    if family == "shell_history":
+        result["source_facets"] = _shell_history_source_facets(case_id, evidence_id, result)
+    return result
 
 
 @router.get(
