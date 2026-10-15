@@ -17,6 +17,7 @@ import { backendBadge } from "../MemoryWorkspace";
 import type { MemoryTab } from "../../lib/memoryWorkspaceState";
 import { memoryFamilyApplies } from "../../lib/memoryPlatformViews";
 import { commandHistoryRoute, memoryWorkbenchRoute } from "../../lib/canonicalRoutes";
+import { PriorityChips, findEvilProcessQueryKey, processLabel } from "./MemoryFindEvilProcesses";
 
 type Props = {
   caseId: string;
@@ -255,6 +256,22 @@ export function MemoryOverviewTab({
 
   const scope = new URLSearchParams({ source_category: "Memory", evidence_id: evidenceId });
 
+  // Highlights: processes whose Find Evil indicators include a high or medium
+  // one and that the analyst has not yet reviewed or dismissed. Nothing is
+  // shown when there are none.
+  const findEvilApplies = families.some((f) => f.family === "find_evil" && isFamilyAnalyzed(f.state));
+  const triageQuery = useQuery({
+    queryKey: findEvilProcessQueryKey(caseId, evidenceId),
+    queryFn: () => api.getMemoryFindEvilProcesses(caseId, evidenceId),
+    enabled: Boolean(caseId && evidenceId && findEvilApplies),
+    refetchOnWindowFocus: false,
+  });
+  const highlights = (triageQuery.data?.processes ?? []).filter(
+    (p) =>
+      (p.priority_counts.high > 0 || p.priority_counts.medium > 0) &&
+      (!p.marking || p.marking.status === "suspicious" || p.marking.status === "important"),
+  );
+
   return (
     <div className="space-y-4" data-testid="memory-overview">
       {notices.length > 0 ? (
@@ -274,6 +291,33 @@ export function MemoryOverviewTab({
             </li>
           ))}
         </ul>
+      ) : null}
+
+      {highlights.length > 0 ? (
+        <section className="rounded-[28px] border border-accent/25 bg-panel/70 p-5 shadow-panel" data-testid="memory-overview-highlights">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-accent">Review first</h3>
+            <button type="button" onClick={() => onJumpToTab("find_evil")} className="text-xs text-muted hover:text-accent">
+              Triage in Find Evil →
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-muted">
+            Processes with high or medium Find Evil indicators not yet reviewed{highlights.length > 5 ? ` · showing 5 of ${highlights.length}` : ""}.
+          </p>
+          <ul className="mt-3 divide-y divide-line">
+            {highlights.slice(0, 5).map((process) => (
+              <li key={process.triage_id} className="flex flex-wrap items-center gap-3 py-2 text-sm" data-testid="memory-overview-highlight">
+                <span className="min-w-[180px] font-medium text-ink">{processLabel(process)}</span>
+                <PriorityChips counts={process.priority_counts} />
+                <span className="font-mono text-[10px] text-muted">
+                  {process.indicator_types.slice(0, 3).map((t) => t.value).join(" · ")}
+                  {process.indicator_types.length > 3 ? ` +${process.indicator_types.length - 3}` : ""}
+                </span>
+                {process.marking ? <span className="text-[10px] text-accent">Marked suspicious</span> : null}
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
 
       <section

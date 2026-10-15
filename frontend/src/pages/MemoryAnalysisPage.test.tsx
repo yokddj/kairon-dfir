@@ -26,6 +26,7 @@ const getCanonicalProcessEntityDetailMock = vi.fn();
 const getMemoryEvidenceReadinessMock = vi.fn();
 const getMemorySymbolCacheStatusMock = vi.fn();
 const getCaseMemoryProcessesMock = vi.fn();
+const getMemoryFindEvilProcessesMock = vi.fn();
 const getMemoryProcessTreeMock = vi.fn();
 const startMemoryScanMock = vi.fn();
 const renormalizeProcessEntitiesMock = vi.fn();
@@ -49,6 +50,7 @@ vi.mock("../api/client", () => ({
     getMemoryEvidenceReadiness: (...args: unknown[]) => getMemoryEvidenceReadinessMock(...args),
     getMemorySymbolCacheStatus: (...args: unknown[]) => getMemorySymbolCacheStatusMock(...args),
     getCaseMemoryProcesses: (...args: unknown[]) => getCaseMemoryProcessesMock(...args),
+    getMemoryFindEvilProcesses: (...args: unknown[]) => getMemoryFindEvilProcessesMock(...args),
     getMemoryProcessTree: (...args: unknown[]) => getMemoryProcessTreeMock(...args),
     startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
     renormalizeProcessEntities: (...args: unknown[]) => renormalizeProcessEntitiesMock(...args),
@@ -592,6 +594,31 @@ describe("MemoryAnalysisPage workspace", () => {
     const options = (testId: string) => Array.from(screen.getByTestId(testId).querySelectorAll("option")).map((o) => o.textContent);
     expect(options("runs-profile-filter")).toEqual(["All", "find_evil (2)", "shell_history_basic (1)"]);
     expect(options("runs-status-filter")).toEqual(["All", "completed (2)", "failed (1)"]);
+  });
+
+  it("highlights unreviewed processes with high or medium Find Evil indicators, and nothing else", async () => {
+    const landing = await getMemoryEvidenceLandingMock();
+    const item = landing.items[0];
+    getMemoryEvidenceLandingMock.mockResolvedValue({
+      ...landing,
+      items: [{ ...item, families: [...item.families, { family: "find_evil", title: "Find Evil", state: "analyzed_with_results", count: 5, active_run: { id: "run-fe" }, latest_attempt: { id: "run-fe" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null }] }],
+    });
+    const proc = (pid: number, name: string, counts: { high: number; medium: number; low: number }, marking: { id: string; status: string; note: null } | null = null) => ({
+      triage_id: `t-${pid}`, pid, process_name: name, indicator_count: counts.high + counts.medium + counts.low, priority_counts: counts,
+      top_priority: counts.high ? "high" : counts.medium ? "medium" : "low", indicator_types: [{ value: "PROC_NOLINK", count: 1 }], marking,
+    });
+    getMemoryFindEvilProcessesMock.mockResolvedValue({
+      case_id: "case-1", evidence_id: "ev-memory", active_run: { id: "run-fe" }, analysis_state: "analyzed_with_results", marking_artifact_type: "memory_findevil_process",
+      processes: [
+        proc(52, "WmiPrvSE.exe", { high: 1, medium: 0, low: 0 }),
+        proc(60, "svchost.exe", { high: 0, medium: 2, low: 0 }, { id: "m1", status: "reviewed", note: null }),
+        proc(70, "msedge.exe", { high: 0, medium: 0, low: 9 }),
+      ],
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getAllByTestId("memory-overview-highlight")).toHaveLength(1));
+    expect(screen.getByTestId("memory-overview-highlight")).toHaveTextContent("WmiPrvSE.exe (52)");
   });
 
   // 7. Legacy table is not in Overview

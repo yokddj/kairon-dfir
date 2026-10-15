@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { type MemoryRunSelector, api } from "../../api/client";
 import { FacetSelect } from "./FacetSelect";
+import { MemoryFindEvilProcesses } from "./MemoryFindEvilProcesses";
 import { MemoryPaginationControls } from "./MemoryPaginationControls";
 
 type Props = {
@@ -78,6 +79,8 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
   const [priority, setPriority] = useState("");
   const [indicatorType, setIndicatorType] = useState("");
   const [pidFilter, setPidFilter] = useState("");
+  // Triage happens per process; the flat list stays one click away.
+  const [view, setView] = useState<"process" | "all">("process");
   const pageSize = 50;
 
   const activeResultQuery = useQuery({
@@ -127,6 +130,20 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
         </header>
 
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          <div className="flex rounded-xl border border-line bg-abyss/60 p-0.5" role="group" aria-label="View">
+            {([["process", "By process"], ["all", "All indicators"]] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={view === value}
+                onClick={() => { setView(value); setPage(1); }}
+                className={`rounded-lg px-3 py-1 ${view === value ? "bg-accent/15 text-accent" : "text-muted hover:text-ink"}`}
+                data-testid={`findevil-view-${value}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <div className="flex rounded-xl border border-line bg-abyss/60 p-0.5" role="group" aria-label="Priority">
             {PRIORITIES.map((option) => (
               <button
@@ -155,15 +172,19 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
             testId="findevil-type-input"
             className="rounded-xl border border-line bg-abyss/70 px-2 py-1 font-mono text-xs"
           />
+          {view === "all" ? (
+            <>
           <label className="text-muted" htmlFor="findevil-pid">PID</label>
-          <input
-            id="findevil-pid"
-            type="number"
-            min={0}
-            value={pidFilter}
-            onChange={(event) => { setPidFilter(event.target.value); setPage(1); }}
-            className="w-24 rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm"
-          />
+            <input
+              id="findevil-pid"
+              type="number"
+              min={0}
+              value={pidFilter}
+              onChange={(event) => { setPidFilter(event.target.value); setPage(1); }}
+              className="w-24 rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm"
+            />
+            </>
+          ) : null}
           {filtered ? (
             <button type="button" onClick={() => { setPriority(""); setIndicatorType(""); setPidFilter(""); setPage(1); }} className="rounded-xl border border-line bg-abyss/70 px-3 py-1 text-xs">
               Reset
@@ -196,7 +217,20 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
             Part of Find Evil did not finish (the Runs tab says which and why); the indicators below are the ones that did.
           </p>
         ) : null}
-        {!activeResultQuery.isLoading && !activeResultQuery.error && (state === "analyzed_with_results" || state === "partial") ? (
+        {!activeResultQuery.isLoading && !activeResultQuery.error && (state === "analyzed_with_results" || state === "partial") && view === "process" ? (
+          <MemoryFindEvilProcesses
+            caseId={caseId}
+            evidenceId={evidenceId}
+            priority={priority}
+            indicatorType={indicatorType}
+            onShowIndicators={(process) => {
+              setView("all");
+              setPidFilter(process.pid !== null ? String(process.pid) : "");
+              setPage(1);
+            }}
+          />
+        ) : null}
+        {!activeResultQuery.isLoading && !activeResultQuery.error && (state === "analyzed_with_results" || state === "partial") && view === "all" ? (
           <>
             <p className="mt-3 text-xs text-muted" data-testid="findevil-summary">
               {total} indicator{total === 1 ? "" : "s"} · page {page} of {totalPages}
