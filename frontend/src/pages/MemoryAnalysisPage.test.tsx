@@ -446,7 +446,6 @@ describe("MemoryAnalysisPage workspace", () => {
     // The new overview shows the per-family status table, not the
     // legacy "Latest run" card.
     expect(screen.getByTestId("memory-family-table")).toBeInTheDocument();
-    expect(screen.getByTestId("memory-overview-status")).toBeInTheDocument();
   });
 
   // 2. Processes tab shows the canonical table
@@ -628,13 +627,11 @@ describe("MemoryAnalysisPage workspace", () => {
     expect(screen.getByTestId("metrics-strip-view-roots")).toBeInTheDocument();
   });
 
-  // 15. Backend status row is rendered (no collapsed detail row any more)
-  it("renders the memory engine status row in the Overview", async () => {
+  // 15. A healthy engine adds no status chrome to the Overview
+  it("does not render an engine status block in the Overview", async () => {
     renderPage();
-    await screen.findByTestId("memory-overview-status");
-    expect(screen.getByTestId("overview-backend-volatility")).toBeInTheDocument();
-    expect(screen.getByTestId("overview-backend-worker")).toBeInTheDocument();
-    expect(screen.getByTestId("overview-backend-symbols")).toBeInTheDocument();
+    await screen.findByTestId("memory-overview");
+    expect(screen.queryByTestId("memory-overview-status")).not.toBeInTheDocument();
   });
 
   // 16. Legacy Analyze memory selector is NOT rendered in evidence-scoped view
@@ -840,8 +837,7 @@ describe("MemoryAnalysisPage workspace", () => {
     renderPage();
     await screen.findByTestId("memory-overview");
     expect(await screen.findByTestId("memory-family-state-processes")).toHaveTextContent("Completed");
-    expect(screen.queryByTestId("overview-processes-empty")).not.toBeInTheDocument();
-    expect(screen.getByTestId("overview-processes-processes")).toHaveTextContent("42");
+    expect(screen.getByTestId("memory-family-count-processes")).toHaveTextContent("42");
   });
 
   it("shows a real 'not analyzed' state (not a false empty result) when the family genuinely has no run", async () => {
@@ -860,7 +856,8 @@ describe("MemoryAnalysisPage workspace", () => {
     });
     renderPage();
     await screen.findByTestId("memory-overview");
-    expect(await screen.findByTestId("overview-processes-empty")).toHaveTextContent("Processes have not been analyzed for this evidence.");
+    expect(await screen.findByTestId("memory-family-state-processes")).toHaveTextContent("Not analyzed");
+    expect(screen.queryByTestId("memory-family-count-processes")).not.toBeInTheDocument();
   });
 
   it("shows a genuine zero-results state (analyzed_empty) distinctly from not_analyzed", async () => {
@@ -880,8 +877,7 @@ describe("MemoryAnalysisPage workspace", () => {
     renderPage();
     await screen.findByTestId("memory-overview");
     // Genuinely analyzed with zero results -- not the "not analyzed yet" copy.
-    expect(screen.queryByTestId("overview-processes-empty")).not.toBeInTheDocument();
-    expect(screen.getByTestId("overview-processes-processes")).toHaveTextContent("0");
+    expect(await screen.findByTestId("memory-family-count-processes")).toHaveTextContent("0");
     expect(await screen.findByTestId("memory-family-zero-processes")).toBeInTheDocument();
   });
 });

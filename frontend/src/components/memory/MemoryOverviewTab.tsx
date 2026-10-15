@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
   type MemoryAnalysisCatalogue,
@@ -16,8 +16,7 @@ import {
 import { backendBadge } from "../MemoryWorkspace";
 import type { MemoryTab } from "../../lib/memoryWorkspaceState";
 import { memoryFamilyApplies } from "../../lib/memoryPlatformViews";
-import { commandHistoryRoute } from "../../lib/canonicalRoutes";
-import { InvestigationChecklist, type InvestigationChecklistItem } from "../common/InvestigationChecklist";
+import { commandHistoryRoute, memoryWorkbenchRoute } from "../../lib/canonicalRoutes";
 
 type Props = {
   caseId: string;
@@ -32,14 +31,14 @@ type Props = {
   onJumpToTab: (tab: MemoryTab, artifact?: string) => void;
 };
 
-type OverviewFamily = {
+export type OverviewFamily = {
   family: string;
   title: string;
   state: MemoryFamilyState;
   activeRun: MemoryActiveRun | null;
   latestAttempt: MemoryActiveRun | null;
-  selectionReason: string;
   usingFallback: boolean;
+  availabilityReason: string | null;
   lastCount: number;
 };
 
@@ -56,7 +55,9 @@ const FAMILIES: Array<{ family: string; title: string; tab: MemoryTab; artifact?
   { family: "network", title: "Network connections", tab: "network" },
 ];
 
-function stateLabel(state: MemoryFamilyState | string | undefined): { label: string; tone: "ok" | "warn" | "muted" | "danger" | "info" } {
+type Tone = "ok" | "warn" | "muted" | "danger" | "info";
+
+function stateLabel(state: MemoryFamilyState | string | undefined): { label: string; tone: Tone } {
   switch (state) {
     case "completed":
     case "ready":
@@ -91,21 +92,17 @@ function stateLabel(state: MemoryFamilyState | string | undefined): { label: str
   }
 }
 
-// Whether a family's row should show its count/last-attempt cell as
-// "has real content", i.e. isFamilyAnalyzed() (the same predicate the
-// investigation checklist already uses) plus latest_attempt_failed, which
-// still has a prior successful count to show alongside the failure.
-function hasAnalyzedContent(state: MemoryFamilyState | undefined): boolean {
-  return isFamilyAnalyzed(state) || state === "latest_attempt_failed";
+const ANALYZED_STATES = new Set<MemoryFamilyState>(["completed", "ready", "analyzed_with_results", "analyzed_empty"]);
+const FAILED_STATES = new Set<MemoryFamilyState>(["failed", "latest_attempt_failed"]);
+
+function isFamilyAnalyzed(state: MemoryFamilyState | undefined): boolean {
+  return Boolean(state && ANALYZED_STATES.has(state));
 }
 
-function countCellLabel(state: MemoryFamilyState | undefined): string {
-  if (state === "latest_attempt_failed") return "Latest attempt failed";
-  return "Completed";
-}
-
-function formatCount(n: number): string {
-  return n.toLocaleString("en-US");
+// A row has a result worth counting when the family was analysed, or when its
+// latest attempt failed but an earlier successful run is still being shown.
+function hasResult(row: OverviewFamily): boolean {
+  return isFamilyAnalyzed(row.state) || (row.state === "latest_attempt_failed" && row.activeRun !== null);
 }
 
 function formatDate(iso: string | null | undefined): string {
@@ -117,49 +114,27 @@ function buildFamilies(
   landing: MemoryEvidenceLandingItem | null | undefined,
   catalogue: MemoryAnalysisCatalogue | null | undefined,
 ): OverviewFamily[] {
-  const catalogueByFamily = new Map<string, { lastCount: number; lastStatus: string | null }>();
-  if (catalogue) {
-    for (const item of catalogue.items) {
-      catalogueByFamily.set(item.family, {
-        lastCount: item.last_count,
-        lastStatus: item.last_status,
-      });
-    }
-  }
+  const catalogueCount = new Map<string, number>();
+  for (const item of catalogue?.items ?? []) catalogueCount.set(item.family, item.last_count);
   const landingByFamily = new Map<string, NonNullable<MemoryEvidenceLandingItem["families"]>[number]>();
-  if (landing) {
-    for (const f of landing.families) {
-      landingByFamily.set(f.family, f);
-    }
-  }
+  for (const f of landing?.families ?? []) landingByFamily.set(f.family, f);
   return FAMILIES.map(({ family, title }) => {
-    const landingEntry = landingByFamily.get(family);
-    const catalogueEntry = catalogueByFamily.get(family);
-    // The landing carries the per-family count; the catalogue is
-    // keyed by profile so it cannot distinguish ``kernel_modules``
-    // from ``drivers`` (both come from ``kernel_basic``).  When the
-    // landing is missing, fall back to the catalogue for the small
-    // number of families that map to a single profile (e.g. handles).
-    const landingCount = (landingEntry as { count?: number } | undefined)?.count;
-    const lastCount =
-      typeof landingCount === "number" ? landingCount : (catalogueEntry?.lastCount ?? 0);
+    const entry = landingByFamily.get(family);
+    // The landing carries the per-family count; the catalogue is keyed by
+    // profile so it cannot tell ``kernel_modules`` from ``drivers`` (both come
+    // from ``kernel_basic``). It is only a fallback when the landing has none.
+    const landingCount = (entry as { count?: number } | undefined)?.count;
     return {
       family,
       title,
-      state: landingEntry?.state ?? "not_analyzed",
-      activeRun: landingEntry?.active_run ?? null,
-      latestAttempt: landingEntry?.latest_attempt ?? null,
-      selectionReason: landingEntry?.selection_reason ?? "not_analyzed",
-      usingFallback: Boolean(landingEntry?.using_fallback),
-      lastCount,
+      state: entry?.state ?? "not_analyzed",
+      activeRun: entry?.active_run ?? null,
+      latestAttempt: entry?.latest_attempt ?? null,
+      usingFallback: Boolean(entry?.using_fallback),
+      availabilityReason: entry?.availability_reason ?? null,
+      lastCount: typeof landingCount === "number" ? landingCount : (catalogueCount.get(family) ?? 0),
     } satisfies OverviewFamily;
   });
-}
-
-const ANALYZED_STATES = new Set<MemoryFamilyState>(["completed", "ready", "analyzed_with_results", "analyzed_empty"]);
-
-function isFamilyAnalyzed(state: MemoryFamilyState | undefined): boolean {
-  return Boolean(state && ANALYZED_STATES.has(state));
 }
 
 type DetectionReadiness = "recognized" | "needs_confirmation" | "blocked" | "unknown";
@@ -173,134 +148,84 @@ function detectionReadiness(status: string | null | undefined): DetectionReadine
   return "unknown";
 }
 
+export type OverviewNotice = {
+  id: string;
+  tone: "danger" | "warn" | "info";
+  message: string;
+  action?: { label: string; href: string };
+};
+
 /**
- * The Memory Investigation checklist: a read-only view over state Kairon
- * already computes (detection, host assignment, readiness, per-family
- * analysis state). It never owns state -- it only ever walks the same
- * `landing`/`readiness`/`families` data the rest of this tab already
- * fetches, and stops at the first step that isn't done yet so exactly one
- * step is ever marked "next".
+ * What the analyst has to act on before the results can be trusted or
+ * completed. Empty when nothing needs attention, so a healthy evidence shows
+ * no status chrome at all -- only its results. Each notice is derived from
+ * state the backend already reports, never from a particular image.
  */
-// Exported for tests: this pure function is where the checklist's decisions
-// live, and rendering it would only add four mocked queries around the same
-// logic.
-export function buildInvestigationChecklist(
+// Exported for tests: the decisions live here, rendering only adds mocks.
+export function buildOverviewNotices(
+  caseId: string,
   landing: MemoryEvidenceLandingItem | null,
   readiness: MemoryEvidenceReadiness | null,
+  backend: MemoryBackendStatus | null,
   families: OverviewFamily[],
-  onJumpToTab: (tab: MemoryTab, artifact?: string) => void,
-): InvestigationChecklistItem[] {
-  const readinessState = detectionReadiness(landing?.detection_status);
-  const canAnalyze = landing?.can_analyze ?? readiness?.can_analyze ?? false;
-  const processesFamily = families.find((f) => f.family === "processes");
-  const suspiciousFamily = families.find((f) => f.family === "suspicious_regions");
-  const networkFamily = families.find((f) => f.family === "network");
-  const anyAnalyzed = families.some((f) => isFamilyAnalyzed(f.state));
-  // A memory image is analysed family by family, and the first profile to run
-  // covers only processes. Marking this step done as soon as *any* family had
-  // content told the analyst the image was analysed while most of it -- network,
-  // suspicious regions, handles, drivers -- had never been looked at, and the
-  // only hint was the header button quietly reading "Complete analysis".
-  // "unavailable" families are excluded: they do not apply to this image, so
-  // they can never be completed and must not hold the step open forever.
-  const pendingFamilies = families.filter((f) => !isFamilyAnalyzed(f.state) && f.state !== "unavailable");
-  const fullyAnalyzed = anyAnalyzed && pendingFamilies.length === 0;
+): OverviewNotice[] {
+  const notices: OverviewNotice[] = [];
+  const detection = detectionReadiness(landing?.detection_status);
+  if (detection === "blocked") {
+    notices.push({ id: "detection", tone: "danger", message: landing?.detection_reason || "Kairon could not confirm this is a memory image." });
+  } else if (detection === "needs_confirmation") {
+    notices.push({ id: "detection", tone: "warn", message: "Confirm the evidence type before analysis can start." });
+  }
 
-  type Step = {
-    id: string;
-    label: string;
-    done: boolean;
-    blocked?: string;
-    /** Started but not finished -- shown as the next action, with what is left. */
-    partial?: string;
-    action?: InvestigationChecklistItem["action"];
-  };
+  // The readiness endpoint folds in worker, backend and storage access, so it
+  // is the one source for "can a new analysis run now". The backend status is
+  // only consulted while readiness has not loaded.
+  if (readiness && !readiness.can_analyze) {
+    notices.push({ id: "readiness", tone: "warn", message: readiness.sanitized_message || "This evidence is not ready for memory analysis." });
+  } else if (!readiness && backend && !backend.ready) {
+    notices.push({ id: "readiness", tone: "warn", message: backend.message || `Volatility 3: ${backendBadge(backend)}` });
+  }
 
-  const steps: Step[] = [
-    { id: "upload", label: "Upload completed", done: Boolean(landing) },
-    {
-      id: "recognized",
-      label: "Memory recognized",
-      done: readinessState === "recognized",
-      blocked:
-        readinessState === "blocked"
-          ? landing?.detection_reason || "Kairon could not confirm this is a memory image."
-          : readinessState === "needs_confirmation"
-            ? "Confirm the evidence type before analysis can start."
-            : undefined,
-    },
-    {
-      id: "host_assigned",
-      label: "Host assigned",
-      done: Boolean(landing?.host_id),
-      action: landing?.host_id ? undefined : { label: "Assign host", href: `/cases/${landing?.case_id ?? ""}/m` },
-    },
-    {
-      id: "ready",
-      label: "Ready for analysis",
-      done: canAnalyze,
-      blocked: !canAnalyze && readiness?.sanitized_message ? readiness.sanitized_message : !canAnalyze ? "Not ready for analysis yet." : undefined,
-    },
-    {
-      id: "analyze",
-      label: "Analyze memory",
-      done: fullyAnalyzed,
-      partial: anyAnalyzed && !fullyAnalyzed
-        ? `${pendingFamilies.length} of ${pendingFamilies.length + families.filter((f) => isFamilyAnalyzed(f.state)).length} families not analyzed yet (${pendingFamilies
-            .map((f) => f.title)
-            .join(", ")}). Use "Complete analysis" above to run the rest.`
-        : undefined,
-    },
-    {
-      id: "review_processes",
-      label: "Review process tree",
-      done: isFamilyAnalyzed(processesFamily?.state),
-      action: { label: "Open processes", onClick: () => onJumpToTab("processes") },
-    },
-    {
-      id: "review_suspicious",
-      label: "Review suspicious memory",
-      done: isFamilyAnalyzed(suspiciousFamily?.state),
-      action: { label: "Open suspicious memory", onClick: () => onJumpToTab("suspicious") },
-    },
-    {
-      id: "review_network",
-      label: "Review network",
-      done: isFamilyAnalyzed(networkFamily?.state),
-      action: { label: "Open network", onClick: () => onJumpToTab("network") },
-    },
-  ];
+  if (landing && !landing.host_id) {
+    notices.push({
+      id: "host",
+      tone: "info",
+      message: "No host is assigned to this evidence, so its results are not linked to the host's other evidence.",
+      action: { label: "Assign host", href: memoryWorkbenchRoute(caseId) },
+    });
+  }
 
-  let nextAssigned = false;
-  return steps.map((step) => {
-    if (step.done) {
-      return { id: step.id, label: step.label, status: "done" } satisfies InvestigationChecklistItem;
-    }
-    if (nextAssigned) {
-      return { id: step.id, label: step.label, status: "locked" } satisfies InvestigationChecklistItem;
-    }
-    nextAssigned = true;
-    if (step.blocked) {
-      return { id: step.id, label: step.label, status: "blocked", detail: step.blocked, action: step.action } satisfies InvestigationChecklistItem;
-    }
-    const detail = step.partial ?? (step.id === "analyze" ? 'Use "Analyze memory" above to start.' : undefined);
-    return { id: step.id, label: step.label, status: "next", detail, action: step.action } satisfies InvestigationChecklistItem;
-  });
+  const failed = families.filter((f) => FAILED_STATES.has(f.state));
+  if (failed.length > 0) {
+    notices.push({ id: "failed", tone: "warn", message: `Latest analysis failed: ${failed.map((f) => f.title).join(", ")}.` });
+  }
+
+  // Families that do not apply to this image ("unavailable") can never be
+  // run, so they are not pending work.
+  const blocked = notices.some((n) => n.id === "detection" || n.id === "readiness");
+  const pending = families.filter((f) => f.state === "not_analyzed");
+  if (!blocked && pending.length > 0) {
+    const anyAnalyzed = families.some((f) => isFamilyAnalyzed(f.state));
+    notices.push({
+      id: "pending",
+      tone: "info",
+      message: anyAnalyzed
+        ? `Not analyzed yet: ${pending.map((f) => f.title).join(", ")}. Use "Complete analysis" above to run them.`
+        : 'Nothing has been analyzed yet. Use "Analyze memory" above to start.',
+    });
+  }
+  return notices;
 }
 
 export function MemoryOverviewTab({
   caseId,
   evidenceId,
-  overview,
   backend,
-  symbolCache,
   readinessByEvidence,
   resultViews = null,
   onJumpToTab,
 }: Props) {
   const readiness = readinessByEvidence.get(evidenceId) ?? null;
-  const volatilityBackend = backend;
-  const symbolsReady = Boolean(symbolCache && (symbolCache.symbol_count > 0 || symbolCache.error_code === "SYMBOL_ACQUISITION_DISABLED"));
 
   const landingQuery = useQuery({
     queryKey: ["memory-landing", caseId],
@@ -319,357 +244,137 @@ export function MemoryOverviewTab({
     () => landingQuery.data?.items.find((it) => it.evidence_id === evidenceId) ?? null,
     [landingQuery.data, evidenceId],
   );
-
-  // Counts come from the landing endpoint which carries the per-family
-  // ``count`` field.  The catalogue is keyed by profile (not family)
-  // so the landing is the only source that distinguishes, e.g.,
-  // ``kernel_modules`` from ``drivers`` even when both come from the
-  // same ``kernel_basic`` run.
   const families = useMemo(
     () => buildFamilies(landing, catalogueQuery.data).filter((f) => memoryFamilyApplies(f.family, resultViews)),
     [landing, catalogueQuery.data, resultViews],
   );
-
-  // 26+ checks: artifact cards are derived from the same family rows.
-  const artifactCards = families.filter((f) => !["system_info", "processes"].includes(f.family));
-
-  // Pre-fetch the canonical processes summary (latest successful
-  // processes_extended > processes_basic) so we can render the
-  // Summary block without referencing a global run id.
-  const processesFamily = families.find((f) => f.family === "processes");
-
-  const evidence = landing;
-  const backendTone = volatilityBackend?.ready
-    ? "ok"
-    : volatilityBackend?.dedicated_worker_online
-      ? "info"
-      : "warn";
-
-  const checklist = useMemo(
-    () => buildInvestigationChecklist(landing, readiness, families, onJumpToTab),
-    [landing, readiness, families, onJumpToTab],
+  const notices = useMemo(
+    () => buildOverviewNotices(caseId, landing, readiness, backend, families),
+    [caseId, landing, readiness, backend, families],
   );
-  const recommendedStep = checklist.find((item) => item.status === "next" || item.status === "blocked") ?? null;
+
+  const scope = new URLSearchParams({ source_category: "Memory", evidence_id: evidenceId });
 
   return (
-    <div className="space-y-6" data-testid="memory-overview">
-      {/* PRIMARY: Memory Investigation checklist -- a visible read of state
-          Kairon already computes (detection, host, readiness, per-family
-          analysis). Everything below this is the same content the tab
-          always showed, just no longer the first thing an analyst sees. */}
-      <section className="rounded-[28px] border border-accent/25 bg-panel/70 p-5 shadow-panel" data-testid="memory-investigation-checklist">
-        <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Memory Investigation</p>
-        <div className="mt-3">
-          <InvestigationChecklist items={checklist} testId="memory-investigation-checklist-list" />
-        </div>
-        {recommendedStep ? (
-          <p className="mt-3 text-xs text-muted" data-testid="memory-investigation-recommendation">
-            Recommended next: <span className="text-ink">{recommendedStep.label}</span>
-            {recommendedStep.detail ? <> — {recommendedStep.detail}</> : null}
-          </p>
-        ) : (
-          <p className="mt-3 text-xs text-muted">Every step in this checklist is complete for this evidence.</p>
-        )}
-      </section>
-
-      <section className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel">
-        <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted">
-          Showing the latest successful result for each analysis family.
-        </p>
-        <p className="mt-1 text-xs text-muted">
-          Case <span className="font-mono">{caseId.slice(0, 8)}</span>
-          {evidence ? (
-            <>
-              {" "}· Evidence <span className="font-mono">{evidence.evidence_id.slice(0, 8)}</span>
-              {evidence.detected_host ? <> · Host {evidence.detected_host}</> : null}
-            </>
-          ) : null}
-        </p>
-        {evidenceId ? (
-          <div className="mt-4 flex flex-wrap gap-2" data-testid="memory-overview-context-actions">
-            <Link to={`/cases/${caseId}/search?source_category=Memory&evidence_id=${evidenceId}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Search this Evidence</Link>
-            <Link to={`/cases/${caseId}/timeline?source_category=Memory&evidence_id=${evidenceId}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Timeline</Link>
-            <Link to={commandHistoryRoute(caseId, new URLSearchParams({ source_category: "Memory", evidence_id: evidenceId }))} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Commands</Link>
-            <button type="button" onClick={() => onJumpToTab("processes")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">View Processes</button>
-            <button type="button" onClick={() => onJumpToTab("graph")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">View Graph</button>
-          </div>
-        ) : null}
-      </section>
-
-      <section
-        className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel"
-        data-testid="memory-overview-status"
-      >
-        <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Memory engine status</h3>
-        <div className="mt-3 grid gap-3 md:grid-cols-4">
-          <StatusPill
-            label="Volatility 3"
-            value={volatilityBackend ? backendBadge(volatilityBackend) : "—"}
-            tone={volatilityBackend?.ready ? "ok" : "warn"}
-            testId="overview-backend-volatility"
-          />
-          <StatusPill
-            label="Memory worker"
-            value={volatilityBackend?.dedicated_worker_online ? "Ready" : "Not enabled"}
-            tone={volatilityBackend?.dedicated_worker_online ? "ok" : "warn"}
-            testId="overview-backend-worker"
-          />
-          <StatusPill
-            label="Symbols"
-            value={symbolsReady ? "Cached" : "Not cached"}
-            tone={symbolsReady ? "ok" : "warn"}
-            testId="overview-backend-symbols"
-          />
-          <StatusPill
-            label="Evidence readiness"
-            value={readiness?.can_analyze ? "Ready" : readiness ? "Blocked" : "—"}
-            tone={readiness?.can_analyze ? "ok" : readiness ? "danger" : "info"}
-            testId="overview-evidence-readiness"
-          />
-        </div>
-      </section>
+    <div className="space-y-4" data-testid="memory-overview">
+      {notices.length > 0 ? (
+        <ul className="space-y-2" data-testid="memory-overview-notices">
+          {notices.map((notice) => (
+            <li
+              key={notice.id}
+              className={`flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-2.5 text-sm ${toneClass(notice.tone)}`}
+              data-testid={`memory-overview-notice-${notice.id}`}
+            >
+              <span>{notice.message}</span>
+              {notice.action ? (
+                <Link to={notice.action.href} className="rounded-lg border border-white/20 px-2 py-1 text-xs">
+                  {notice.action.label}
+                </Link>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
 
       <section
         className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel"
         data-testid="memory-overview-family-status"
       >
-        <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Analysis status</h3>
-        <p className="mt-1 text-xs text-muted">
-          Each row reflects the active result for that family. Completed runs with zero results are still shown.
-        </p>
-        <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full divide-y divide-line text-sm" data-testid="memory-family-table">
-            <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted">
-              <tr>
-                <th className="px-3 py-2">Family</th>
-                <th className="px-3 py-2">State</th>
-                <th className="px-3 py-2">Profile</th>
-                <th className="px-3 py-2">Count</th>
-                <th className="px-3 py-2">Last success</th>
-                <th className="px-3 py-2">Last attempt</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {families.map((row) => {
-                const meta = stateLabel(row.state);
-                const lastSuccess = row.activeRun;
-                const lastAttempt = row.latestAttempt;
-                return (
-                  <tr key={row.family} data-testid={`memory-family-row-${row.family}`}>
-                    <td className="px-3 py-2 font-medium text-ink">
-                      <FamilyLink caseId={caseId} evidenceId={evidenceId} family={row.family} label={row.title} onJumpToTab={onJumpToTab} />
-                    </td>
-                    <td className="px-3 py-2">
-                      <span
-                        className={`rounded-md border px-2 py-0.5 text-[10px] ${toneClass(meta.tone)}`}
-                        data-testid={`memory-family-state-${row.family}`}
-                        data-family-state={row.state}
-                      >
-                        {meta.label}
-                      </span>
-                      {row.usingFallback ? (
-                        <span className="ml-2 rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-100" data-testid={`memory-family-fallback-${row.family}`}>
-                          showing last successful
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="px-3 py-2 text-muted">
-                      {lastSuccess ? (
-                        <span className="font-mono text-[10px]">{lastSuccess.profile}</span>
-                      ) : (
-                        <span className="text-[10px] text-muted">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-ink">
-                      {row.state === "unavailable" ? (
-                        <span className="text-[10px] text-muted">—</span>
-                      ) : hasAnalyzedContent(row.state) ? (
-                        <span data-testid={`memory-family-count-${row.family}`}>
-                          {countCellLabel(row.state)} · {formatCount(row.lastCount)}
-                          {row.lastCount === 0 ? (
-                            <span className="ml-1 text-[10px] text-muted" data-testid={`memory-family-zero-${row.family}`}>
-                              0 results
-                            </span>
-                          ) : null}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-muted">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-muted">
-                      {lastSuccess ? formatDate(lastSuccess.completed_at ?? lastSuccess.started_at) : "—"}
-                    </td>
-                    <td className="px-3 py-2 text-muted">
-                      {lastAttempt ? formatDate(lastAttempt.completed_at ?? lastAttempt.started_at) : "—"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Results</h3>
+          {evidenceId ? (
+            <nav className="flex flex-wrap gap-3 text-xs text-muted" data-testid="memory-overview-context-actions">
+              <Link to={`/cases/${caseId}/search?${scope}`} className="hover:text-accent">Search this evidence</Link>
+              <Link to={`/cases/${caseId}/timeline?${scope}`} className="hover:text-accent">Timeline</Link>
+              <Link to={commandHistoryRoute(caseId, scope)} className="hover:text-accent">Commands</Link>
+            </nav>
+          ) : null}
         </div>
-      </section>
-
-      <section
-        className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel"
-        data-testid="memory-overview-processes"
-      >
-        <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Processes</h3>
-        {processesFamily && hasAnalyzedContent(processesFamily.state) ? (
-          <div className="mt-3 grid gap-3 md:grid-cols-4">
-            <SummaryCard label="Processes" value={processesFamily.lastCount} testId="overview-processes-processes" />
-            <SummaryCard label="Last profile" value={processesFamily.activeRun?.profile ?? "—"} testId="overview-processes-profile" />
-            <SummaryCard label="Last success" value={processesFamily.activeRun ? formatDate(processesFamily.activeRun.completed_at ?? processesFamily.activeRun.started_at) : "—"} testId="overview-processes-last" />
-            <SummaryCard
-              label="View"
-              value="Open processes"
-              tone="info"
-              action
-              testId="overview-processes-open"
-              onAction={() => onJumpToTab("processes")}
-            />
-          </div>
-        ) : (
-          <div className="mt-3 space-y-2">
-            <p className="text-sm text-muted" data-testid="overview-processes-empty">
-              Processes have not been analyzed for this evidence.
-            </p>
-            <button
-              type="button"
-              onClick={() => onJumpToTab("processes")}
-              data-testid="overview-processes-cta"
-              className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs text-accent"
-            >
-              Run process analysis
-            </button>
-          </div>
-        )}
-      </section>
-
-      <section
-        className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel"
-        data-testid="memory-overview-artifacts"
-      >
-        <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Core memory artifacts</h3>
-        <p className="mt-1 text-xs text-muted">
-          One card per artifact family. Counts are scoped to this evidence.
-        </p>
-        <div className="mt-3 grid gap-2 md:grid-cols-2 lg:grid-cols-3" data-testid="memory-overview-artifact-cards">
-          {artifactCards.map((row) => {
-            const meta = stateLabel(row.state);
-            const isUnavailable = row.state === "unavailable";
-            const isAnalyzed = hasAnalyzedContent(row.state);
-            return (
-              <div
-                key={row.family}
-                className="rounded-2xl border border-line bg-abyss/60 p-3"
-                data-testid={`memory-artifact-card-${row.family}`}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-ink">{row.title}</p>
-                  <span className={`rounded-md border px-2 py-0.5 text-[10px] ${toneClass(meta.tone)}`}>
-                    {meta.label}
-                  </span>
-                </div>
-                <p className="mt-1 text-[10px] text-muted">
-                  {isUnavailable
-                    ? "Network plugin is not available in the installed Volatility runtime."
-                    : isAnalyzed
-                      ? `${row.lastCount.toLocaleString("en-US")} artifacts · last success ${row.activeRun ? formatDate(row.activeRun.completed_at ?? row.activeRun.started_at) : "—"}`
-                      : "Not analyzed yet."}
-                </p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onJumpToTab(FAMILIES.find((f) => f.family === row.family)?.tab ?? "overview")}
-                    className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-[10px] text-muted"
-                    data-testid={`memory-artifact-card-open-${row.family}`}
-                  >
-                    Open subview
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <table className="mt-3 w-full text-sm" data-testid="memory-family-table">
+          <thead className="text-left text-[10px] uppercase tracking-[0.14em] text-muted">
+            <tr className="border-b border-line">
+              <th className="px-3 py-2 font-medium">Analysis</th>
+              <th className="px-3 py-2 text-right font-medium">Results</th>
+              <th className="px-3 py-2 font-medium">Status</th>
+              <th className="hidden px-3 py-2 font-medium sm:table-cell">Analyzed</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {families.map((row) => (
+              <FamilyRow key={row.family} row={row} onJumpToTab={onJumpToTab} />
+            ))}
+          </tbody>
+        </table>
       </section>
     </div>
   );
 }
 
-function FamilyLink({
-  caseId,
-  evidenceId,
-  family,
-  label,
-  onJumpToTab,
-}: {
-  caseId: string;
-  evidenceId: string;
-  family: string;
-  label: string;
-  onJumpToTab: (tab: MemoryTab, artifact?: string) => void;
-}) {
-  const target = FAMILIES.find((f) => f.family === family);
-  if (!target) return <span>{label}</span>;
+function FamilyRow({ row, onJumpToTab }: { row: OverviewFamily; onJumpToTab: (tab: MemoryTab, artifact?: string) => void }) {
+  const meta = stateLabel(row.state);
+  const target = FAMILIES.find((f) => f.family === row.family);
+  const open = () => target && onJumpToTab(target.tab, target.artifact);
+  const showResult = hasResult(row);
+  // Completed is the normal case: say it to assistive tech, but keep the eye
+  // on the rows that differ.
+  const quiet = meta.tone === "ok";
   return (
-    <button
-      type="button"
-      onClick={() => onJumpToTab(target.tab, target.artifact)}
-      className="text-left text-ink hover:text-accent"
-      data-testid={`memory-family-link-${family}`}
+    <tr
+      className="cursor-pointer hover:bg-abyss/50"
+      onClick={open}
+      data-testid={`memory-family-row-${row.family}`}
     >
-      {label}
-    </button>
-  );
-}
-
-function StatusPill({ label, value, tone, testId }: { label: string; value: string; tone: "ok" | "warn" | "info" | "danger"; testId?: string }) {
-  return (
-    <div className={`rounded-2xl border p-3 ${toneClass(tone)}`} data-testid={testId}>
-      <p className="text-[10px] uppercase tracking-[0.18em] opacity-80">{label}</p>
-      <p className="mt-1 text-sm font-semibold">{value}</p>
-    </div>
-  );
-}
-
-function SummaryCard({
-  label,
-  value,
-  tone = "ok",
-  action,
-  testId,
-  onAction,
-}: {
-  label: string;
-  value: string | number;
-  tone?: "ok" | "warn" | "info";
-  action?: boolean;
-  testId?: string;
-  onAction?: () => void;
-}) {
-  return (
-    <div
-      className={`rounded-2xl border p-3 ${toneClass(tone)}`}
-      data-testid={testId}
-    >
-      <p className="text-[10px] uppercase tracking-[0.18em] opacity-80">{label}</p>
-      {action ? (
+      <td className="px-3 py-2">
         <button
           type="button"
-          onClick={onAction}
-          className="mt-1 text-sm font-semibold text-ink hover:text-accent"
+          onClick={(event) => {
+            event.stopPropagation();
+            open();
+          }}
+          className="text-left font-medium text-ink hover:text-accent"
+          data-testid={`memory-family-link-${row.family}`}
         >
-          {value}
+          {row.title}
         </button>
-      ) : (
-        <p className="mt-1 text-sm font-semibold">{value}</p>
-      )}
-    </div>
+      </td>
+      <td className="px-3 py-2 text-right tabular-nums">
+        {showResult ? (
+          <span
+            className={row.lastCount === 0 ? "text-muted" : "text-ink"}
+            data-testid={`memory-family-count-${row.family}`}
+          >
+            {row.lastCount.toLocaleString("en-US")}
+            {row.lastCount === 0 ? <span className="sr-only" data-testid={`memory-family-zero-${row.family}`}> results</span> : null}
+          </span>
+        ) : (
+          <span className="text-muted">—</span>
+        )}
+      </td>
+      <td className="px-3 py-2">
+        <span
+          className={quiet ? "sr-only" : `rounded-md border px-2 py-0.5 text-[10px] ${toneClass(meta.tone)}`}
+          data-testid={`memory-family-state-${row.family}`}
+          data-family-state={row.state}
+        >
+          {meta.label}
+        </span>
+        {row.state === "unavailable" ? (
+          <span className="ml-2 text-[11px] text-muted">{row.availabilityReason || "Not available for this image."}</span>
+        ) : null}
+        {row.usingFallback && row.state !== "latest_attempt_failed" ? (
+          <span className="ml-2 text-[11px] text-amber-100" data-testid={`memory-family-fallback-${row.family}`}>
+            showing last successful run
+          </span>
+        ) : null}
+      </td>
+      <td className="hidden px-3 py-2 font-mono text-[11px] text-muted sm:table-cell">
+        {row.activeRun ? formatDate(row.activeRun.completed_at ?? row.activeRun.started_at) : "—"}
+      </td>
+    </tr>
   );
 }
 
-function toneClass(tone: "ok" | "warn" | "info" | "muted" | "danger"): string {
+function toneClass(tone: Tone): string {
   switch (tone) {
     case "ok":
       return "border-emerald-400/30 bg-emerald-500/10 text-emerald-100";
