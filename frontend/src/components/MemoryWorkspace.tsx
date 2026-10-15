@@ -361,6 +361,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
             runOptions={runOptionsQuery.data ?? null}
             selectedRunId={selectedRunId}
             onSelectRunId={setSelectedRunId}
+            resultViews={resultViews}
           />
         ) : null}
 

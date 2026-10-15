@@ -1,8 +1,8 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryActiveResult } from "../../api/client";
+import type { MemoryActiveResult, MemoryPlatformResultViews } from "../../api/client";
 import { MemoryShellHistoryTab } from "./MemoryShellHistoryTab";
 
 const getMemoryActiveResultMock = vi.fn();
@@ -45,11 +45,11 @@ function activeResult(overrides: Partial<MemoryActiveResult> = {}): MemoryActive
   };
 }
 
-function renderTab() {
+function renderTab(resultViews: MemoryPlatformResultViews | null = null) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryShellHistoryTab caseId={CASE} evidenceId={EVIDENCE} runOptions={null} selectedRunId={null} onSelectRunId={() => {}} />
+      <MemoryShellHistoryTab caseId={CASE} evidenceId={EVIDENCE} runOptions={null} selectedRunId={null} onSelectRunId={() => {}} resultViews={resultViews} />
     </QueryClientProvider>,
   );
 }
@@ -275,5 +275,94 @@ describe("MemoryShellHistoryTab", () => {
     getMemoryActiveResultMock.mockResolvedValue(activeResult());
     renderTab();
     expect((await screen.findByTestId("shell-history-powershell-empty")).textContent).toContain("Find Evil");
+  });
+
+  describe("sources", () => {
+    const typedRow = { document_id: "d1", pid: 10, process_name: "bash", command: "ls -la", source_plugin: "linux.bash" };
+
+    it("shows each source's count and opens the first one with records", async () => {
+      getMemoryActiveResultMock.mockResolvedValue(activeResult({ analysis_state: "analyzed_empty", total: 0 }));
+      getCommandLineHistoryMock.mockResolvedValue(commandLines([{ process_entity_id: "p1", pid: 4, ppid: 1, process_name: "cmd.exe", command_line: "cmd /c whoami", create_time: null, visibility: { listed: true } }]));
+      renderTab();
+
+      await waitFor(() => expect(screen.getByTestId("shell-history-source-count-executed")).toHaveTextContent("1"));
+      expect(screen.getByTestId("shell-history-source-count-typed")).toHaveTextContent("0");
+      await waitFor(() => expect(screen.getByTestId("shell-history-source-tab-executed")).toHaveAttribute("aria-selected", "true"));
+      expect(screen.getByTestId("shell-history-launched").closest("[hidden]")).toBeNull();
+      expect(screen.getByTestId("shell-history-typed").closest("[hidden]")).not.toBeNull();
+    });
+
+    it("keeps the analyst's choice", async () => {
+      getMemoryActiveResultMock.mockResolvedValue(activeResult({ analysis_state: "analyzed_empty", total: 0 }));
+      getCommandLineHistoryMock.mockResolvedValue(commandLines([{ process_entity_id: "p1", pid: 4, ppid: 1, process_name: "cmd.exe", command_line: "x", create_time: null, visibility: {} }]));
+      renderTab();
+      await waitFor(() => expect(screen.getByTestId("shell-history-source-tab-executed")).toHaveAttribute("aria-selected", "true"));
+
+      fireEvent.click(screen.getByTestId("shell-history-source-tab-typed"));
+
+      expect(screen.getByTestId("shell-history-source-tab-typed")).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("does not offer PowerShell's event log where MemProcFS cannot run", async () => {
+      getMemoryActiveResultMock.mockResolvedValue(activeResult());
+      renderTab({ presentation_families: ["memory_shell_history"], frameworks: ["volatility3"] } as unknown as MemoryPlatformResultViews);
+
+      await screen.findByTestId("shell-history-source-tab-typed");
+      expect(screen.queryByTestId("shell-history-source-tab-powershell")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("shell-history-powershell-log")).not.toBeInTheDocument();
+      expect(getMemoryPowerShellLogMock).not.toHaveBeenCalled();
+    });
+
+    it("offers only the sources present in the data and sends the typed filters", async () => {
+      getMemoryActiveResultMock.mockResolvedValue({
+        ...activeResult({ analysis_state: "analyzed_with_results", total: 1, items: [typedRow] }),
+        source_facets: [{ value: "linux.bash", count: 3 }, { value: "screen", count: 1 }],
+      });
+      renderTab();
+
+      const select = await screen.findByTestId("shell-history-source-select");
+      const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
+      expect(options).toEqual(["All sources", "Bash history (3)", "Console screen (1)"]);
+      expect(screen.getByTestId("shell-history-source")).toHaveTextContent("Bash history");
+
+      fireEvent.change(select, { target: { value: "linux.bash" } });
+      fireEvent.change(screen.getByTestId("shell-history-command-input"), { target: { value: "curl" } });
+
+      await waitFor(() =>
+        expect(getMemoryActiveResultMock).toHaveBeenLastCalledWith(
+          CASE, EVIDENCE, "shell_history", undefined,
+          expect.objectContaining({ source: "linux.bash", command: "curl", page: 1 }),
+        ),
+      );
+    });
+
+    it("hides the source filter when the data has a single source", async () => {
+      getMemoryActiveResultMock.mockResolvedValue({
+        ...activeResult({ analysis_state: "analyzed_with_results", total: 1, items: [typedRow] }),
+        source_facets: [{ value: "linux.bash", count: 1 }],
+      });
+      renderTab();
+
+      await screen.findByTestId("shell-history-command-input");
+      expect(screen.queryByTestId("shell-history-source-select")).not.toBeInTheDocument();
+    });
+
+    it("sends the executed-command filters the backend supports", async () => {
+      getMemoryActiveResultMock.mockResolvedValue(activeResult());
+      getCommandLineHistoryMock.mockResolvedValue(commandLines([{ process_entity_id: "p1", pid: 4, ppid: 1, process_name: "cmd.exe", command_line: "x", create_time: null, visibility: {} }]));
+      renderTab();
+      await screen.findByTestId("shell-history-launched-table");
+
+      fireEvent.change(screen.getByTestId("shell-history-launched-state"), { target: { value: "terminated" } });
+      fireEvent.change(screen.getByTestId("shell-history-launched-ppid"), { target: { value: "1" } });
+      fireEvent.change(screen.getByTestId("shell-history-launched-order"), { target: { value: "newest_first" } });
+
+      await waitFor(() =>
+        expect(getCommandLineHistoryMock).toHaveBeenLastCalledWith(
+          CASE,
+          expect.objectContaining({ visibility: "terminated", ppid: 1, sort_order: "newest_first", page: 1 }),
+        ),
+      );
+    });
   });
 });

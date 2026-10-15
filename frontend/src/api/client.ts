@@ -6719,6 +6719,8 @@ export const api = {
       state?: string;
       pid?: number;
       process_name?: string;
+      command?: string;
+      source?: string;
       module_name?: string;
       path?: string;
       load_state?: string;
