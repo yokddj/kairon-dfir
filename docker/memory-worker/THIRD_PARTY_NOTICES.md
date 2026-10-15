@@ -18,8 +18,8 @@ Public redistribution of a prebuilt image containing Volatility 3 is out of scop
 The image also installs MemProcFS's Linux release binaries, used for the FindEvil memory analysis profile, during the same operator-initiated build.
 
 - Project: MemProcFS by Ulf Frisk, `https://github.com/ufrisk/MemProcFS`
-- Version: `5.19.0` (release `v5.19`, build `20261005`)
-- Archives: `MemProcFS_files_and_binaries_v5.19.0-linux_x64-20261005.tar.gz` (SHA-256 `2ec75bba2a243525a16be22d1ea6863c9fcd4de694c07e4896d4029017c43ea5`) and `…-linux_aarch64-20261005.tar.gz` (SHA-256 `03554471c1702d73f2b83c22e2483b0e110b04399fc399c07fc4f7a47827c3a5`), from the project's GitHub release; the build checks the hash before unpacking.
+- Version: `5.19.0` (release `v5.19`, build `20261014`)
+- Archives: `MemProcFS_files_and_binaries_v5.19.0-linux_x64-20261014.tar.gz` (SHA-256 `6e8bea90907863b9587e9d787a3787f37ee8a6a6e949aedf3785303d38b8d5e7`) and `…-linux_aarch64-20261014.tar.gz` (SHA-256 `41aa8867916446efb44ebd02c51fc14d11ba254a131109dd3278247b840e55d7`), from the project's GitHub release; the build checks the hash before unpacking.
 - License: GNU Affero General Public License v3.0; bundled components keep their own licenses (listed in `license_info_all.txt`). All are copied to `/licenses/memprocfs/`.
 
 - Modified file: `vmm.so` is rebuilt from the source of that release (commit `2e85ff7edc3772e24bce28bdc4cccb744a8b2456`, archive SHA-256 `8916c442d1a7de667aebaa6c34e69a43325e474e003da89a6881f3961a4b2048`) with the patches in `docker/memory-worker/patches/` applied: `memprocfs-netdns-lookup-loop.patch` fixes a loop that never ends while locating the DNS cache on Windows 11+ (an inner loop reused the outer loop's index), which kept the forensic scan at 90 % and FindEvil from finishing. The patches are the complete source of the changes, under the same AGPL-3.0 license. Every other file is the unmodified release.
