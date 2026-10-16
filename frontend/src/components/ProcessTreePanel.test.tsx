@@ -478,22 +478,21 @@ describe("ProcessTreePanel", () => {
     expect(await screen.findByText(/No process graph nodes found for the current filters/i)).toBeInTheDocument();
   });
 
-  it("renders aggregated warning summaries without crashing", async () => {
+  it("does not raise a warning for processes whose parent is not in the logs", async () => {
     getProcessTreeMock.mockResolvedValueOnce({
       ...baseBundle,
       graph: {
         ...baseBundle.graph,
         summary: {
           ...baseBundle.graph.summary,
-          warnings_summary: {
-            ambiguous_parent_candidates: 217,
-          },
-          warnings_samples: ["node A", "node B"],
+          warnings: ["Graph limited to 50 nodes. Increase Max nodes or narrow the focus."],
+          warnings_summary: { parent_not_found: 12, process_graph_orphan: 12 },
         },
       },
     });
     renderPanel();
-    expect(await screen.findByText(/217 ambiguous parent candidates/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Graph limited to 50 nodes/i)).toBeInTheDocument();
+    expect(screen.queryByText(/could not be linked to a parent/i)).not.toBeInTheDocument();
   });
 
   it("shows structured orphan parent diagnostics", async () => {
@@ -680,24 +679,6 @@ describe("ProcessTreePanel", () => {
     const parentButtons = screen.getAllByRole("button", { name: /^Parents$/i });
     await userEvent.click(parentButtons[0]);
     expect(await screen.findByText(/Showing \d+ of \d+ visible nodes/i)).toBeInTheDocument();
-  });
-
-  it("groups repeated ambiguous warnings instead of rendering spam", async () => {
-    getProcessTreeMock.mockResolvedValueOnce({
-      ...baseBundle,
-      graph: {
-        ...baseBundle.graph,
-        summary: {
-          ...baseBundle.graph.summary,
-          warnings: Array.from({ length: 100 }, (_, index) => `Ambiguous parent candidates for node node-${index}`),
-          warnings_summary: { ambiguous_parent_candidates: 100, parent_not_found: 0, possible_pid_reuse: 0 },
-          warnings_samples: Array.from({ length: 10 }, (_, index) => `Ambiguous parent candidates for node node-${index}`),
-        },
-      },
-    });
-    renderPanel();
-    expect(await screen.findByText(/100 ambiguous parent candidates/i)).toBeInTheDocument();
-    expect(screen.queryByText(/node-50/)).not.toBeInTheDocument();
   });
 
   it("shows a clear empty state when the API returns no nodes", async () => {

@@ -503,23 +503,6 @@ def _build_process_graph(events: list[dict], case_id: str, evidence_id: str | No
         if node.get("host") and node.get("pid") is not None:
             host_pid_index[(str(node["host"]).lower(), int(node["pid"]))].append({"id": node_id, "ts": _safe_parse_dt(timestamp), "event": event})
 
-    def _refine_pid_candidates(
-        candidates: list[dict],
-        *,
-        parent_name: str | None,
-    ) -> list[dict]:
-        if len(candidates) <= 1:
-            return candidates
-        normalized_parent_name = str(parent_name or "").strip().lower()
-        if not normalized_parent_name:
-            return candidates
-        name_matched = [
-            candidate
-            for candidate in candidates
-            if str((nodes_by_id.get(str(candidate.get("id"))) or {}).get("name") or "").strip().lower() == normalized_parent_name
-        ]
-        return name_matched or candidates
-
     for node_id, node in nodes_by_id.items():
         parent_id = str(node.get("parent_entity_id") or "")
         if parent_id and parent_id in nodes_by_id and parent_id != node_id:
@@ -570,78 +553,46 @@ def _build_process_graph(events: list[dict], case_id: str, evidence_id: str | No
             _set_parent_status(node, status, reason)
             node["data_quality"] = sorted(set(node.get("data_quality") or []) | {quality, "process_graph_orphan"})
             continue
-        candidates = []
-        for candidate_ref in host_pid_index.get((host, int(parent_pid)), []):
-            if candidate_ref.get("id") == node_id:
-                continue
-            candidate_ts = candidate_ref.get("ts")
-            if not candidate_ts or candidate_ts >= child_ts:
-                continue
-            if (child_ts - candidate_ts).total_seconds() > 86400:
-                continue
-            candidates.append({"id": candidate_ref.get("id"), "ts": candidate_ts})
-        candidates = _refine_pid_candidates(candidates, parent_name=parent_name)
-        if not candidates and parent_name:
-            for candidate_node in nodes_by_id.values():
-                if candidate_node.get("id") == node_id:
-                    continue
-                candidate_host = str(candidate_node.get("host") or "").lower()
-                if host and candidate_host and candidate_host != host:
-                    continue
-                if str(candidate_node.get("name") or "").strip().lower() != parent_name:
-                    continue
-                candidate_ts = _safe_parse_dt(candidate_node.get("first_seen"))
-                if not candidate_ts or candidate_ts >= child_ts:
-                    continue
-                if (child_ts - candidate_ts).total_seconds() > 86400:
-                    continue
-                candidates.append({"id": candidate_node.get("id"), "ts": candidate_ts})
-        if not candidates:
-            relaxed_candidates = []
-            for candidate_ref in host_pid_index.get((host, int(parent_pid)), []):
-                if candidate_ref.get("id") == node_id:
-                    continue
-                relaxed_candidates.append({"id": candidate_ref.get("id"), "ts": candidate_ref.get("ts")})
-            relaxed_candidates = _refine_pid_candidates(relaxed_candidates, parent_name=parent_name)
-            if len(relaxed_candidates) == 1:
-                candidates = relaxed_candidates
-            elif len(relaxed_candidates) > 1:
-                _set_parent_status(node, "parent_pid_reused_ambiguous", "Multiple parent candidates matched the same PID; edge omitted to avoid a false parent.", confidence="low")
-                node["data_quality"] = sorted(set(node.get("data_quality") or []) | {"possible_pid_reuse", "process_graph_orphan"})
-                _record_warning("ambiguous_relaxed_parent_candidates", f"Ambiguous relaxed parent candidates for node {node_id}")
-                continue
-        if len(candidates) == 1:
-            candidate = candidates[0]
-            candidate_ts = candidate.get("ts")
-            child_delta_seconds = None
-            if child_ts and candidate_ts:
-                child_delta_seconds = abs((child_ts - candidate_ts).total_seconds())
-            reason = "Linked by parent PID and timestamp proximity."
-            confidence = "medium"
-            if child_delta_seconds is None or child_delta_seconds > 86400:
-                reason = "Linked by relaxed parent PID/name inference; parent may be outside the selected time window."
-                confidence = "low"
-                node["data_quality"] = sorted(set(node.get("data_quality") or []) | {"parent_outside_time_window"})
-            _set_parent_status(node, "linked", reason, confidence=confidence)
-            edges.append(
-                {
-                    "source": candidate["id"],
-                    "target": node_id,
-                    "type": "spawned",
-                    "confidence": confidence,
-                    "source_event_id": node.get("source_events", [None])[0],
-                    "reason": "security_4688_parent_pid_inferred",
-                }
-            )
-            node["data_quality"] = sorted(set(node.get("data_quality") or []) | {"parent_inferred_by_pid"})
-            node["confidence"] = confidence
-        elif len(candidates) > 1:
-            _set_parent_status(node, "parent_pid_reused_ambiguous", "Multiple parent candidates matched PID/time constraints; edge omitted to avoid a false parent.", confidence="low")
-            node["data_quality"] = sorted(set(node.get("data_quality") or []) | {"possible_pid_reuse", "process_graph_orphan"})
-            _record_warning("ambiguous_parent_candidates", f"Ambiguous parent candidates for node {node_id}")
-        else:
-            _set_parent_status(node, "parent_not_found", "Parent PID/name was present, but no earlier matching parent event was found in the graph context.")
+        # The parent is the process holding the PID when the child started:
+        # the last one logged starting with that PID before the child. An
+        # earlier holder must have exited for the PID to be reused, so it
+        # cannot be the parent, however long ago the parent started.
+        previous_holders = [
+            candidate_ref
+            for candidate_ref in host_pid_index.get((host, int(parent_pid)), [])
+            if candidate_ref.get("id") != node_id and candidate_ref.get("ts") and candidate_ref["ts"] <= child_ts
+        ]
+        if not previous_holders:
+            _set_parent_status(node, "parent_not_found", "The parent started before the first logged process start in this scope.")
             node["data_quality"] = sorted(set(node.get("data_quality") or []) | {"parent_not_found", "process_graph_orphan"})
+            continue
+        holder = max(previous_holders, key=lambda ref: (ref["ts"], str(ref.get("id"))))
+        holder_node = nodes_by_id.get(str(holder.get("id"))) or {}
+        holder_name = _safe_name_from_path(holder_node.get("name") or holder_node.get("path"))
+        recorded_parent = _safe_name_from_path(parent_name)
+        if recorded_parent and holder_name and holder_name.lower() != recorded_parent.lower():
+            # The last logged holder of the PID is another program: the real
+            # parent's start was not logged (the PID was reused in between).
+            _set_parent_status(
+                node,
+                "parent_not_found",
+                f"PID {parent_pid} was last logged starting as {holder_name}, not {recorded_parent}: the parent's start is not in the events.",
+            )
+            node["data_quality"] = sorted(set(node.get("data_quality") or []) | {"parent_not_found", "process_graph_orphan"})
+            continue
+        _set_parent_status(node, "linked", "Linked by parent PID: the last process started with that PID before this one.", confidence="medium")
+        edges.append(
+            {
+                "source": holder["id"],
+                "target": node_id,
+                "type": "spawned",
+                "confidence": "medium",
+                "source_event_id": node.get("source_events", [None])[0],
+                "reason": "security_4688_parent_pid_inferred",
+            }
+        )
+        node["data_quality"] = sorted(set(node.get("data_quality") or []) | {"parent_inferred_by_pid"})
+        node["confidence"] = "medium"
 
     edge_targets = {edge["target"] for edge in edges}
     for node_id, node in nodes_by_id.items():
@@ -758,26 +709,13 @@ def _build_process_graph(events: list[dict], case_id: str, evidence_id: str | No
     orphan_status_counts = Counter(str(item.get("parent_link_status") or "parent_not_found") for item in orphan_diagnostics)
 
     warnings_summary = {
-        "ambiguous_parent_candidates": int(warning_counts.get("ambiguous_parent_candidates") or 0),
-        "ambiguous_relaxed_parent_candidates": int(warning_counts.get("ambiguous_relaxed_parent_candidates") or 0),
         "parent_not_found": int(data_quality_counts.get("parent_not_found") or 0),
         "parent_fields_missing": int(data_quality_counts.get("parent_fields_missing") or 0),
-        "possible_pid_reuse": int(data_quality_counts.get("possible_pid_reuse") or 0),
         "process_graph_orphan": int(data_quality_counts.get("process_graph_orphan") or 0),
     }
+    # A parent missing from the logs is normal (it started before logging
+    # began); each such process carries its reason in orphan_diagnostics.
     warnings: list[str] = []
-    if warnings_summary["ambiguous_parent_candidates"]:
-        warnings.append(
-            f"{warnings_summary['ambiguous_parent_candidates']} ambiguous parent candidates. Some edges were omitted to avoid incorrect parent-child links."
-        )
-    if warnings_summary["ambiguous_relaxed_parent_candidates"]:
-        warnings.append(
-            f"{warnings_summary['ambiguous_relaxed_parent_candidates']} relaxed parent candidates remained ambiguous after inference."
-        )
-    if warnings_summary["parent_not_found"]:
-        warnings.append(f"{warnings_summary['parent_not_found']} nodes could not be linked to a parent.")
-    if warnings_summary["possible_pid_reuse"]:
-        warnings.append(f"{warnings_summary['possible_pid_reuse']} nodes were marked with possible PID reuse.")
     return {
         "case_id": case_id,
         "evidence_id": evidence_id,

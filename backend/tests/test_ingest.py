@@ -3620,13 +3620,10 @@ def test_process_graph_pid_reuse_ambiguity() -> None:
         },
     ]
     graph = _build_process_graph(events, "case-1", "ev-1", "evidence")
-    child = next(node for node in graph["nodes"] if node["id"] == "security:child")
-    assert not any(edge["target"] == "security:child" for edge in graph["edges"])
-    assert "possible_pid_reuse" in child["data_quality"]
-    assert graph["summary"]["warnings_summary"]["ambiguous_parent_candidates"] == 1
-    assert graph["summary"]["warnings_samples"] == ["Ambiguous parent candidates for node security:child"]
-    assert graph["summary"]["warnings"][0] == "1 ambiguous parent candidates. Some edges were omitted to avoid incorrect parent-child links."
-    assert "1 nodes were marked with possible PID reuse." in graph["summary"]["warnings"]
+    # Without a recorded parent name the last holder of the PID is the parent.
+    edge = next(edge for edge in graph["edges"] if edge["target"] == "security:child")
+    assert edge["source"] == "security:parent2"
+    assert graph["summary"]["warnings"] == []
 
 
 def test_process_graph_pid_candidates_are_disambiguated_by_parent_name() -> None:
@@ -3672,10 +3669,9 @@ def test_process_graph_pid_candidates_are_disambiguated_by_parent_name() -> None
     assert edge["source"] == "security:parent2"
     assert edge["confidence"] == "medium"
     assert "parent_inferred_by_pid" in child["data_quality"]
-    assert "possible_pid_reuse" not in child["data_quality"]
 
 
-def test_process_graph_aggregates_ambiguous_parent_warnings() -> None:
+def test_process_graph_links_every_child_to_the_last_pid_holder() -> None:
     events: list[dict] = []
     for index in range(12):
         events.append(
@@ -3712,10 +3708,10 @@ def test_process_graph_aggregates_ambiguous_parent_warnings() -> None:
             }
         )
     graph = _build_process_graph(events, "case-1", "ev-1", "evidence")
-    summary = graph["summary"]
-    assert summary["warnings_summary"]["ambiguous_parent_candidates"] == 12
-    assert len(summary["warnings_samples"]) == 10
-    assert summary["warnings"][0] == "12 ambiguous parent candidates. Some edges were omitted to avoid incorrect parent-child links."
+    sources = {edge["target"]: edge["source"] for edge in graph["edges"]}
+    # The last process logged with PID 100 before 10:00 is parent-b-11 (09:11:30).
+    assert all(sources[f"child-{index}"] == "parent-b-11" for index in range(12))
+    assert graph["summary"]["warnings"] == []
 
 
 def test_build_process_tree_bundle_keeps_summary_coherent_with_filtered_graph(monkeypatch: pytest.MonkeyPatch) -> None:
