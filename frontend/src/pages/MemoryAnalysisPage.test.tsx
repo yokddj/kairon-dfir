@@ -669,21 +669,12 @@ describe("MemoryAnalysisPage workspace", () => {
     expect(await screen.findByTestId("metrics-strip")).toBeInTheDocument();
   });
 
-  // 13. Renamed graph metrics
-  it("renames graph metrics in the Graph tab header", async () => {
+  // 13. The metrics line says how many processes and top-level processes the run has
+  it("summarises the process tree in the Graph tab header", async () => {
     renderPage();
     await openMemoryTab("graph");
-    expect(await screen.findByTestId("metrics-strip-visible")).toBeInTheDocument();
-    expect(screen.getByTestId("metrics-strip-orphans")).toBeInTheDocument();
-  });
-
-  // 14. Case roots vs current-view roots differentiated
-  it("differentiates case roots and current-view roots in the Graph tab", async () => {
-    renderPage();
-    await openMemoryTab("graph");
-    await screen.findByTestId("metrics-strip-case-roots");
-    expect(screen.getByTestId("metrics-strip-case-roots")).toBeInTheDocument();
-    expect(screen.getByTestId("metrics-strip-view-roots")).toBeInTheDocument();
+    expect(await screen.findByTestId("metrics-strip-processes")).toBeInTheDocument();
+    expect(screen.getByTestId("metrics-strip-top-level")).toBeInTheDocument();
   });
 
   // 15. A healthy engine adds no status chrome to the Overview

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { type MemoryProcessTreeEntity, api } from "../api/client";
 
 export type TreeMetrics = {
+  total_processes: number;
   visible_processes: number;
   matching_processes: number;
   context_ancestors: number;
@@ -20,6 +21,7 @@ export type TreeMetrics = {
 };
 
 const ZERO_METRICS: TreeMetrics = {
+  total_processes: 0,
   visible_processes: 0,
   matching_processes: 0,
   context_ancestors: 0,
@@ -72,6 +74,7 @@ export function useMemoryTreeMetrics(caseId: string, params: {
   const raw = treeQuery.data?.metrics;
   const metrics: TreeMetrics = raw
     ? {
+        total_processes: raw.total_nodes ?? treeQuery.data?.total_entities ?? 0,
         visible_processes: raw.visible_processes ?? raw.total_nodes ?? 0,
         matching_processes: (raw.search_results ?? treeQuery.data?.search_results ?? []).length,
         context_ancestors: raw.context_ancestors ?? 0,

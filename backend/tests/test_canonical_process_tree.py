@@ -507,3 +507,90 @@ def test_tree_response_is_idempotent() -> None:
             "top_level_nodes": [n["pid"] for n in tree["top_level_nodes"]],
         }
     assert _pids(first) == _pids(second)
+
+
+# ---------------------------------------------------------------------------
+# Parent resolution with PID reuse, PPID 0 roots and broken cycles
+# ---------------------------------------------------------------------------
+
+
+def _by_pid(entities):
+    return {e["process"]["pid"]: e for e in entities}
+
+
+def _boot_with_reused_pid():
+    """Windows boot: smss (548) starts wininit and exits; svchost later
+    reuses PID 548 as a child of services (a grandchild of wininit).
+    Registry predates System's recorded create time."""
+    docs = [
+        _legacy_doc(pid=4, plugin="windows.pslist", ppid=0, name="System", create_time="2024-03-22T10:00:05Z"),
+        _legacy_doc(pid=96, plugin="windows.pslist", ppid=4, name="Registry", create_time="2024-03-22T10:00:00Z"),
+        _legacy_doc(pid=648, plugin="windows.pslist", ppid=548, name="wininit.exe", create_time="2024-03-22T10:00:09Z"),
+        _legacy_doc(pid=784, plugin="windows.pslist", ppid=648, name="services.exe", create_time="2024-03-22T10:00:09Z"),
+        _legacy_doc(pid=548, plugin="windows.pslist", ppid=784, name="svchost.exe", create_time="2024-03-22T10:00:11Z"),
+        _legacy_doc(pid=4100, plugin="windows.pslist", ppid=548, name="child.exe", create_time="2024-03-22T10:05:00Z"),
+    ]
+    return _renormalize(docs)["entities"]
+
+
+def test_reused_parent_pid_does_not_create_a_cycle() -> None:
+    entities = _boot_with_reused_pid()
+    tree = _tree(entities, [], depth=64)
+    by_pid = _by_pid(entities)
+    assert tree["metrics"]["cycles"] == 0
+    # wininit's PPID now belongs to a newer process: its parent exited.
+    assert by_pid[648]["tree"]["is_orphan"] is True
+    assert by_pid[648]["parent_entity_id"] is None
+    # A process started after the reuse is the svchost's child.
+    assert by_pid[4100]["parent_entity_id"] == by_pid[548]["process_entity_id"]
+    # Every process renders, under System or the orphaned wininit.
+    assert tree["metrics"]["processes_not_loaded"] == 0
+    assert sorted(_pid(n) for n in tree["nodes"]) == [4, 648]
+
+
+def test_running_boot_root_is_parent_despite_earlier_child_time() -> None:
+    by_pid = _by_pid(_boot_with_reused_pid())
+    assert by_pid[96]["parent_entity_id"] == by_pid[4]["process_entity_id"]
+    assert by_pid[96]["tree"]["is_orphan"] is False
+
+
+def test_ppid_zero_without_pid_zero_is_a_root() -> None:
+    """Linux: init and kthreadd have PPID 0 and no swapper entity."""
+    docs = [
+        _legacy_doc(pid=1, plugin="linux.pslist", ppid=0, name="systemd", create_time="2024-03-22T10:00:00Z"),
+        _legacy_doc(pid=2, plugin="linux.pslist", ppid=0, name="kthreadd", create_time="2024-03-22T10:00:00Z"),
+        _legacy_doc(pid=300, plugin="linux.pslist", ppid=1, name="sshd", create_time="2024-03-22T10:01:00Z"),
+        _legacy_doc(pid=10, plugin="linux.pslist", ppid=2, name="kworker/0:1", create_time="2024-03-22T10:00:01Z"),
+    ]
+    entities = _renormalize(docs)["entities"]
+    tree = _tree(entities, [], depth=64)
+    assert sorted(r["pid"] for r in tree["roots"]) == [1, 2]
+    assert tree["metrics"]["orphans"] == 0
+    assert tree["metrics"]["processes_not_loaded"] == 0
+
+
+def test_cycle_without_times_is_flagged_and_broken() -> None:
+    docs = [
+        _legacy_doc(pid=10, plugin="windows.psscan", ppid=20, name="a.exe"),
+        _legacy_doc(pid=20, plugin="windows.psscan", ppid=10, name="b.exe"),
+        _legacy_doc(pid=30, plugin="windows.psscan", ppid=20, name="c.exe"),
+    ]
+    entities = _renormalize(docs)["entities"]
+    tree = _tree(entities, [], depth=64)
+    by_pid = _by_pid(entities)
+    assert by_pid[10]["tree"]["is_cycle"] and by_pid[20]["tree"]["is_cycle"]
+    # Hanging off the cycle is not being in it.
+    assert by_pid[30]["tree"]["is_cycle"] is False
+    assert tree["metrics"]["cycles"] == 2
+    assert tree["metrics"]["processes_not_loaded"] == 0
+
+
+def test_orphans_keep_their_subtrees() -> None:
+    extra = _renormalize([
+        _legacy_doc(pid=9000, plugin="windows.pslist", ppid=12345, name="explorer.exe", create_time="2024-03-22T10:07:00Z"),
+        _legacy_doc(pid=9100, plugin="windows.pslist", ppid=9000, name="cmd.exe", create_time="2024-03-22T10:08:00Z"),
+    ])["entities"]
+    tree = _tree(extra, [], depth=64)
+    orphan = next(n for n in tree["nodes"] if n["pid"] == 9000)
+    assert [c["pid"] for c in orphan["children"]] == [9100]
+    assert tree["metrics"]["processes_not_loaded"] == 0

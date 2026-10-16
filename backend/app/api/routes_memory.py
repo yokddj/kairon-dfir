@@ -2859,7 +2859,7 @@ def _jsonify_system_info(value):
     return value
 
 
-def _resolve_run(db: Session, case_id: str, run_id: str | None, profile: str | None, evidence_id: str | None = None) -> MemoryScanRun:
+def _require_process_run(db: Session, case_id: str, run_id: str | None, profile: str | None, evidence_id: str | None = None) -> MemoryScanRun:
     query = db.query(MemoryScanRun).filter(MemoryScanRun.case_id == case_id)
     if evidence_id:
         query = query.filter(MemoryScanRun.evidence_id == evidence_id)
@@ -2878,12 +2878,15 @@ def _resolve_run(db: Session, case_id: str, run_id: str | None, profile: str | N
             raise HTTPException(status_code=404, detail=f"No completed {profile} run was found for this case.")
         return run
     run = (
-        query.filter(MemoryScanRun.status.in_(["completed", "completed_with_errors"]))
+        query.filter(
+            MemoryScanRun.profile.in_(["processes_basic", "processes_extended"]),
+            MemoryScanRun.status.in_(["completed", "completed_with_errors"]),
+        )
         .order_by(MemoryScanRun.completed_at.desc().nullslast(), MemoryScanRun.created_at.desc())
         .first()
     )
     if not run:
-        raise HTTPException(status_code=404, detail="No completed memory run was found for this case.")
+        raise HTTPException(status_code=404, detail="No completed process run was found for this case.")
     return run
 
 
@@ -2972,7 +2975,7 @@ def get_canonical_process_summary(
     db: Session = Depends(get_db),
 ) -> dict:
     _require_case(db, case_id)
-    run = _resolve_run(db, case_id, run_id, profile, evidence_id=evidence_id)
+    run = _require_process_run(db, case_id, run_id, profile, evidence_id=evidence_id)
     summary = canonical_entities.fetch_canonical_summary(case_id, run_id=run.id)
     return {
         "case_id": case_id,
@@ -3031,7 +3034,7 @@ def get_canonical_process_entities(
     _require_case(db, case_id)
     if evidence_id:
         _require_evidence_for_case(db, case_id, evidence_id)
-    run = _resolve_run(db, case_id, run_id, profile, evidence_id=evidence_id)
+    run = _require_process_run(db, case_id, run_id, profile, evidence_id=evidence_id)
     result = canonical_entities.fetch_canonical_entities(
         case_id,
         run_id=run.id,
@@ -3069,39 +3072,43 @@ def get_canonical_process_entity_detail(
     db: Session = Depends(get_db),
 ) -> dict:
     _require_case(db, case_id)
-    run = _resolve_run(db, case_id, run_id, profile="processes_extended", evidence_id=evidence_id)
-    entity = canonical_entities.fetch_canonical_entity(case_id, run_id=run.id, entity_id=entity_id)
-    if entity is None:
-        # Try basic profile too
-        run2 = _resolve_run(db, case_id, None, profile="processes_basic", evidence_id=evidence_id)
-        entity = canonical_entities.fetch_canonical_entity(case_id, run_id=run2.id, entity_id=entity_id)
-        if entity is None:
-            raise HTTPException(status_code=404, detail="Memory process entity was not found.")
-        run = run2
+    if run_id:
+        candidate_runs = [_require_process_run(db, case_id, run_id, None, evidence_id=evidence_id)]
+    else:
+        candidate_runs = [
+            _resolve_run(db, case_id, None, profile=profile, evidence_id=evidence_id)
+            for profile in ("processes_extended", "processes_basic")
+        ]
+    run = None
+    entity = None
+    for candidate in candidate_runs:
+        if candidate is None:
+            continue
+        entity = canonical_entities.fetch_canonical_entity(case_id, run_id=candidate.id, entity_id=entity_id)
+        if entity is not None:
+            run = candidate
+            break
+    if run is None or entity is None:
+        raise HTTPException(status_code=404, detail="Memory process entity was not found.")
+    # Parent, children and path come from the whole run with the current
+    # parent rules, so they match the tree views.
+    all_entities = canonical_entities.fetch_run_entities_with_tree(case_id, run_id=run.id)
+    by_id = {e["process_entity_id"]: e for e in all_entities}
+    entity = {**entity, **{k: by_id[entity_id][k] for k in ("parent_entity_id", "child_count", "tree") if entity_id in by_id}}
     observations = canonical_entities.fetch_canonical_observations(case_id, run_id=run.id, entity_id=entity_id)
     alternate_command_lines: list[str] = []
     for obs in observations:
         cl = (obs.get("observed") or {}).get("command_line")
         if cl and cl != entity.get("process", {}).get("command_line") and cl not in alternate_command_lines:
             alternate_command_lines.append(cl)
-    parent = None
-    children: list[dict] = []
     parent_id = entity.get("parent_entity_id")
-    if parent_id:
-        parent = canonical_entities.fetch_canonical_entity(case_id, run_id=run.id, entity_id=parent_id)
-    # Fetch children
-    children_page = canonical_entities.fetch_canonical_entities(
-        case_id, run_id=run.id, page=1, page_size=200
-    )
-    for child in children_page["items"]:
-        if child.get("parent_entity_id") == entity_id:
-            children.append(child)
+    parent = by_id.get(parent_id) if parent_id else None
+    children = [e for e in all_entities if e.get("parent_entity_id") == entity_id]
     tree_path: list[str] = []
     cursor = parent_id
-    while cursor:
+    while cursor and cursor in by_id and cursor not in tree_path:
         tree_path.append(cursor)
-        ancestor = canonical_entities.fetch_canonical_entity(case_id, run_id=run.id, entity_id=cursor)
-        cursor = ancestor.get("parent_entity_id") if ancestor else None
+        cursor = by_id[cursor].get("parent_entity_id")
     source_record_refs = [obs.get("source_record_id", "") for obs in observations if obs.get("source_record_id")]
     return {
         "entity": entity,
@@ -3123,7 +3130,7 @@ def get_canonical_process_tree(
     evidence_id: str | None = Query(default=None),
     root_pid: int | None = Query(default=None, ge=0),
     root_entity_id: str | None = Query(default=None, max_length=128),
-    depth: int = Query(default=3, ge=1, le=10),
+    depth: int = Query(default=3, ge=1, le=64),
     max_nodes: int | None = Query(default=None, ge=1, le=2000),
     visibility: str | None = Query(default=None, pattern="^(listed|scan_only|terminated|unknown|hidden_candidate)$"),
     interesting_only: bool | None = Query(default=None),
@@ -3133,7 +3140,7 @@ def get_canonical_process_tree(
     db: Session = Depends(get_db),
 ) -> dict:
     _require_case(db, case_id)
-    run = _resolve_run(db, case_id, run_id, profile, evidence_id=evidence_id)
+    run = _require_process_run(db, case_id, run_id, profile, evidence_id=evidence_id)
     return canonical_entities.fetch_canonical_tree(
         case_id,
         run_id=run.id,
@@ -3162,7 +3169,7 @@ def get_canonical_process_lineage(
     db: Session = Depends(get_db),
 ) -> dict:
     _require_case(db, case_id)
-    run = _resolve_run(db, case_id, run_id, profile, evidence_id=evidence_id)
+    run = _require_process_run(db, case_id, run_id, profile, evidence_id=evidence_id)
     return canonical_entities.fetch_canonical_lineage(
         case_id,
         run_id=run.id,
