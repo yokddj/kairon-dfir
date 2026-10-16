@@ -470,83 +470,12 @@ function mergeEdges(base: ProcessTreeEdge[], additions: ProcessTreeEdge[]) {
   return Array.from(map.values());
 }
 
+// Only real warnings (the node cap, for instance). A process whose parent is
+// not in the logs is normal -- it started before logging began -- and its
+// reason is shown on the process itself, not as a warning.
 function groupGraphWarnings(summary: Record<string, unknown> | undefined) {
   const warnings = Array.isArray(summary?.warnings) ? (summary?.warnings as string[]) : [];
-  const samples = Array.isArray(summary?.warnings_samples) ? (summary?.warnings_samples as string[]) : [];
-  const warningsSummary = summary?.warnings_summary && typeof summary.warnings_summary === "object"
-    ? (summary.warnings_summary as Record<string, unknown>)
-    : null;
-
-  const groups: GraphWarningGroup[] = [];
-  if (warningsSummary) {
-    const ambiguous = Number(warningsSummary.ambiguous_parent_candidates ?? 0);
-    const ambiguousRelaxed = Number(warningsSummary.ambiguous_relaxed_parent_candidates ?? 0);
-    const parentNotFound = Number(warningsSummary.parent_not_found ?? 0);
-    const pidReuse = Number(warningsSummary.possible_pid_reuse ?? 0);
-    if (ambiguous > 0) {
-      groups.push({
-        key: "ambiguous_parent_candidates",
-        count: ambiguous,
-        message: `${ambiguous} ambiguous parent candidates. Some edges were omitted to avoid incorrect parent-child links.`,
-        samples: samples.filter((item) => item.startsWith("Ambiguous parent candidates for node ")).slice(0, 10),
-      });
-    }
-    if (ambiguousRelaxed > 0) {
-      groups.push({
-        key: "ambiguous_relaxed_parent_candidates",
-        count: ambiguousRelaxed,
-        message: `${ambiguousRelaxed} relaxed parent candidates remained ambiguous after inference.`,
-        samples: samples.filter((item) => item.startsWith("Ambiguous relaxed parent candidates for node ")).slice(0, 10),
-      });
-    }
-    if (parentNotFound > 0) {
-      groups.push({
-        key: "parent_not_found",
-        count: parentNotFound,
-        message: `${parentNotFound} nodes could not be linked to a parent.`,
-        samples: [],
-      });
-    }
-    if (pidReuse > 0) {
-      groups.push({
-        key: "possible_pid_reuse",
-        count: pidReuse,
-        message: `${pidReuse} nodes were marked with possible PID reuse.`,
-        samples: [],
-      });
-    }
-  }
-
-  if (!groups.length && warnings.length) {
-    const grouped = new Map<string, GraphWarningGroup>();
-    for (const warning of warnings) {
-      const key = warning.startsWith("Ambiguous parent candidates for node ")
-        ? "ambiguous_parent_candidates"
-        : warning.startsWith("Ambiguous relaxed parent candidates for node ")
-          ? "ambiguous_relaxed_parent_candidates"
-          : warning;
-      const existing = grouped.get(key);
-      if (existing) {
-        existing.count += 1;
-        if (existing.samples.length < 10 && existing.message !== warning) existing.samples.push(warning);
-        continue;
-      }
-      grouped.set(key, {
-        key,
-        count: 1,
-        message:
-          key === "ambiguous_parent_candidates"
-            ? "Ambiguous parent candidates were detected. Some edges were omitted to avoid incorrect parent-child links."
-            : key === "ambiguous_relaxed_parent_candidates"
-              ? "Relaxed parent candidate inference remained ambiguous for some nodes."
-              : warning,
-        samples: key === warning ? [] : [warning],
-      });
-    }
-    return Array.from(grouped.values());
-  }
-
-  return groups;
+  return Array.from(new Set(warnings)).map((message): GraphWarningGroup => ({ key: message, count: 1, message, samples: [] }));
 }
 
 function buildGraphLayout(nodes: ProcessTreeNode[], edges: ProcessTreeEdge[]) {
