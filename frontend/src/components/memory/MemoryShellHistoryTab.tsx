@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { type CommandLineHistoryItem, type MemoryPlatformResultViews, type MemoryRunSelector, api } from "../../api/client";
+import { type CommandLineHistoryItem, type MemoryFindEvilProcess, type MemoryPlatformResultViews, type MemoryRunSelector, api } from "../../api/client";
 import { type ShellHistorySource, shellHistorySourceApplies } from "../../lib/memoryPlatformViews";
+import { FacetSelect, type Facet } from "./FacetSelect";
+import { findEvilProcessQueryKey } from "./MemoryFindEvilProcesses";
 import { MemoryPaginationControls } from "./MemoryPaginationControls";
 
 type Props = {
@@ -27,6 +29,10 @@ type ShellHistoryRow = {
   user?: string | null;
   history_file?: string | null;
   scan_run_id?: string | null;
+  // Grouped duplicates: how many times the entry was recovered, and where.
+  occurrences?: number;
+  pids?: number[];
+  sources?: string[];
 };
 
 // Where a Windows command was recovered from (windows.consoles / windows.cmdscan): conhost's own
@@ -98,6 +104,48 @@ function CommandCell({ command }: { command: string | null | undefined }) {
   );
 }
 
+// Processes Find Evil flagged, by PID, to mark their commands. Empty when
+// Find Evil has not run: then nothing is marked.
+function useFindEvilByPid(caseId: string, evidenceId?: string): Map<number, MemoryFindEvilProcess> {
+  const query = useQuery({
+    queryKey: findEvilProcessQueryKey(caseId, evidenceId),
+    queryFn: () => api.getMemoryFindEvilProcesses(caseId, evidenceId || ""),
+    enabled: Boolean(caseId && evidenceId),
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  return useMemo(() => {
+    const map = new Map<number, MemoryFindEvilProcess>();
+    for (const process of query.data?.processes ?? []) {
+      if (process.pid !== null) map.set(process.pid, process);
+    }
+    return map;
+  }, [query.data]);
+}
+
+const FIND_EVIL_TONE: Record<string, string> = {
+  high: "border-rose-400/40 bg-rose-500/10 text-rose-100",
+  medium: "border-amber-400/40 bg-amber-500/10 text-amber-100",
+  low: "border-line bg-abyss/70 text-muted",
+};
+
+function FindEvilMark({ pids, byPid }: { pids: Array<number | null | undefined>; byPid: Map<number, MemoryFindEvilProcess> }) {
+  const flagged = pids.map((pid) => (pid === null || pid === undefined ? undefined : byPid.get(pid))).filter(Boolean) as MemoryFindEvilProcess[];
+  if (!flagged.length) return null;
+  const rank = { high: 3, medium: 2, low: 1 } as Record<string, number>;
+  const top = flagged.reduce((best, p) => ((rank[p.top_priority ?? ""] ?? 0) > (rank[best.top_priority ?? ""] ?? 0) ? p : best));
+  const count = flagged.reduce((sum, p) => sum + p.indicator_count, 0);
+  return (
+    <span
+      className={`ml-1 inline-block rounded-full border px-1.5 py-0.5 text-[10px] ${FIND_EVIL_TONE[top.top_priority ?? "low"] ?? FIND_EVIL_TONE.low}`}
+      title={`Find Evil found ${count} indicator${count === 1 ? "" : "s"} in ${flagged.map((p) => `${p.process_name ?? "process"} (${p.pid})`).join(", ")}. See the Find Evil tab.`}
+      data-testid="shell-history-findevil"
+    >
+      Find Evil{top.top_priority ? ` · ${top.top_priority}` : ""}
+    </span>
+  );
+}
+
 function RunPicker({
   runOptions,
   selectedRunId,
@@ -145,12 +193,16 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
   const [visibility, setVisibility] = useState("");
   const [ppid, setPpid] = useState("");
   const [sortOrder, setSortOrder] = useState<"oldest_first" | "newest_first">("oldest_first");
+  // Start-time range (UTC); only processes known to have started inside it.
+  const [timeFrom, setTimeFrom] = useState("");
+  const [timeTo, setTimeTo] = useState("");
+  const findEvil = useFindEvilByPid(caseId, evidenceId);
   // Command lines that differ only in numbers (service hosts, kernel workers)
   // are one row with their count, run-once ones first.
   const [grouped, setGrouped] = useState(true);
   const pageSize = 50;
   const query = useQuery({
-    queryKey: ["memory-command-line-history", caseId, evidenceId, page, search, visibility, ppid, sortOrder, grouped],
+    queryKey: ["memory-command-line-history", caseId, evidenceId, page, search, visibility, ppid, sortOrder, grouped, timeFrom, timeTo],
     queryFn: () =>
       api.getCommandLineHistory(caseId, {
         evidence_id: evidenceId || "",
@@ -159,6 +211,8 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
         ppid: ppid ? Number(ppid) : undefined,
         sort_order: sortOrder,
         group_identical: grouped || undefined,
+        time_from: timeFrom || undefined,
+        time_to: timeTo ? `${timeTo}:59` : undefined,
         page,
         page_size: pageSize,
       }),
@@ -170,7 +224,7 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
   const total = query.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const analyzed = Boolean(query.data?.selected_run);
-  const filtered = Boolean(search || visibility || ppid);
+  const filtered = Boolean(search || visibility || ppid || timeFrom || timeTo);
   useEffect(() => {
     if (query.data) onTotal(analyzed ? total : null);
   }, [query.data, analyzed, total, onTotal]);
@@ -179,6 +233,8 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
     setSearch("");
     setVisibility("");
     setPpid("");
+    setTimeFrom("");
+    setTimeTo("");
     setPage(1);
   }
 
@@ -220,6 +276,29 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
           className={`w-28 ${INPUT}`}
           data-testid="shell-history-launched-ppid"
         />
+        <label className="flex items-center gap-1 text-muted">
+          Started from
+          <input
+            type="datetime-local"
+            value={timeFrom}
+            onChange={(event) => { setTimeFrom(event.target.value); setPage(1); }}
+            aria-label="Started from (UTC)"
+            className={INPUT}
+            data-testid="shell-history-launched-from"
+          />
+        </label>
+        <label className="flex items-center gap-1 text-muted">
+          to
+          <input
+            type="datetime-local"
+            value={timeTo}
+            onChange={(event) => { setTimeTo(event.target.value); setPage(1); }}
+            aria-label="Started to (UTC)"
+            className={INPUT}
+            data-testid="shell-history-launched-to"
+          />
+          <span className="text-[10px]">UTC</span>
+        </label>
         <label className="flex items-center gap-1 text-muted">
           <input
             type="checkbox"
@@ -292,7 +371,10 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
                           </span>
                         ) : null}
                       </td>
-                      <td className="px-2 py-1 text-ink">{(item.process_names ?? [item.process_name]).filter(Boolean).join(", ") || "—"}</td>
+                      <td className="px-2 py-1 text-ink">
+                        {(item.process_names ?? [item.process_name]).filter(Boolean).join(", ") || "—"}
+                        <FindEvilMark pids={item.pids ?? [item.pid]} byPid={findEvil} />
+                      </td>
                       <td className="px-2 py-1 text-muted">
                         {(item.pids ?? []).slice(0, 5).join(", ")}
                         {(item.pids?.length ?? 0) > 5 ? ` +${(item.pids?.length ?? 0) - 5}` : ""}
@@ -333,7 +415,10 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
                         </button>
                       ) : "—"}
                     </td>
-                    <td className="px-2 py-1 text-ink">{reported(item.process_name)}</td>
+                    <td className="px-2 py-1 text-ink">
+                      {reported(item.process_name)}
+                      <FindEvilMark pids={[item.pid]} byPid={findEvil} />
+                    </td>
                     <td className="px-2 py-1">
                       <CommandCell command={item.command_line} />
                     </td>
@@ -463,16 +548,26 @@ function TypedCommands({ caseId, evidenceId, runOptions, selectedRunId, onSelect
   const [source, setSource] = useState("");
   const [pidFilter, setPidFilter] = useState("");
   const [processNameFilter, setProcessNameFilter] = useState("");
+  const [userFilter, setUserFilter] = useState("");
+  const [datedFilter, setDatedFilter] = useState<"" | "dated" | "undated">("");
+  // Every shell loads the same history file, and a console keeps a command in
+  // its history and on screen: one row per (command, time) by default.
+  const [groupDuplicates, setGroupDuplicates] = useState(true);
+  const findEvil = useFindEvilByPid(caseId, evidenceId);
   const pageSize = 50;
 
   const activeResultQuery = useQuery({
-    queryKey: ["memory-active-result", caseId, evidenceId, "shell_history", selectedRunId, page, search, source, pidFilter, processNameFilter],
+    queryKey: ["memory-active-result", caseId, evidenceId, "shell_history", selectedRunId, page, search, source, pidFilter, processNameFilter, userFilter, datedFilter, groupDuplicates],
     queryFn: () =>
       api.getMemoryActiveResult(caseId, evidenceId || "", "shell_history", selectedRunId || undefined, {
         command: search || undefined,
         source: source || undefined,
         pid: pidFilter ? Number(pidFilter) : undefined,
         process_name: processNameFilter || undefined,
+        user: userFilter || undefined,
+        dated: datedFilter || undefined,
+        group_duplicates: groupDuplicates || undefined,
+        facet_fields: ["user"],
         page,
         page_size: pageSize,
       }),
@@ -488,7 +583,11 @@ function TypedCommands({ caseId, evidenceId, runOptions, selectedRunId, onSelect
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const state = result?.analysis_state ?? "not_analyzed";
   const sourceFacets = (result as { source_facets?: Array<{ value: string; count: number }> } | undefined)?.source_facets ?? [];
-  const filtered = Boolean(search || source || pidFilter || processNameFilter);
+  const userFacets: Facet[] = (result as { facets?: Record<string, Facet[]> } | undefined)?.facets?.user ?? [];
+  const datedCounts = (result as { dated_counts?: { dated: number; undated: number } | null } | undefined)?.dated_counts ?? null;
+  const grouped = Boolean((result as { grouped?: boolean } | undefined)?.grouped);
+  const ungroupedTotal = (result as { ungrouped_total?: number } | undefined)?.ungrouped_total ?? total;
+  const filtered = Boolean(search || source || pidFilter || processNameFilter || userFilter || datedFilter);
   const hasRows = state === "analyzed_with_results" || state === "partial";
   useEffect(() => {
     if (result) onTotal(hasRows ? total : state === "analyzed_empty" ? 0 : null);
@@ -499,6 +598,8 @@ function TypedCommands({ caseId, evidenceId, runOptions, selectedRunId, onSelect
     setSource("");
     setPidFilter("");
     setProcessNameFilter("");
+    setUserFilter("");
+    setDatedFilter("");
     setPage(1);
   }
 
@@ -558,6 +659,39 @@ function TypedCommands({ caseId, evidenceId, runOptions, selectedRunId, onSelect
             className={`w-36 ${INPUT}`}
             data-testid="shell-history-process-input"
           />
+          {userFacets.length > 1 || userFilter ? (
+            <FacetSelect
+              value={userFilter}
+              onChange={(next) => { setUserFilter(next); setPage(1); }}
+              facets={userFacets}
+              allLabel="Any user"
+              ariaLabel="User"
+              testId="shell-history-user-select"
+              className={INPUT}
+            />
+          ) : null}
+          {(datedCounts && datedCounts.dated > 0 && datedCounts.undated > 0) || datedFilter ? (
+            <select
+              value={datedFilter}
+              onChange={(event) => { setDatedFilter(event.target.value as "" | "dated" | "undated"); setPage(1); }}
+              aria-label="Recovered time"
+              className={INPUT}
+              data-testid="shell-history-dated-select"
+            >
+              <option value="">With or without time</option>
+              <option value="dated">With time ({datedCounts?.dated ?? 0})</option>
+              <option value="undated">Without time ({datedCounts?.undated ?? 0})</option>
+            </select>
+          ) : null}
+          <label className="flex items-center gap-1 text-muted">
+            <input
+              type="checkbox"
+              checked={groupDuplicates}
+              onChange={(event) => { setGroupDuplicates(event.target.checked); setPage(1); }}
+              data-testid="shell-history-group-duplicates"
+            />
+            Group duplicates
+          </label>
           {filtered ? (
             <button
               type="button"
@@ -604,7 +738,9 @@ function TypedCommands({ caseId, evidenceId, runOptions, selectedRunId, onSelect
       {!activeResultQuery.isLoading && !activeResultQuery.error && hasRows && items.length > 0 ? (
         <>
           <p className="mt-3 text-xs text-muted" data-testid="shell-history-summary">
-            {total} command{total === 1 ? "" : "s"} · page {page} of {totalPages}
+            {total} command{total === 1 ? "" : "s"}
+            {grouped && ungroupedTotal > total ? ` (${ungroupedTotal} recovered; the same command and time found in several processes or sources is one row)` : ""}
+            {" · "}page {page} of {totalPages}
           </p>
           <div className="mt-2 max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
             <table className="min-w-[860px] w-full divide-y divide-line text-xs" data-testid="shell-history-table">
@@ -624,14 +760,22 @@ function TypedCommands({ caseId, evidenceId, runOptions, selectedRunId, onSelect
                     <td className="px-2 py-1 text-muted" data-testid="shell-history-time">
                       {row.command_time ? reported(row.command_time) : <span className="text-muted" data-testid="shell-history-undated">Undated</span>}
                     </td>
-                    <td className="px-2 py-1 text-muted">{reported(row.pid)}</td>
-                    <td className="px-2 py-1 text-ink">{reported(row.process_name)}</td>
+                    <td className="px-2 py-1 text-muted" data-testid="shell-history-pid">
+                      {row.pids && row.pids.length > 1 ? row.pids.join(", ") : reported(row.pid)}
+                    </td>
+                    <td className="px-2 py-1 text-ink">
+                      {reported(row.process_name)}
+                      {(row.occurrences ?? 1) > 1 ? (
+                        <span className="ml-1 text-[10px] text-muted" title="Recovered this many times" data-testid="shell-history-occurrences">×{row.occurrences}</span>
+                      ) : null}
+                      <FindEvilMark pids={row.pids ?? [row.pid]} byPid={findEvil} />
+                    </td>
                     <td className="px-2 py-1 font-mono text-[11px] text-muted" data-testid="shell-history-directory">{reported(row.working_directory)}</td>
                     <td className="px-2 py-1">
                       <CommandCell command={row.command} />
                     </td>
                     <td className="px-2 py-1 text-muted" data-testid="shell-history-source" title={row.history_file || undefined}>
-                      {sourceLabel(row.recovered_from || row.source_plugin)}
+                      {row.sources && row.sources.length > 1 ? row.sources.map(sourceLabel).join(", ") : sourceLabel(row.recovered_from || row.source_plugin)}
                       {row.user ? <span className="block text-[10px]">{row.user}</span> : null}
                     </td>
                   </tr>

@@ -294,8 +294,48 @@ def artifact_source_facets(case_id: str, *, document_type: str, run_id: str, evi
 # Fields with a small set of values, offered as pickers in the UI.
 FACETABLE_FIELDS = frozenset({
     "object_type", "review_status", "indicator_type", "review_priority",
-    "protocol", "connection_state", "load_state",
+    "protocol", "connection_state", "load_state", "user",
 })
+
+
+def shell_history_dated_counts(case_id: str, *, run_id: str, evidence_id: str | None = None) -> dict[str, int]:
+    """How many of a run's typed commands have a recovered time and how many do not."""
+    query_filters: list[dict[str, Any]] = [
+        {"term": {"document_type": "memory_shell_history"}},
+        {"term": {"scan_run_id.keyword": run_id}},
+    ]
+    if evidence_id:
+        query_filters.append({"term": {"evidence_id": evidence_id}})
+    body = {
+        "size": 0,
+        "timeout": "5s",
+        "track_total_hits": True,
+        "query": {"bool": {"filter": query_filters}},
+        "aggs": {"dated": {"filter": {"exists": {"field": "command_time"}}}},
+    }
+    response = get_opensearch_client().search(index=get_memory_index(case_id), body=body, params={"ignore_unavailable": "true"})
+    total = int(((response.get("hits") or {}).get("total") or {}).get("value") or 0)
+    dated = int(((response.get("aggregations") or {}).get("dated") or {}).get("doc_count") or 0)
+    return {"dated": dated, "undated": max(0, total - dated)}
+
+
+def group_duplicate_commands(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per (command, time): every shell loads the same history file
+    and a console keeps a command both in its history and on screen, so the
+    same entry is recovered from several processes or sources. Rows keep the
+    order of their first occurrence and say where else they were found."""
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for doc in docs:
+        command = str(doc.get("command") or "")
+        key = (command, str(doc.get("command_time") or ""))
+        group = groups.get(key)
+        if group is None:
+            group = groups[key] = {**doc, "occurrences": 0, "pids": [], "process_names": [], "sources": []}
+        group["occurrences"] += 1
+        for field, value in (("pids", doc.get("pid")), ("process_names", doc.get("process_name")), ("sources", doc.get("recovered_from") or doc.get("source_plugin"))):
+            if value not in (None, "") and value not in group[field]:
+                group[field].append(value)
+    return list(groups.values())
 
 
 def artifact_field_facets(case_id: str, *, document_type: str, run_id: str, field: str, evidence_id: str | None = None) -> list[dict[str, Any]]:
@@ -371,6 +411,11 @@ def search_artifact_documents(
                     continue
                 if key == "source":
                     query_filters.append(_source_clause(value))
+                    continue
+                if key == "dated":
+                    # Shell history: commands with or without a recovered time.
+                    has_time = {"exists": {"field": "command_time"}}
+                    query_filters.append(has_time if value == "dated" else {"bool": {"must_not": [has_time]}})
                     continue
                 if key in ("process_name", "name"):
                     # Free-text search inputs, not value pickers -- an

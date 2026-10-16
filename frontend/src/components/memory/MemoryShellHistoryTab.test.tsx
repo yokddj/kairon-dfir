@@ -9,9 +9,11 @@ const getMemoryActiveResultMock = vi.fn();
 const getCommandLineHistoryMock = vi.fn();
 
 const getMemoryPowerShellLogMock = vi.fn();
+const getMemoryFindEvilProcessesMock = vi.fn();
 
 vi.mock("../../api/client", () => ({
   api: {
+    getMemoryFindEvilProcesses: (...args: unknown[]) => getMemoryFindEvilProcessesMock(...args),
     getMemoryActiveResult: (...args: unknown[]) => getMemoryActiveResultMock(...args),
     getCommandLineHistory: (...args: unknown[]) => getCommandLineHistoryMock(...args),
     getMemoryPowerShellLog: (...args: unknown[]) => getMemoryPowerShellLogMock(...args),
@@ -60,6 +62,65 @@ describe("MemoryShellHistoryTab", () => {
     getMemoryPowerShellLogMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50 });
     vi.clearAllMocks();
     getCommandLineHistoryMock.mockResolvedValue(commandLines([], null));
+    getMemoryFindEvilProcessesMock.mockResolvedValue({ processes: [] });
+  });
+
+  describe("typed duplicates, filters and Find Evil marks", () => {
+    const bashRows = [
+      { document_id: "d1", pid: 4453, process_name: "bash", command: "sudo apt update", command_time: "2024-07-03T19:40:49Z", source_plugin: "linux.bash", occurrences: 2, pids: [4453, 4954], sources: ["linux.bash"] },
+    ];
+
+    it("groups duplicates by default and says how many were recovered", async () => {
+      getMemoryActiveResultMock.mockResolvedValue({
+        ...activeResult({ analysis_state: "analyzed_with_results", total: 1, items: bashRows as unknown as MemoryActiveResult["items"] }),
+        grouped: true,
+        ungrouped_total: 2,
+        dated_counts: { dated: 2, undated: 0 },
+      });
+      renderTab();
+      const row = await screen.findByTestId("shell-history-row");
+      expect(row).toHaveTextContent("4453, 4954");
+      expect(screen.getByTestId("shell-history-occurrences")).toHaveTextContent("×2");
+      expect(screen.getByTestId("shell-history-summary")).toHaveTextContent("2 recovered");
+      expect(getMemoryActiveResultMock).toHaveBeenLastCalledWith(CASE, EVIDENCE, "shell_history", undefined, expect.objectContaining({ group_duplicates: true }));
+      // Every command has a time and there is no user: those filters are not offered.
+      expect(screen.queryByTestId("shell-history-dated-select")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("shell-history-user-select")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("shell-history-group-duplicates"));
+      await waitFor(() => expect(getMemoryActiveResultMock).toHaveBeenLastCalledWith(CASE, EVIDENCE, "shell_history", undefined, expect.objectContaining({ group_duplicates: undefined })));
+    });
+
+    it("offers user and time filters when the data varies", async () => {
+      getMemoryActiveResultMock.mockResolvedValue({
+        ...activeResult({ analysis_state: "analyzed_with_results", total: 1, items: bashRows as unknown as MemoryActiveResult["items"] }),
+        facets: { user: [{ value: "root", count: 3 }, { value: "bob", count: 1 }] },
+        dated_counts: { dated: 3, undated: 1 },
+      });
+      renderTab();
+      fireEvent.change(await screen.findByTestId("shell-history-user-select"), { target: { value: "bob" } });
+      await waitFor(() => expect(getMemoryActiveResultMock).toHaveBeenLastCalledWith(CASE, EVIDENCE, "shell_history", undefined, expect.objectContaining({ user: "bob" })));
+      fireEvent.change(screen.getByTestId("shell-history-dated-select"), { target: { value: "undated" } });
+      await waitFor(() => expect(getMemoryActiveResultMock).toHaveBeenLastCalledWith(CASE, EVIDENCE, "shell_history", undefined, expect.objectContaining({ dated: "undated" })));
+    });
+
+    it("marks commands whose process Find Evil flagged", async () => {
+      getMemoryFindEvilProcessesMock.mockResolvedValue({ processes: [{ triage_id: "t", pid: 4954, process_name: "bash", indicator_count: 2, priority_counts: { high: 1, medium: 1, low: 0 }, top_priority: "high", indicator_types: [], marking: null }] });
+      getMemoryActiveResultMock.mockResolvedValue(activeResult({ analysis_state: "analyzed_with_results", total: 1, items: bashRows as unknown as MemoryActiveResult["items"] }));
+      renderTab();
+      expect(await screen.findByTestId("shell-history-findevil")).toHaveTextContent("Find Evil · high");
+    });
+  });
+
+  it("filters commands executed by start time", async () => {
+    getMemoryActiveResultMock.mockResolvedValue(activeResult({ analysis_state: "analyzed_empty", selection_reason: "latest_completed" }));
+    getCommandLineHistoryMock.mockResolvedValue(commandLines([{ process_entity_id: "p1", pid: 2164, ppid: 4744, process_name: "DumpIt.exe", command_line: "DumpIt.exe", create_time: "2025-03-07T19:41:23+00:00", exit_time: null, timestamp_source: "process_creation_time", visibility: { listed: true }, source_plugins: [], source_observations: [], parent_entity_id: null, findings: [], record_refs: [] }]));
+    renderTab();
+    fireEvent.click(await screen.findByTestId("shell-history-source-tab-executed"));
+    fireEvent.change(await screen.findByTestId("shell-history-launched-from"), { target: { value: "2025-03-07T19:40" } });
+    fireEvent.change(screen.getByTestId("shell-history-launched-to"), { target: { value: "2025-03-07T19:45" } });
+    await waitFor(() =>
+      expect(getCommandLineHistoryMock).toHaveBeenLastCalledWith(CASE, expect.objectContaining({ time_from: "2025-03-07T19:40", time_to: "2025-03-07T19:45:59" })),
+    );
   });
 
   it("lists the command line of every process as commands executed", async () => {
