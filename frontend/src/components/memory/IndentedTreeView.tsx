@@ -25,6 +25,11 @@ type Props = {
   onOpenProcessDetails: (entityId: string) => void;
 };
 
+// The whole tree is loaded at once: the backend already reads every process
+// of the run, and a capped tree hides processes without saying where.
+export const TREE_DEPTH = 64;
+export const TREE_MAX_NODES = 2000;
+
 type TreeNode = {
   process_entity_id: string;
   pid: number;
@@ -37,6 +42,9 @@ type TreeNode = {
   children: TreeNode[];
   truncated?: boolean;
   child_count?: number;
+  // Top-level process whose parent had exited, or that sat in a parent loop.
+  parent_exited?: boolean;
+  parent_loop?: boolean;
   is_group?: boolean;
   group_count?: number;
   group_children?: TreeNode[];
@@ -44,8 +52,7 @@ type TreeNode = {
 
 type GroupSummary = {
   group: string;
-  count: number;
-  example: TreeNode;
+  items: TreeNode[];
 };
 
 const TONE: Record<string, string> = {
@@ -103,6 +110,8 @@ function toTreeNode(node: any): TreeNode {
     confidence: node.confidence || "low",
     child_count: node.child_count ?? 0,
     truncated: Boolean(node.truncated),
+    parent_exited: Boolean(node.tree?.is_orphan),
+    parent_loop: Boolean(node.tree?.is_cycle),
     children: Array.isArray(node.children) ? node.children.map(toTreeNode) : [],
   };
 }
@@ -122,11 +131,9 @@ function groupChildren(children: TreeNode[]): { expanded: TreeNode[]; groups: Gr
     if (!byName.has(key)) byName.set(key, []);
     byName.get(key)!.push(child);
   }
-  for (const [key, items] of byName) {
+  for (const items of byName.values()) {
     if (items.length >= GROUP_THRESHOLD) {
-      const first = items[0];
-      const groupName = first.name;
-      groups.push({ group: groupName, count: items.length, example: first });
+      groups.push({ group: items[0].name, items });
     } else {
       expanded.push(...items);
     }
@@ -240,6 +247,16 @@ function NodeRow({
                 {visibilityLabel(node)}
               </span>
             ) : null}
+            {depth === 0 && node.parent_exited && node.ppid !== null ? (
+              <span className="text-[10px] text-muted" title="The parent process had already exited when memory was captured" data-testid="indented-tree-parent-exited">
+                parent {node.ppid} exited
+              </span>
+            ) : null}
+            {depth === 0 && node.parent_loop ? (
+              <span className="text-[10px] text-amber-200" title="The recorded parents of these processes point at each other" data-testid="indented-tree-parent-loop">
+                parent loop
+              </span>
+            ) : null}
             {node.sources.length > 0 && !isGroup ? (
               <span className="flex flex-wrap gap-0.5 text-[10px] text-muted">
                 {node.sources.map((plugin) => (
@@ -285,6 +302,7 @@ function NodeRow({
       ) : null}
       {isGroup && expandedGroups.has(groupKey) && node.group_children ? (
         <TreeChildren
+          ungrouped
           children={node.group_children}
           depth={depth + 1}
           expanded={expanded}
@@ -314,50 +332,29 @@ function TreeChildren(props: {
   toggleExpand: (entityId: string) => void;
   toggleGroup: (key: string) => void;
   searchMatch: boolean;
+  // The members of an expanded group, listed as they are.
+  ungrouped?: boolean;
 }) {
-  const { children, depth, expanded, expandedGroups, selectedEntityId, onSelectEntityId, onOpenProcessDetails, ancestors, toggleExpand, toggleGroup, searchMatch } = props;
-  const { expanded: expandedChildren, groups } = useMemo(() => groupChildren(children), [children]);
-  const groupNodes: TreeNode[] = groups.map((g) => ({
-    process_entity_id: `group-${g.group}-${g.example.process_entity_id}`,
-    pid: g.example.pid,
-    ppid: g.example.ppid,
-    name: g.group,
-    command_line: g.example.command_line,
-    sources: g.example.sources,
-    visibility: g.example.visibility,
-    confidence: g.example.confidence,
-    child_count: g.count,
-    truncated: false,
-    is_group: true,
-    group_count: g.count,
-    group_children: [g.example, ...g.example.children ? [g.example] : []].filter((n, i, arr) => i === 0).concat([]),
-    children: g.example.children,
-  } as TreeNode));
-  const finalChildren: TreeNode[] = [];
-  const consumedNames = new Set<string>();
-  for (const g of groups) consumedNames.add(g.group);
-  for (const c of expandedChildren) {
-    if (consumedNames.has(c.name) && groups.find((g) => g.group === c.name)?.example.process_entity_id === c.process_entity_id) {
-      continue;
-    }
-    finalChildren.push(c);
-  }
-  groupNodes.sort((a, b) => (b.group_count || 0) - (a.group_count || 0));
-  const merged: TreeNode[] = [];
-  const groupInjected = new Set<string>();
-  for (const c of finalChildren) {
-    if (consumedNames.has(c.name) && !groupInjected.has(c.name)) {
-      const g = groupNodes.find((g) => g.name === c.name);
-      if (g) {
-        merged.push(g);
-        groupInjected.add(c.name);
-      }
-    }
-    merged.push(c);
-  }
-  for (const g of groupNodes) {
-    if (!groupInjected.has(g.name)) merged.push(g);
-  }
+  const { ungrouped, children, depth, expanded, expandedGroups, selectedEntityId, onSelectEntityId, onOpenProcessDetails, ancestors, toggleExpand, toggleGroup, searchMatch } = props;
+  const { expanded: expandedChildren, groups } = useMemo(
+    () => (ungrouped ? { expanded: children, groups: [] } : groupChildren(children)),
+    [children, ungrouped],
+  );
+  // A group stands for every sibling it folds; expanding it lists them all.
+  const groupNodes: TreeNode[] = groups.map((g) => {
+    const first = g.items[0];
+    return {
+      ...first,
+      process_entity_id: `group-${first.process_entity_id}`,
+      child_count: g.items.length,
+      truncated: false,
+      is_group: true,
+      group_count: g.items.length,
+      group_children: g.items,
+      children: [],
+    };
+  });
+  const merged: TreeNode[] = [...expandedChildren, ...groupNodes].sort((a, b) => a.pid - b.pid);
   return (
     <>
       {merged.map((child, index) => (
@@ -394,7 +391,6 @@ export function IndentedTreeView({
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [orphansExpanded, setOrphansExpanded] = useState<boolean>(false);
 
   const effectiveRunId = selectedRunId || runId || runOptions?.default_run_id || null;
   const numericSearchPid = /^\d+$/.test(search.trim()) ? Number(search.trim()) : null;
@@ -408,7 +404,7 @@ export function IndentedTreeView({
         descendant_depth: 3,
         max_nodes: 200,
       })
-      : api.getCanonicalProcessTree(caseId, { run_id: effectiveRunId || undefined, depth: 3, max_nodes: 200 }),
+      : api.getCanonicalProcessTree(caseId, { run_id: effectiveRunId || undefined, depth: TREE_DEPTH, max_nodes: TREE_MAX_NODES }),
     enabled: Boolean(caseId && effectiveRunId),
     refetchOnWindowFocus: false,
     placeholderData: (previous) => previous,
@@ -416,7 +412,6 @@ export function IndentedTreeView({
 
   const tree = treeQuery.data;
   const rootNodes: TreeNode[] = useMemo(() => (tree?.nodes ?? []).map(toTreeNode), [tree?.nodes]);
-  const orphanNodes: TreeNode[] = useMemo(() => selectedEntityId || numericSearchPid !== null ? [] : (tree?.orphans ?? []).map(toTreeNode), [tree?.orphans, selectedEntityId, numericSearchPid]);
 
   useEffect(() => {
     const nextSelected = (tree as any)?.selected_entity_id;
@@ -425,26 +420,32 @@ export function IndentedTreeView({
     }
   }, [tree, numericSearchPid, selectedEntityId, onSelectEntityId]);
 
-  const ancestors = useMemo(() => {
-    if (!selectedEntityId) return new Set<string>();
-    const set = new Set<string>();
-    const byId = new Map<string, TreeNode>();
+  // Parent of every loaded node, from the tree itself (PIDs can be reused).
+  const parentOf = useMemo(() => {
+    const map = new Map<string, string>();
     const visit = (n: TreeNode) => {
-      byId.set(n.process_entity_id, n);
-      n.children.forEach(visit);
+      n.children.forEach((c) => {
+        map.set(c.process_entity_id, n.process_entity_id);
+        visit(c);
+      });
     };
-    [...rootNodes, ...orphanNodes].forEach(visit);
-    let cur: string | undefined = selectedEntityId;
-    while (cur) {
-      const node = byId.get(cur);
-      if (!node) break;
-      set.add(node.process_entity_id);
-      cur = node.ppid != null
-        ? [...byId.values()].find((n) => n.pid === node.ppid && !set.has(n.process_entity_id))?.process_entity_id
-        : undefined;
+    rootNodes.forEach(visit);
+    return map;
+  }, [rootNodes]);
+
+  const pathTo = (entityId: string, into: Set<string>) => {
+    let cur: string | undefined = entityId;
+    while (cur && !into.has(cur)) {
+      into.add(cur);
+      cur = parentOf.get(cur);
     }
+  };
+
+  const ancestors = useMemo(() => {
+    const set = new Set<string>();
+    if (selectedEntityId) pathTo(selectedEntityId, set);
     return set;
-  }, [selectedEntityId, rootNodes, orphanNodes]);
+  }, [selectedEntityId, parentOf]);
 
   const matchingEntities = useMemo(() => {
     if (!search) return new Set<string>();
@@ -460,9 +461,22 @@ export function IndentedTreeView({
       }
       n.children.forEach(visit);
     };
-    [...rootNodes, ...orphanNodes].forEach(visit);
+    rootNodes.forEach(visit);
     return set;
-  }, [search, rootNodes, orphanNodes]);
+  }, [search, rootNodes]);
+
+  // Open the branches that lead to a search match so it can be seen.
+  const shownExpanded = useMemo(() => {
+    if (!matchingEntities.size) return expanded;
+    const set = new Set(expanded);
+    const path = new Set<string>();
+    matchingEntities.forEach((id) => {
+      const parent = parentOf.get(id);
+      if (parent) pathTo(parent, path);
+    });
+    path.forEach((id) => set.add(id));
+    return set;
+  }, [expanded, matchingEntities, parentOf]);
 
   function toggleExpand(entityId: string) {
     setExpanded((prev) => {
@@ -505,7 +519,7 @@ export function IndentedTreeView({
   if (treeQuery.error instanceof Error) {
     return <p className="rounded-2xl border border-rose-400/30 bg-rose-500/10 p-3 text-sm text-rose-200">{treeQuery.error.message}</p>;
   }
-  if (!rootNodes.length && !orphanNodes.length) {
+  if (!rootNodes.length) {
     return <p className="rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">No canonical processes for this run yet.</p>;
   }
 
@@ -524,25 +538,22 @@ export function IndentedTreeView({
         </div>
       </header>
       <p className="text-xs text-muted" data-testid="indented-tree-summary">
-        Main tree · {rootNodes.length} root{rootNodes.length === 1 ? "" : "s"}
-        {" · "}
-        Orphans · {orphanNodes.length}
-        {search ? ` · ${matchingEntities.size} match(es) for "${search}"` : ""}
+        {rootNodes.length} top-level process{rootNodes.length === 1 ? "" : "es"}
+        {search ? ` · ${matchingEntities.size} match${matchingEntities.size === 1 ? "" : "es"} for "${search}"` : ""}
       </p>
 
       <section
         className="space-y-2 rounded-2xl border border-line bg-abyss/30 p-3"
         data-testid="indented-tree-main"
-        aria-label="Main tree"
+        aria-label="Process tree"
       >
-        <h4 className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">Main tree · {rootNodes.length} root</h4>
-        <div className="space-y-1 overflow-y-auto" style={{ maxHeight: "60vh" }}>
+        <div className="space-y-1 overflow-y-auto" style={{ maxHeight: "70vh" }}>
           {rootNodes.map((root) => (
             <NodeRow
               key={root.process_entity_id}
               node={root}
               depth={0}
-              expanded={expanded}
+              expanded={shownExpanded}
               expandedGroups={expandedGroups}
               selectedEntityId={selectedEntityId}
               onSelectEntityId={onSelectEntityId}
@@ -557,57 +568,10 @@ export function IndentedTreeView({
         </div>
       </section>
 
-      <section
-        className="space-y-2 rounded-2xl border border-line bg-abyss/30 p-3"
-        data-testid="indented-tree-orphans"
-        aria-label="Orphans"
-      >
-        <header className="flex flex-wrap items-center justify-between gap-2">
-          <h4 className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
-            Orphans · {orphanNodes.length}
-          </h4>
-          <button
-            type="button"
-            onClick={() => setOrphansExpanded((v) => !v)}
-            aria-expanded={orphansExpanded}
-            data-testid="indented-tree-orphans-toggle"
-            className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted"
-          >
-            {orphansExpanded ? "Hide orphan processes" : "Show orphan processes"}
-          </button>
-        </header>
-        {!orphansExpanded ? (
-          <p className="text-[11px] text-muted" data-testid="indented-tree-orphans-summary">
-            Parent process is not present in the selected run. {orphanNodes.length} orphan
-            process{orphanNodes.length === 1 ? "" : "es"} detected.
-          </p>
-        ) : (
-          <div className="space-y-1 overflow-y-auto" style={{ maxHeight: "32vh" }}>
-            {orphanNodes.map((orphan, index) => (
-              <NodeRow
-                key={orphan.process_entity_id}
-                node={orphan}
-                depth={0}
-                expanded={expanded}
-                expandedGroups={expandedGroups}
-                selectedEntityId={selectedEntityId}
-                onSelectEntityId={onSelectEntityId}
-                onOpenProcessDetails={onOpenProcessDetails}
-                ancestors={ancestors}
-                toggleExpand={toggleExpand}
-                toggleGroup={toggleGroup}
-                searchMatch={matchingEntities.has(orphan.process_entity_id)}
-                connector={index === orphanNodes.length - 1 ? "last" : "child"}
-              />
-            ))}
-          </div>
-        )}
-      </section>
-
       {selectedEntityId ? (
         <button
           type="button"
-          onClick={() => selectedEntityId && copyPid(rootNodes.find((n) => n.process_entity_id === selectedEntityId)?.pid ?? orphanNodes.find((n) => n.process_entity_id === selectedEntityId)?.pid ?? 0)}
+          onClick={() => selectedEntityId && copyPid(rootNodes.find((n) => n.process_entity_id === selectedEntityId)?.pid ?? 0)}
           data-testid="indented-tree-copy-pid"
           className="rounded-md border border-line bg-abyss/70 px-2 py-1 text-xs"
         >

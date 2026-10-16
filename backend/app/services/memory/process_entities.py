@@ -728,6 +728,66 @@ def _is_pid_zero(pid: int | None) -> bool:
     return pid == 0
 
 
+def _parse_time(value: Any) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _creation_sort_key(ent: dict[str, Any]) -> tuple:
+    created = _parse_time(ent["process"].get("create_time"))
+    return (created is None, created or datetime.min.replace(tzinfo=timezone.utc), ent["process"]["pid"] or 0, ent["process_entity_id"])
+
+
+def _choose_parent(child: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The candidate holding the PPID that existed when ``child`` started."""
+    child_created = _parse_time(child["process"].get("create_time"))
+    plausible = []
+    for cand in candidates:
+        if cand["process_entity_id"] == child["process_entity_id"]:
+            continue
+        created = _parse_time(cand["process"].get("create_time"))
+        exited = _parse_time(cand["process"].get("exit_time"))
+        # A running root (PPID 0: System, init, kthreadd) has held its PID
+        # since boot, so it cannot be a reused PID; its boot-time create
+        # time is not a reliable ordering signal (Registry predates System).
+        boot_root = _is_pid_zero(cand["process"].get("ppid")) and not cand["process"].get("exit_time")
+        if child_created and created and created > child_created and not boot_root:
+            continue
+        if child_created and exited and exited < child_created:
+            continue
+        plausible.append((created, cand))
+    if not plausible:
+        return None
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    # Most recently created first; ties resolve to the lowest entity id.
+    plausible.sort(key=lambda item: item[1]["process_entity_id"])
+    plausible.sort(key=lambda item: item[0] or floor, reverse=True)
+    return plausible[0][1]
+
+
+def _find_parent_cycles(parent_map: dict[str, str | None]) -> list[list[str]]:
+    cycles: list[list[str]] = []
+    done: set[str] = set()
+    for start in parent_map:
+        path: list[str] = []
+        position: dict[str, int] = {}
+        cur: str | None = start
+        while cur is not None and cur not in done and cur in parent_map:
+            if cur in position:
+                cycles.append(path[position[cur]:])
+                break
+            position[cur] = len(path)
+            path.append(cur)
+            cur = parent_map[cur]
+        done.update(path)
+    return cycles
+
+
 def build_tree_metrics(entities: list[dict[str, Any]]) -> dict[str, Any]:
     """Annotate entities with tree metrics.
 
@@ -747,120 +807,65 @@ def build_tree_metrics(entities: list[dict[str, Any]]) -> dict[str, Any]:
       collapses every observation with the same PID and create_time
       into a single entity, so a single System process appears once
       per identity.
-    * A node whose parent PID points to a process that exists in the
-      set is a *child*.
-    * A node whose parent PID is 0 AND the parent is present is a
-      *child of the System* ancestor; we still report it as ``root``
-      of its own sub-tree for analyst clarity.
-    * A node whose parent PID points to a PID NOT in the entity set is
-      an ``orphan``.
+    * A node's parent is the process with its PPID that already existed
+      when the node was created.  Windows and Linux reuse PIDs, so the
+      process holding that PID in the image may be a newer one created
+      *after* the node (its real parent exited): linking to it is wrong
+      and produces impossible cycles.  Candidates created later than the
+      node, or that exited before it, are discarded; of the rest, the
+      most recently created wins.
+      A running root (PPID 0) is exempt: it has held its PID since boot.
+    * A node whose PPID is 0 and no PID 0 process is present is a
+      ``root`` (System on Windows; init and kthreadd on Linux).
+    * A node whose parent is gone (PPID not in the set, or only held by
+      a newer process) is an ``orphan``.  That is normal for processes
+      whose launcher exited (csrss.exe, winlogon.exe, explorer.exe).
     * A node whose parent PID is ``None`` has ``unknown_parent``.
-    * Cycles and self-parentage are detected and flagged but do not
-      prevent rendering.
+    * Cycles that remain when times are missing are flagged on the
+      processes that form them, and broken at the oldest of them so
+      every process still renders.
     """
     by_pid: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for ent in entities:
         by_pid[ent["process"]["pid"]].append(ent)
 
-    # Choose parent for each entity deterministically
     parent_map: dict[str, str | None] = {}
-    parent_pid_map: dict[str, int | None] = {}
-    pid_to_main_entity: dict[int, str] = {}
     for ent in entities:
+        eid = ent["process_entity_id"]
         pid = ent["process"]["pid"]
-        # Pick the lowest entity_id per pid for "main" pid alias
-        existing = pid_to_main_entity.get(pid)
-        if existing is None or ent["process_entity_id"] < existing:
-            pid_to_main_entity[pid] = ent["process_entity_id"]
-
-    for ent in entities:
         ppid = ent["process"]["ppid"]
-        is_zero = _is_pid_zero(ent["process"]["pid"])
-        is_self = ppid is not None and ppid == ent["process"]["pid"]
-        if is_self:
-            parent_map[ent["process_entity_id"]] = None
-            parent_pid_map[ent["process_entity_id"]] = ppid
-            ent["tree"] = {
-                "is_root": False,
-                "is_orphan": False,
-                "is_unknown_parent": False,
-                "is_cycle": False,
-                "is_self_parent": True,
-                "is_pid_zero": is_zero,
-            }
-            continue
+        flags = {
+            "is_root": False,
+            "is_orphan": False,
+            "is_unknown_parent": False,
+            "is_cycle": False,
+            "is_self_parent": False,
+            "is_pid_zero": _is_pid_zero(pid),
+        }
+        ent["tree"] = flags
+        parent_map[eid] = None
         if ppid is None:
-            parent_map[ent["process_entity_id"]] = None
-            parent_pid_map[ent["process_entity_id"]] = None
-            ent["tree"] = {
-                "is_root": False,
-                "is_orphan": False,
-                "is_unknown_parent": True,
-                "is_cycle": False,
-                "is_self_parent": False,
-                "is_pid_zero": is_zero,
-            }
+            flags["is_unknown_parent"] = True
             continue
-        # Try to find the parent entity
-        candidates = by_pid.get(ppid, [])
-        if candidates:
-            parent_entity_id = candidates[0]["process_entity_id"]
-            parent_map[ent["process_entity_id"]] = parent_entity_id
-            parent_pid_map[ent["process_entity_id"]] = ppid
-            ent["tree"] = {
-                "is_root": False,
-                "is_orphan": False,
-                "is_unknown_parent": False,
-                "is_cycle": False,
-                "is_self_parent": False,
-                "is_pid_zero": is_zero,
-            }
+        if ppid == pid:
+            flags["is_self_parent"] = True
+            continue
+        parent = _choose_parent(ent, by_pid.get(ppid, []))
+        if parent is not None:
+            parent_map[eid] = parent["process_entity_id"]
+            if _is_pid_zero(parent["process"]["pid"]) and not flags["is_pid_zero"]:
+                flags["is_root"] = True
+        elif _is_pid_zero(ppid):
+            flags["is_root"] = not flags["is_pid_zero"]
         else:
-            parent_map[ent["process_entity_id"]] = None
-            parent_pid_map[ent["process_entity_id"]] = ppid
-            ent["tree"] = {
-                "is_root": False,
-                "is_orphan": True,
-                "is_unknown_parent": False,
-                "is_cycle": False,
-                "is_self_parent": False,
-                "is_pid_zero": is_zero,
-            }
+            flags["is_orphan"] = True
 
-    # Compute root classification: a node is a "root" of the visible
-    # graph if either:
-    #   * it has no parent_entity_id (i.e. PPID not in the set,
-    #     not flagged as orphan, not unknown_parent, not
-    #     self_parent, not the special PID 0), OR
-    #   * its parent is the PID 0 self-referencing entity (System
-    #     is conventionally the top of the analyst's tree).
-    pid_zero_ids = {e["process_entity_id"] for e in entities if e["process"]["pid"] == 0}
-    for ent in entities:
-        tree = ent["tree"]
-        if tree["is_self_parent"] or tree["is_unknown_parent"] or tree["is_orphan"] or tree["is_pid_zero"]:
-            continue
-        parent_id = parent_map.get(ent["process_entity_id"])
-        if parent_id is None:
-            tree["is_root"] = True
-        elif parent_id in pid_zero_ids:
-            tree["is_root"] = True
-
-    # Cycle detection: if any path from A to its parent eventually
-    # returns to A.
-    for ent in entities:
-        visited: set[str] = set()
-        cur = ent["process_entity_id"]
-        cycle = False
-        while cur in parent_map and parent_map[cur] is not None:
-            if cur in visited:
-                cycle = True
-                break
-            visited.add(cur)
-            cur = parent_map[cur]
-            if cur == ent["process_entity_id"]:
-                cycle = True
-                break
-        ent["tree"]["is_cycle"] = cycle
+    by_id = {ent["process_entity_id"]: ent for ent in entities}
+    for cycle in _find_parent_cycles(parent_map):
+        for eid in cycle:
+            by_id[eid]["tree"]["is_cycle"] = True
+        oldest = min(cycle, key=lambda eid: _creation_sort_key(by_id[eid]))
+        parent_map[oldest] = None
 
     # Child counts
     child_counts: dict[str, int] = defaultdict(int)
@@ -1417,6 +1422,8 @@ def fetch_canonical_lineage(
     returned as disambiguation candidates without selecting a fallback.
     """
     all_entities = _fetch_all_canonical_entities(case_id, run_id=run_id)
+    # Recompute parents from the current rules (stored links may predate them).
+    base_metrics = build_tree_metrics(all_entities)
     by_id = {e["process_entity_id"]: e for e in all_entities}
     children_map = _children_map(all_entities)
 
@@ -1431,7 +1438,6 @@ def fetch_canonical_lineage(
             selected = matches[0]
 
     match_ids = [m["process_entity_id"] for m in matches]
-    base_metrics = build_tree_metrics(all_entities)
     if selected is None:
         return {
             "run_id": run_id,
@@ -1542,6 +1548,13 @@ def _fetch_all_canonical_entities(case_id: str, *, run_id: str) -> list[dict[str
         if len(items) < page_size:
             return entities
         page += 1
+
+
+def fetch_run_entities_with_tree(case_id: str, *, run_id: str) -> list[dict[str, Any]]:
+    """Every canonical entity of a run, with parents recomputed."""
+    entities = _fetch_all_canonical_entities(case_id, run_id=run_id)
+    build_tree_metrics(entities)
+    return entities
 
 
 def _children_map(entities: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -1667,12 +1680,14 @@ def _build_tree_response(
         # Orphans are entities with no parent in the set, AND that are
         # not already counted as a root.
         root_ids = {r["process_entity_id"] for r in roots}
+        # A PID 0 entity with children is represented by them (they are
+        # roots); one without children is listed so nothing goes missing.
         orphans = [
             e
             for e in all_entities
             if e.get("parent_entity_id") is None
             and e["process_entity_id"] not in root_ids
-            and e["process_entity_id"] not in pid_zero_ids
+            and (e["process_entity_id"] not in pid_zero_ids or not e.get("child_count"))
         ]
 
     # Ancestor expansion
@@ -1728,39 +1743,19 @@ def _build_tree_response(
 
     cap = [max_nodes] if max_nodes else [10**9]
     nodes = [_walk(r, 0, set(), cap) for r in sorted(roots, key=lambda e: e["process"]["pid"])]
-    included_count = sum(1 + _count_subtree(n) for n in nodes)
+
+    # Top-level nodes: the roots, then every process whose parent is not
+    # in memory (orphans, unknown parents, broken cycles), oldest first,
+    # each with its own sub-tree so nothing below it is lost.
+    orphan_nodes = [_walk(o, 0, set(), cap) for o in sorted(orphans, key=_creation_sort_key)]
+    top_level_nodes = nodes + orphan_nodes
+    included_count = sum(_count_loaded(n) for n in top_level_nodes)
     omitted_count = max(0, len(all_entities) - included_count)
     truncation_reason = None
     if cap[0] <= 0:
         truncation_reason = "max_nodes_reached"
     elif omitted_count > 0:
         truncation_reason = "depth_or_root_scope"
-
-    # Top-level nodes are the presentational union of roots and orphans.
-    # Orphans are rendered flat (no children) to keep the
-    # "Parent process is not present in the selected run" panel honest.
-    orphan_nodes: list[dict[str, Any]] = []
-    for orph in sorted(orphans, key=lambda e: e["process"]["pid"]):
-        orphan_nodes.append(
-            {
-                "process_entity_id": orph["process_entity_id"],
-                "pid": orph["process"]["pid"],
-                "ppid": orph["process"].get("ppid"),
-                "name": orph["process"].get("name"),
-                "command_line": orph["process"].get("command_line"),
-                "sources": orph.get("sources", []),
-                "visibility": orph.get("visibility", {}),
-                "findings": orph.get("findings", []),
-                "child_count": orph.get("child_count", 0),
-                "confidence": orph.get("confidence", "low"),
-                "create_time": orph.get("process", {}).get("create_time"),
-                "exit_time": orph.get("process", {}).get("exit_time"),
-                "tree": orph.get("tree", {}),
-                "children": [],
-                "omitted_children": 0,
-            }
-        )
-    top_level_nodes = nodes + orphan_nodes
     return {
         "run_id": run_id,
         "roots": [_root_summary(r) for r in sorted(roots, key=lambda e: e["process"]["pid"])],
@@ -1825,6 +1820,8 @@ def _build_metrics_for_visible(
     visible_ids: set[str] = set()
 
     def _collect(n: dict[str, Any]) -> None:
+        if n.get("truncated"):
+            return
         visible_ids.add(n["process_entity_id"])
         for c in n.get("children", []) or []:
             _collect(c)
@@ -1835,12 +1832,15 @@ def _build_metrics_for_visible(
         _collect(n)
 
     collapsed_branches = sum(1 for n in nodes if n.get("truncated"))
-    processes_not_loaded = base["total_nodes"] - len(visible_ids)
+    represented_by_children = sum(
+        1 for e in all_entities if e["tree"]["is_pid_zero"] and e.get("child_count") and e["process_entity_id"] not in visible_ids
+    )
+    processes_not_loaded = max(0, base["total_nodes"] - len(visible_ids) - represented_by_children)
     return {
         **base,
         # Single source of truth (renamed for clarity in the UI):
         "case_roots": base["roots"],
-        "current_view_roots": len(roots or []),
+        "current_view_roots": len(nodes) + len(orphan_nodes or []),
         "visible_processes": len(visible_ids),
         "context_ancestors": 0,  # populated by the include_ancestors flow at the caller
         "collapsed_branches": collapsed_branches,
@@ -1849,10 +1849,12 @@ def _build_metrics_for_visible(
     }
 
 
-def _count_subtree(node: dict[str, Any]) -> int:
-    if not node.get("children"):
+def _count_loaded(node: dict[str, Any]) -> int:
+    """Processes actually rendered in ``node``'s sub-tree (placeholders cut by
+    depth or the node cap are not loaded)."""
+    if node.get("truncated"):
         return 0
-    return sum(1 + _count_subtree(c) for c in node["children"])
+    return 1 + sum(_count_loaded(c) for c in node.get("children") or [])
 
 
 def fetch_canonical_summary(case_id: str, *, run_id: str) -> dict[str, Any]:

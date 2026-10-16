@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { type MemoryRunSelector, api } from "../../api/client";
 import { MemoryProcessGraph } from "../MemoryProcessGraph";
-import { IndentedTreeView } from "./IndentedTreeView";
+import { IndentedTreeView, TREE_DEPTH, TREE_MAX_NODES } from "./IndentedTreeView";
 import { MetricsStrip } from "./MetricsStrip";
 import { ProcessDetailModal, type TabKey } from "./ProcessDetailModal";
 import { useMemoryTreeMetrics } from "../../lib/useMemoryTreeMetrics";
@@ -40,8 +40,8 @@ export function MemoryGraphTab({
   const effectiveRunId = runId || selectedRunId || topologyRunId || runOptions?.default_run_id || null;
   const { metrics, isLoading, isFetching, hasLoaded } = useMemoryTreeMetrics(caseId, {
     run_id: effectiveRunId,
-    depth: 10,
-    max_nodes: 500,
+    depth: TREE_DEPTH,
+    max_nodes: TREE_MAX_NODES,
   });
 
   const inspectEntityDetail = useQuery({

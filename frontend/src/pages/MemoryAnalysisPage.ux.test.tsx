@@ -704,27 +704,46 @@ describe("Memory analysis UX fixes v1", () => {
     });
   });
 
-  // 24. Indented tree separates Main tree and Orphans
-  it("splits Main tree and Orphans in the indented tree view", async () => {
-    const orphan = { process_entity_id: "ent-orphan", pid: 9000, ppid: 12345, name: "orphan.exe", command_line: null, sources: ["windows.pslist"], visibility: { listed: true }, findings: [], child_count: 0, confidence: "high", truncated: false, omitted_children: 0, children: [] };
+  // 24. Processes whose parent exited sit in the same tree, with their children
+  it("shows processes whose parent exited in the main tree with their children", async () => {
+    const child = { process_entity_id: "ent-cmd", pid: 9100, ppid: 9000, name: "cmd.exe", command_line: null, sources: ["windows.pslist"], visibility: { listed: true }, findings: [], child_count: 0, confidence: "high", truncated: false, omitted_children: 0, children: [], tree: {} };
+    const orphan = { process_entity_id: "ent-orphan", pid: 9000, ppid: 12345, name: "explorer.exe", command_line: null, sources: ["windows.pslist"], visibility: { listed: true }, findings: [], child_count: 1, confidence: "high", truncated: false, omitted_children: 0, children: [child], tree: { is_orphan: true } };
+    const nodes = treeResponse().nodes.concat(orphan);
     getCanonicalProcessTreeMock.mockResolvedValue(treeResponse({
       orphans: [orphan],
-      top_level_nodes: treeResponse().nodes.concat(orphan),
-      metrics: { ...treeResponse().metrics, orphans: 1 },
+      top_level_nodes: nodes,
+      nodes,
+      metrics: { ...treeResponse().metrics, orphans: 1, total_nodes: 5, current_view_roots: 2 },
     }));
     renderPage();
     await openMemoryTab("graph");
     await screen.findByTestId("memory-graph-tab");
     fireEvent.click(await screen.findByTestId("graph-subview-tree"));
     await screen.findByTestId("indented-tree");
-    expect(screen.getByTestId("indented-tree-main")).toBeInTheDocument();
-    expect(screen.getByTestId("indented-tree-orphans")).toBeInTheDocument();
-    // The summary must say "Main tree · 1 root" and "Orphans · 1", never
-    // the misleading "12 root(s)" pattern.
-    const summary = screen.getByTestId("indented-tree-summary");
-    expect(summary.textContent).toContain("Main tree · 1 root");
-    expect(summary.textContent).toContain("Orphans · 1");
-    expect(summary.textContent).not.toMatch(/\d+ root\(s\)/);
+    expect(screen.queryByTestId("indented-tree-orphans")).not.toBeInTheDocument();
+    expect(screen.getByTestId("indented-tree-summary")).toHaveTextContent("2 top-level processes");
+    expect(screen.getByTestId("indented-tree-parent-exited")).toHaveTextContent("parent 12345 exited");
+    expect(screen.getByTestId("metrics-strip-orphans")).toHaveTextContent("1 whose parent exited");
+    // Searching opens the branch that leads to the match.
+    fireEvent.change(screen.getByTestId("indented-tree-search"), { target: { value: "cmd.exe" } });
+    expect(await screen.findByText("cmd.exe (9100)")).toBeInTheDocument();
+  });
+
+  // 24b. A folded group of identical siblings lists every member when opened
+  it("lists every member of a folded group of identical siblings", async () => {
+    const svc = (pid: number) => ({ process_entity_id: `ent-${pid}`, pid, ppid: 808, name: "svchost.exe", command_line: "svchost.exe -k netsvcs", sources: ["windows.pslist"], visibility: { listed: true }, findings: [], child_count: 0, confidence: "high", truncated: false, omitted_children: 0, children: [], tree: {} });
+    const services = { process_entity_id: "ent-services", pid: 808, ppid: 4, name: "services.exe", command_line: null, sources: ["windows.pslist"], visibility: { listed: true }, findings: [], child_count: 4, confidence: "high", truncated: false, omitted_children: 0, children: [svc(1000), svc(1100), svc(1200), svc(1300)], tree: { is_root: true } };
+    getCanonicalProcessTreeMock.mockResolvedValue(treeResponse({ nodes: [services], top_level_nodes: [services] }));
+    renderPage();
+    await openMemoryTab("graph");
+    fireEvent.click(await screen.findByTestId("graph-subview-tree"));
+    await screen.findByTestId("indented-tree");
+    fireEvent.click(screen.getByTestId("indented-tree-toggle"));
+    expect(await screen.findByText("svchost.exe × 4")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("indented-tree-toggle-group"));
+    for (const pid of [1000, 1100, 1200, 1300]) {
+      expect(await screen.findByText(`svchost.exe (${pid})`)).toBeInTheDocument();
+    }
   });
 
   // 25. Raw observations: "Open canonical" opens the modal
