@@ -126,9 +126,12 @@ def build_command_line_history(
                 if visibility == "terminated" and not vis.get("terminated"):
                     continue
             create_time = proc.get("create_time") or None
-            if time_from and create_time and create_time < time_from:
+            # A range keeps only processes known to have started inside it.
+            if (time_from or time_to) and not create_time:
                 continue
-            if time_to and create_time and create_time > time_to:
+            if time_from and create_time < time_from:
+                continue
+            if time_to and create_time > time_to:
                 continue
 
             items.append({

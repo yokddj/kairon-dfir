@@ -6770,6 +6770,11 @@ export const api = {
       process_name?: string;
       command?: string;
       source?: string;
+      // Shell history: the user a command belongs to, with or without a recovered time,
+      // and one row per (command, time) recovered from several processes or sources.
+      user?: string;
+      dated?: "dated" | "undated";
+      group_duplicates?: boolean;
       // Fields to return the active run's values for (with counts), for filter pickers.
       facet_fields?: string[];
       module_name?: string;

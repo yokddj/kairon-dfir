@@ -971,6 +971,49 @@ def _shell_history_source_facets(case_id: str, evidence_id: str, result: dict) -
         return []
 
 
+def _shell_history_dated_counts(case_id: str, evidence_id: str, result: dict) -> dict[str, int] | None:
+    run = result.get("active_run") or {}
+    if not run.get("id"):
+        return None
+    from app.services.memory.artifact_indexing import shell_history_dated_counts
+
+    try:
+        return shell_history_dated_counts(case_id, run_id=str(run["id"]), evidence_id=evidence_id)
+    except Exception:  # noqa: BLE001 -- the filter is just not offered
+        logger.warning("shell history dated counts unavailable", exc_info=True)
+        return None
+
+
+# Typed commands are a few hundred per image; grouping reads them all.
+_SHELL_HISTORY_GROUP_LIMIT = 10_000
+
+
+def _group_shell_history_duplicates(case_id: str, evidence_id: str, result: dict, filters: dict, *, page: int, page_size: int) -> None:
+    run = result.get("active_run") or {}
+    if not run.get("id") or not result.get("total"):
+        return
+    from app.services.memory.artifact_indexing import group_duplicate_commands, search_artifact_documents
+
+    docs: list[dict] = []
+    fetch_page = 1
+    while len(docs) < _SHELL_HISTORY_GROUP_LIMIT:
+        batch = search_artifact_documents(
+            case_id, document_type="memory_shell_history", run_id=str(run["id"]), evidence_id=evidence_id,
+            page=fetch_page, page_size=200, filters={k: v for k, v in filters.items() if v not in (None, "")},
+        )
+        items = batch.get("items") or []
+        docs.extend(items)
+        if len(items) < 200:
+            break
+        fetch_page += 1
+    groups = group_duplicate_commands(docs)
+    start = (page - 1) * page_size
+    result["ungrouped_total"] = result.get("total")
+    result["total"] = len(groups)
+    result["items"] = groups[start:start + page_size]
+    result["grouped"] = True
+
+
 @router.get(
     "/cases/{case_id}/memory/evidences/{evidence_id}/active-result",
     response_model=None,
@@ -992,6 +1035,9 @@ def get_memory_active_result(
     process_name: str | None = Query(default=None),
     command: str | None = Query(default=None),
     source: str | None = Query(default=None),
+    user: str | None = Query(default=None),
+    dated: str | None = Query(default=None, pattern="^(dated|undated)$"),
+    group_duplicates: bool = Query(default=False),
     facet_fields: list[str] = Query(default=[]),
     module_name: str | None = Query(default=None),
     path: str | None = Query(default=None),
@@ -1041,6 +1087,8 @@ def get_memory_active_result(
         "process_name": process_name,
         "command": command,
         "source": source,
+        "user": user,
+        "dated": dated,
         "module_name": module_name,
         "path": path,
         "load_state": load_state,
@@ -1062,6 +1110,9 @@ def get_memory_active_result(
     )
     if family == "shell_history":
         result["source_facets"] = _shell_history_source_facets(case_id, evidence_id, result)
+        result["dated_counts"] = _shell_history_dated_counts(case_id, evidence_id, result)
+        if group_duplicates:
+            _group_shell_history_duplicates(case_id, evidence_id, result, filters, page=page, page_size=page_size)
     if facet_fields:
         result["facets"] = _active_result_facets(case_id, evidence_id, family, result, facet_fields)
     return result
