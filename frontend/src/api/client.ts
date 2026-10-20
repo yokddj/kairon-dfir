@@ -5335,6 +5335,11 @@ export type SystemStatus = {
   deployment: Record<string, unknown>;
 };
 
+// Activation state of optional capabilities (GET /api/system/capabilities).
+export type SystemCapabilities = {
+  memory: { enabled: boolean };
+};
+
 export type SystemVersionInfo = {
   app_version: string;
   vendor_id: string;
@@ -8746,6 +8751,7 @@ export const api = {
   promoteDetectionToFinding: (detectionId: string) => request<Finding>(`/detections/${detectionId}/promote-to-finding`, { method: "POST" }),
   getSystemStatus: () => request<SystemStatus>("/system/status"),
   getSystemVersion: () => request<SystemVersionInfo>("/system/version"),
+  getSystemCapabilities: () => request<SystemCapabilities>("/system/capabilities"),
   getSystemSettings: () => request<SystemSettingsResponse>("/system/settings"),
   updateSystemSettings: (settings: Record<string, unknown>) =>
     request<SystemSettingsPatchResponse>("/system/settings", { method: "PATCH", body: JSON.stringify({ settings }) }),

@@ -26,7 +26,8 @@ Expected, standard capabilities of a serious DFIR platform. Installed by default
 ### Linux
 
 - Completed (partial coverage): auth logs, syslog/messages, shell history, cron, systemd units, SSH artifacts, passwd/group/shadow presence, sudoers, package manager logs, network configuration, OS release/hostname/kernel/users.
-- Not yet available: full advanced Linux memory analysis (Linux memory uploads are accepted and preserved for host assignment/findings only). Linux's depth of coverage is not yet at parity with Windows within several supported artifact families.
+- Linux memory: analysed with Volatility 3 under the Memory Analysis preview (processes, network, open files, kernel modules, suspicious memory, bash history, page-cache files and a Linux Find Evil) once a symbol file for the exact kernel is provided (Volatility 3 ISF or Volatility 2 profile); see `docs/memory/linux_symbols.md`.
+- Linux's depth of coverage is not yet at parity with Windows within several supported artifact families.
 
 ### Rules Engine
 
@@ -44,7 +45,7 @@ Expected, standard capabilities of a serious DFIR platform. Installed by default
 - **Preview → Stable exit criteria** (explicit, evaluated against evidence — not against continued investment):
   1. Passes the Optional Capability Boundary verification checklist (`docs/architecture/optional-capability-boundary.md`, §13).
   2. Backend boots and serves the full core investigation loop with Memory disabled, verified by an automated smoke test.
-  3. Frontend navigation/routes reflect backend-exposed capability state rather than always rendering Memory as present.
+  3. Frontend navigation/routes reflect backend-exposed capability state rather than always rendering Memory as present. **Met** (2026-10).
   4. Volatility metadata/process-profile coverage and correctness bar agreed separately as a Memory-specific quality gate (out of scope for this architecture document).
 
 ## Authentication, roles, and multi-user (corrected)

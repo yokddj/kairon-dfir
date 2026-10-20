@@ -15,7 +15,7 @@
     "multi_host_supported": true,
     "limitations": ["Message and rich fields depend on source event payload", "Command line fields require Windows audit policy or Sysmon configuration", "Generic EVTX rows may be searchable without specialized view enrichment"],
     "test_coverage": "partial",
-    "docs_url": "docs/evtx.md",
+    "docs_url": "docs/artifacts/evtx.md",
     "notes": "Primary Windows event path. Security, Sysmon, PowerShell and Defender channel rows receive extra normalization when recognized."
   },
   {
@@ -34,7 +34,7 @@
     "multi_host_supported": true,
     "limitations": ["Full MFT indexing is explicit because volume can be high", "Raw $MFT detection can be inventory-only unless parsed output is available", "Filesystem timeline is opt-in"],
     "test_coverage": "partial",
-    "docs_url": "docs/filesystem_mft_usn.md",
+    "docs_url": "docs/artifacts/filesystem_mft_usn.md",
     "notes": "MFTECmd CSV/JSON/JSONL outputs are the supported path for searchable MFT records."
   },
   {
@@ -53,7 +53,7 @@
     "multi_host_supported": true,
     "limitations": ["No active raw UsnJrnl2Csv backend", "Raw $UsnJrnl is detected but should not be treated as stable parsed support", "Coverage depends on compatible parsed exports"],
     "test_coverage": "limited",
-    "docs_url": "docs/filesystem_mft_usn.md",
+    "docs_url": "docs/artifacts/filesystem_mft_usn.md",
     "notes": "Supported only when compatible parsed rows are available."
   },
   {
@@ -72,7 +72,7 @@
     "multi_host_supported": true,
     "limitations": ["Prefetch is execution evidence but has no parent process or command line", "PECmd raw rebuild is disabled on Linux; internal raw parser is active", "Unsupported PF versions may produce partial records"],
     "test_coverage": "partial",
-    "docs_url": "docs/prefetch.md",
+    "docs_url": "docs/artifacts/prefetch.md",
     "notes": "Native raw PF parser is the default path; PECmd output is accepted when provided."
   },
   {
@@ -91,7 +91,7 @@
     "multi_host_supported": true,
     "limitations": ["Scoped user activity extraction is supported; not every registry key has a dedicated semantic parser", "Shellbags are separate and partial", "Raw hive coverage depends on implemented extraction paths"],
     "test_coverage": "partial",
-    "docs_url": "docs/registry.md",
+    "docs_url": "docs/artifacts/registry.md",
     "notes": "RECmd outputs and selected raw hive activity families are supported."
   },
   {
@@ -110,7 +110,7 @@
     "multi_host_supported": true,
     "limitations": ["Indicates Explorer/MRU activity, not necessarily process execution", "No-data is common and is not parser failure", "Coverage is scoped to implemented activity keys"],
     "test_coverage": "limited",
-    "docs_url": "docs/registry.md",
+    "docs_url": "docs/artifacts/registry.md",
     "notes": "Implemented as scoped registry activity, not complete registry coverage."
   },
   {
@@ -129,7 +129,7 @@
     "multi_host_supported": true,
     "limitations": ["LNK indicates shortcut interaction, not guaranteed execution", "LECmd advanced rebuild is optional and not default", "Timestamps depend on shortcut metadata quality"],
     "test_coverage": "partial",
-    "docs_url": "docs/lnk.md",
+    "docs_url": "docs/artifacts/lnk.md",
     "notes": "Internal/default LNK coverage is active; LECmd advanced variants are available separately."
   },
   {
@@ -148,7 +148,7 @@
     "multi_host_supported": true,
     "limitations": ["Shows application recent-item activity, not direct execution proof", "JLECmd advanced rebuild is optional and not default", "User attribution depends on collection path"],
     "test_coverage": "partial",
-    "docs_url": "docs/jumplists.md",
+    "docs_url": "docs/artifacts/jumplists.md",
     "notes": "Raw automatic/custom destinations and JLECmd-style rows are recognized."
   },
   {
@@ -167,7 +167,7 @@
     "multi_host_supported": true,
     "limitations": ["Amcache is inventory/presence context, not proof of execution", "Advanced AmcacheParser output is separate from default Search unless selected", "Raw coverage is scoped to implemented fields"],
     "test_coverage": "partial",
-    "docs_url": "docs/execution_artifacts.md",
+    "docs_url": "docs/artifacts/execution_artifacts.md",
     "notes": "Native/default and advanced external outputs are both represented."
   },
   {
@@ -186,7 +186,7 @@
     "multi_host_supported": true,
     "limitations": ["Shimcache semantics are cautious; entries are not always execution proof", "Advanced external outputs are separate variants", "Timestamp meaning differs by Windows version"],
     "test_coverage": "partial",
-    "docs_url": "docs/execution_artifacts.md",
+    "docs_url": "docs/artifacts/execution_artifacts.md",
     "notes": "Presented as execution context, not conclusive process execution."
   },
   {
@@ -205,7 +205,7 @@
     "multi_host_supported": true,
     "limitations": ["Task presence is persistence context, not necessarily malicious", "Trigger/action interpretation can require manual review", "CSV quality depends on collector/export"],
     "test_coverage": "partial",
-    "docs_url": "docs/scheduled_tasks.md",
+    "docs_url": "docs/artifacts/scheduled_tasks.md",
     "notes": "XML/internal and structured rows are normalized."
   },
   {
@@ -224,7 +224,7 @@
     "multi_host_supported": true,
     "limitations": ["Service entries require context; presence alone is not malicious", "Coverage depends on registry/service export fields", "Not all service changes have precise timestamps"],
     "test_coverage": "limited",
-    "docs_url": "docs/artifacts.md",
+    "docs_url": "docs/artifacts/parser-coverage.md",
     "notes": "Service registry normalization is implemented inside artifact normalizers."
   },
   {
@@ -243,7 +243,7 @@
     "multi_host_supported": true,
     "limitations": ["Some ASEP sources are discovery-only without parsed exports", "Autoruns output is inventory context, not proof of execution", "Parsing quality depends on exported columns"],
     "test_coverage": "partial",
-    "docs_url": "docs/autoruns.md",
+    "docs_url": "docs/artifacts/autoruns.md",
     "notes": "CSV/TSV/XML/JSON variants are recognized; subtypes include WMI, scheduled task and startup folder."
   },
   {
@@ -262,7 +262,7 @@
     "multi_host_supported": true,
     "limitations": ["Defender logs may contain configuration or health entries without detections", "Threat names depend on Defender telemetry", "Quarantine metadata support is limited"],
     "test_coverage": "partial",
-    "docs_url": "docs/defender.md",
+    "docs_url": "docs/artifacts/defender.md",
     "notes": "Defender EVTX and structured exports receive extra normalization."
   },
   {
@@ -281,7 +281,7 @@
     "multi_host_supported": true,
     "limitations": ["Script block logging depends on source host configuration", "PSReadLine often lacks reliable forensic timestamp", "Scripts on disk are content/context and not proof of execution"],
     "test_coverage": "partial",
-    "docs_url": "docs/powershell_artifacts.md",
+    "docs_url": "docs/artifacts/powershell_artifacts.md",
     "notes": "EVTX, PSReadLine, transcripts and scripts are recognized through dedicated helpers."
   },
   {
@@ -300,7 +300,7 @@
     "multi_host_supported": true,
     "limitations": ["History/downloads prove browser activity, not execution", "Cookies and credential stores are intentionally not parsed", "Profile/user attribution depends on source path"],
     "test_coverage": "partial",
-    "docs_url": "docs/browser.md",
+    "docs_url": "docs/artifacts/browser.md",
     "notes": "Chromium and Firefox history-style data are supported; sensitive credential/cookie stores are excluded."
   },
   {
@@ -319,7 +319,7 @@
     "multi_host_supported": true,
     "limitations": ["$I/$R pairing depends on available files", "Deletion time is not always equivalent to original file activity", "User attribution depends on SID/path context"],
     "test_coverage": "partial",
-    "docs_url": "docs/recycle_bin.md",
+    "docs_url": "docs/artifacts/recycle_bin.md",
     "notes": "Raw $I files and RBCmd-style rows are supported."
   },
   {
@@ -338,7 +338,7 @@
     "multi_host_supported": true,
     "limitations": ["USB presence does not prove exfiltration", "Correlation requires filesystem/user context", "Registry/log source availability varies by collection profile"],
     "test_coverage": "partial",
-    "docs_url": "docs/usb.md",
+    "docs_url": "docs/artifacts/usb.md",
     "notes": "SetupAPI, registry-style rows and PnP event exports are recognized."
   },
   {
@@ -357,7 +357,7 @@
     "multi_host_supported": true,
     "limitations": ["Raw qmgr databases may be inventory/detection only depending on available parser path", "BITS job presence needs correlation with process/network evidence", "Output columns vary by command/export"],
     "test_coverage": "limited",
-    "docs_url": "docs/bits.md",
+    "docs_url": "docs/artifacts/bits.md",
     "notes": "Structured BITS job exports and bitsadmin text are recognized."
   },
   {
@@ -376,7 +376,7 @@
     "multi_host_supported": true,
     "limitations": ["Many command outputs are context/inventory rather than timestamped events", "DNS cache does not prove connection success", "WLAN profile data is configuration unless paired with events"],
     "test_coverage": "limited",
-    "docs_url": "docs/network.md",
+    "docs_url": "docs/artifacts/network.md",
     "notes": "DNS, WLAN, hosts, ipconfig/netsh-style outputs and generic network CSV are recognized."
   },
   {
@@ -395,7 +395,7 @@
     "multi_host_supported": true,
     "limitations": ["Cloud sync entries are client context and do not prove exfiltration by themselves", "Provider-specific formats vary widely", "Some logs/config files may be inventory-only"],
     "test_coverage": "limited",
-    "docs_url": "docs/cloud_sync.md",
+    "docs_url": "docs/artifacts/cloud_sync.md",
     "notes": "OneDrive-style structured data is the clearest path; other providers are conservative partial support."
   },
   {
@@ -414,7 +414,7 @@
     "multi_host_supported": true,
     "limitations": ["Raw WMI repository parsing is not complete", "Persistence interpretation requires filter/consumer/binding correlation", "Some WMI-Activity rows are operational noise"],
     "test_coverage": "partial",
-    "docs_url": "docs/wmi.md",
+    "docs_url": "docs/artifacts/wmi.md",
     "notes": "Structured WMI persistence rows and WMI-Activity event exports are recognized."
   },
   {
@@ -433,7 +433,7 @@
     "multi_host_supported": true,
     "limitations": ["SBECmd/ShellBagsExplorer backend is not active as a Kairon-run parser", "Raw hive shellbag extraction is not stable", "Only compatible parsed CSV-style rows should be expected"],
     "test_coverage": "limited",
-    "docs_url": "docs/shellbags.md",
+    "docs_url": "docs/artifacts/shellbags.md",
     "notes": "Parsed shellbag CSV can be normalized; raw Shellbags remain a follow-up."
   },
   {
@@ -452,7 +452,7 @@
     "multi_host_supported": true,
     "limitations": ["SrumECmd requires Windows ESE libraries and is not runnable in the current Linux deployment", "Raw SRUDB.dat is detected but not parsed as stable support", "SRUM shows resource usage, not confirmed exfiltration"],
     "test_coverage": "limited",
-    "docs_url": "docs/srum.md",
+    "docs_url": "docs/artifacts/srum.md",
     "notes": "Compatible parsed output is supported; raw database parsing is tooling_missing."
   },
   {
@@ -471,7 +471,7 @@
     "multi_host_supported": true,
     "limitations": ["PST/OST support is inventory-oriented, not full mailbox parsing", "Attachment/body extraction is intentionally limited", "Email formats can contain sensitive content and require careful handling"],
     "test_coverage": "limited",
-    "docs_url": "docs/artifacts.md",
+    "docs_url": "docs/artifacts/parser-coverage.md",
     "notes": "Detected by email helpers; treat as experimental unless specific EML/MBOX rows are verified."
   },
   {
@@ -490,7 +490,7 @@
     "multi_host_supported": true,
     "limitations": ["Many raw DB files are detected/preserved but not fully parsed", "Office cache and notification data are partial", "Windows Search index support is conservative"],
     "test_coverage": "limited",
-    "docs_url": "docs/artifacts.md",
+    "docs_url": "docs/artifacts/parser-coverage.md",
     "notes": "Detector recognizes several Windows UI/local DB artifacts; full parser coverage varies by source."
   },
   {
@@ -503,13 +503,13 @@
     "evidence_types": ["memory_dump"],
     "normalized_fields": ["host", "process.pid", "process.name", "process.command_line", "module.path", "memory.run_id"],
     "views": ["Memory views", "Process Graph"],
-    "searchable": false,
-    "timeline_supported": false,
+    "searchable": true,
+    "timeline_supported": true,
     "host_aware": true,
     "multi_host_supported": true,
     "limitations": ["Memory results reach the case Timeline, Search, Command History and Persistence, but not Detections or Reports", "Volatility 3 is optional and not bundled", "Supported execution profiles are intentionally limited"],
     "test_coverage": "partial",
-    "docs_url": "docs/memory_analysis.md",
+    "docs_url": "docs/memory/memory_analysis.md",
     "notes": "Memory has dedicated views and indexes; it is not treated as ordinary artifact ingest."
   },
   {
@@ -528,7 +528,7 @@
     "multi_host_supported": true,
     "limitations": ["Network parser modules exist but are not presented as complete PCAP forensic coverage", "Attribution to host/user requires external context", "Timeline support is not claimed as stable"],
     "test_coverage": "limited",
-    "docs_url": "docs/network.md",
+    "docs_url": "docs/artifacts/network.md",
     "notes": "Keep PCAP support conservative until validated end-to-end."
   },
   {
@@ -547,7 +547,7 @@
     "multi_host_supported": true,
     "limitations": ["Rule files are detection content, not forensic evidence artifacts", "YARA scanning scope is controlled by the rules workflow", "Sigma field mapping depends on indexed event fields"],
     "test_coverage": "partial",
-    "docs_url": "docs/rules_sigma_yara.md",
+    "docs_url": "docs/rules/rules_sigma_yara.md",
     "notes": "Included because evidence type detection recognizes rule files."
   },
   {
@@ -786,16 +786,16 @@
     "recognized_filenames": ["*.raw", "*.mem", "*.lime"],
     "source_tools": ["Volatility 3 optional external backend", "manual memory acquisition"],
     "evidence_types": ["memory_dump"],
-    "normalized_fields": ["filename", "size_bytes", "sha256", "effective_platform"],
-    "views": ["Memory views"],
-    "searchable": false,
-    "timeline_supported": false,
+    "normalized_fields": ["host", "process.pid", "process.name", "process.command_line", "memory.run_id"],
+    "views": ["Memory views", "Process Graph"],
+    "searchable": true,
+    "timeline_supported": true,
     "host_aware": true,
     "multi_host_supported": true,
-    "limitations": ["Advanced memory analysis not available in v1", "No Volatility Linux analysis", "Memory is accepted and preserved only"],
+    "limitations": ["Needs a symbol file for the exact kernel (Volatility 3 ISF or Volatility 2 profile); analysis is blocked until one is provided", "Windows-only views (DLLs, drivers, VADs, MemProcFS) have no Linux equivalent", "Memory results do not reach Detections or Reports"],
     "test_coverage": "partial",
-    "docs_url": "docs/linux/linux-support.md",
-    "notes": "Linux memory images (.raw, .mem, .lime) are accepted and preserved. Analysis is deferred to a future release."
+    "docs_url": "docs/memory/linux_symbols.md",
+    "notes": "Volatility 3 Linux plugins: processes (pslist, pstree, psaux, psscan), network (sockstat), open files (lsof), kernel modules (lsmod), malfind, bash history, page-cache files and a Linux Find Evil."
   },
   {
     "family": "linux_journal",

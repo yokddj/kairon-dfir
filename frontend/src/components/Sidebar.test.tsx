@@ -7,6 +7,7 @@ import Sidebar from "./Sidebar";
 import type { CaseCapabilitiesResponse } from "../api/client";
 
 const getCaseCapabilitiesMock = vi.fn();
+const getSystemCapabilitiesMock = vi.fn();
 const logoutMock = vi.fn();
 
 const activeCaseState: any = {
@@ -29,6 +30,7 @@ vi.mock("../context/AuthContext", () => ({
 vi.mock("../api/client", () => ({
   api: {
     getCaseCapabilities: (...args: unknown[]) => getCaseCapabilitiesMock(...args),
+    getSystemCapabilities: () => getSystemCapabilitiesMock(),
   },
 }));
 
@@ -77,6 +79,8 @@ describe("registry-driven sidebar", () => {
     activeCaseState.activeCaseId = "case-1";
     activeCaseState.activeCase = { id: "case-1", name: "Case Alpha" };
     getCaseCapabilitiesMock.mockReset();
+    getSystemCapabilitiesMock.mockReset();
+    getSystemCapabilitiesMock.mockResolvedValue({ memory: { enabled: true } });
     logoutMock.mockReset();
   });
 
@@ -131,6 +135,15 @@ describe("registry-driven sidebar", () => {
     expect(await screen.findByRole("link", { name: "Memory" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Execution Stories" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Linux Authentication" })).not.toBeInTheDocument();
+  });
+
+  it("never lists Memory when the deployment disables it, even if the registry cannot be read", async () => {
+    getSystemCapabilitiesMock.mockResolvedValue({ memory: { enabled: false } });
+    getCaseCapabilitiesMock.mockRejectedValue(new Error("boom"));
+    renderSidebar();
+    expect(await screen.findByRole("link", { name: "Execution Stories" })).toBeInTheDocument();
+    await vi.waitFor(() => expect(getSystemCapabilitiesMock).toHaveBeenCalled());
+    await vi.waitFor(() => expect(screen.queryByRole("link", { name: "Memory" })).not.toBeInTheDocument());
   });
 
   it("marks Memory active on any memory route", async () => {

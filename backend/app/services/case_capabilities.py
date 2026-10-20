@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.database import utc_now_naive
 from app.models.artifact import Artifact
 from app.models.case import Case
@@ -554,6 +555,7 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
     for domain in sorted(case_domains):
         domain_payloads.append({"id": domain, "label": domain.title(), "evidence_count": case_domains[domain]})
 
+    memory_enabled = get_settings().memory_enabled
     capability_payloads = []
     workbench_map: dict[str, dict[str, Any]] = {}
     for entry in CAPABILITY_REGISTRY:
@@ -580,7 +582,9 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
         if any(status in {"failed", "completed_with_errors", "timed_out"} for counts in status_counts.values() if isinstance(counts, dict) for status, count in counts.items() if count):
             readiness = "degraded" if readiness in {"has_data", "empty"} else readiness
 
-        visible = entry["availability"] == "shipped" and in_scope
+        # A memory capability is not offered while Memory is disabled in this deployment.
+        enabled = memory_enabled or entry["evidence_domain"] != "memory"
+        visible = entry["availability"] == "shipped" and in_scope and enabled
         capability = {
             **entry,
             "artifact_count": artifact_count,

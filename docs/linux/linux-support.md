@@ -353,9 +353,9 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 - Detected host is extracted from `/etc/hostname` when available. Feeds the platform-agnostic Host Facts layer — see [Host Information](../evidence/host-information.md).
 
 ### Linux Memory Images (`linux_memory`)
-- Sources: `.raw`, `.mem`, `.lime` files detected as Linux
-- Accepted, classified, preserved, assignable to hosts, and usable for findings
-- Advanced Linux memory analysis with Volatility is not available yet — the UI explicitly shows Linux Memory as accepted with analysis not available
+- Sources: `.raw`, `.mem`, `.lime` (and VMware `.vmem` with its `.vmsn`/`.vmss`) files detected as Linux
+- Analysed with Volatility 3 under the Memory Analysis preview: processes, network, open files, kernel modules, suspicious memory, bash history, page-cache files (with file retrieval) and a Linux Find Evil
+- Needs a symbol file for the exact kernel (Volatility 3 ISF or Volatility 2 profile); until one is provided the analysis is blocked and Kairon asks for it. See [Linux memory symbols](../memory/linux_symbols.md)
 
 ## Viewing Linux Artifacts
 
@@ -367,7 +367,7 @@ Linux artifacts appear in:
 ## Limitations
 
 - Linux parser coverage is partial. Not all log formats are supported.
-- Full Linux memory analysis with Volatility is not available.
+- Linux memory analysis needs a symbol file for the exact kernel, and Windows-only memory views (DLLs, drivers, VADs, MemProcFS) have no Linux equivalent.
 - ext4 filesystem parsing is not implemented.
 - Full automatic filesystem mounting for every Linux disk-image layout is not implemented.
 - Write-capable disk-image mounting is not implemented.

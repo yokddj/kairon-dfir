@@ -25,6 +25,7 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useAuth } from "../context/AuthContext";
+import { useMemoryEnabled } from "../hooks/useMemoryEnabled";
 import { useQuery } from "@tanstack/react-query";
 
 type NavItem = {
@@ -173,12 +174,15 @@ export default function Sidebar() {
     staleTime: 15_000,
     refetchOnWindowFocus: false,
   });
+  const memoryEnabled = useMemoryEnabled();
   // Views that exist only for some evidence (Memory, Execution Stories, Linux Authentication) are
   // listed once the registry says the case has that evidence; if the registry cannot be read,
-  // they are all listed rather than hidden.
+  // they are all listed rather than hidden. Memory is never listed when the deployment disables it.
   const presentWorkbenches = new Set((capabilitiesQuery.data?.workbenches ?? []).map((workbench) => workbench.id));
   const investigationItems = INVESTIGATION_ITEMS.filter(
-    (item) => !item.workbench || capabilitiesQuery.isError || presentWorkbenches.has(item.workbench),
+    (item) =>
+      (item.workbench !== "memory" || memoryEnabled) &&
+      (!item.workbench || capabilitiesQuery.isError || presentWorkbenches.has(item.workbench)),
   );
 
   return (
