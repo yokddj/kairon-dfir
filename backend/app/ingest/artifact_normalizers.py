@@ -1451,8 +1451,11 @@ def normalize_evtx_row(document: dict, row: dict, artifact_meta: dict) -> dict:
     document["user"]["name"] = user_name
     process_path = _normalize_windowsish_path(process_name)
     parent_process_path = _normalize_windowsish_path(first_value(row, ["ParentProcessName", "CreatorProcessName", "ParentImage"]))
-    pid = _parse_pidish(first_value(row, ["ProcessId", "NewProcessId"]))
-    parent_pid = _parse_pidish(first_value(row, ["ParentProcessId", "CreatorProcessId"]))
+    # Security 4688 names the new process NewProcessId and its creator ProcessId;
+    # Sysmon 1 names the process ProcessId and its parent ParentProcessId.
+    new_process_id = first_value(row, ["NewProcessId"])
+    pid = _parse_pidish(new_process_id or first_value(row, ["ProcessId"]))
+    parent_pid = _parse_pidish(first_value(row, ["ParentProcessId", "CreatorProcessId"]) or (first_value(row, ["ProcessId"]) if new_process_id else None))
     process_hashes = _parse_hashes_field(first_value(row, ["Hashes"]))
     process_entity_id = _process_entity_id(document, row, host_name, process_path, pid)
     parent_entity_id = _clean_placeholder(first_value(row, ["ParentProcessGuid", "ParentProcessGUID"]))

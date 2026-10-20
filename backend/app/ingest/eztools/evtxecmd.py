@@ -956,18 +956,23 @@ def _normalize_evtx_row(case_id: str, evidence_id: str, artifact_id: str, raw_ro
     )
     process_entity_id = _normalize_windows_value(event_data.get("ProcessGuid"))
     parent_entity_id = _normalize_windows_value(event_data.get("ParentProcessGuid"))
-    synthetic_entity_id = _stable_process_entity_id(case_id, host_name if isinstance(host_name, str) else None, timestamp, _to_intish(event_data.get("NewProcessId") or event_data.get("ProcessId")), process_path)
+    # Security 4688 names the new process NewProcessId and its creator ProcessId;
+    # Sysmon 1 names the process ProcessId and its parent ParentProcessId.
+    new_process_id = event_data.get("NewProcessId")
+    process_pid = _to_intish(new_process_id or event_data.get("ProcessId"))
+    parent_process_pid = _to_intish(event_data.get("CreatorProcessId") or event_data.get("ParentProcessId") or (event_data.get("ProcessId") if new_process_id else None))
+    synthetic_entity_id = _stable_process_entity_id(case_id, host_name if isinstance(host_name, str) else None, timestamp, process_pid, process_path)
     document["process"].update(
         {
             "entity_id": process_entity_id or synthetic_entity_id,
-            "pid": _to_intish(event_data.get("NewProcessId") or event_data.get("ProcessId")),
+            "pid": process_pid,
             "name": _basename(process_path),
             "path": process_path,
             "command_line": command_line,
             "current_directory": _normalize_windows_value(event_data.get("CurrentDirectory")),
             "parent_entity_id": parent_entity_id,
-            "parent_pid": _to_intish(event_data.get("CreatorProcessId") or event_data.get("ParentProcessId")),
-            "ppid": _to_intish(event_data.get("CreatorProcessId") or event_data.get("ParentProcessId")),
+            "parent_pid": parent_process_pid,
+            "ppid": parent_process_pid,
             "parent_name": _basename(parent_path),
             "parent_path": parent_path,
             "parent_command_line": _normalize_windows_value(event_data.get("ParentCommandLine")),

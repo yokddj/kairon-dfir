@@ -66,6 +66,12 @@ Activity is attached to a process by its GUID (or PID, host and time):
 
 A process needs its start event (Sysmon 1 or Security 4688) in the evidence to have a node; activity of processes that were already running when logging began (for example services started at boot) is searchable but has nothing to attach to. Before 2026-10-05 registry activity never attached to processes; no reprocessing is needed, the graph reads the existing events.
 
+## Parent links
+
+Sysmon 1 links a process to its parent exactly by ParentProcessGuid. Security 4688 has no GUID: its creator is the `ProcessId` field (the new process is `NewProcessId`), and the parent is the last process logged starting with that PID before the child, as long as its name matches the recorded parent name. Security events indexed before 2026-10-20 have no parent PID (the creator field was not read), so their processes stay unlinked until the evidence is reprocessed.
+
+The graph reads every process start event in its scope (up to 50,000, newest first); if there are more, it says how many were left out.
+
 ## Limitations
 
 - Parent links depend on available Sysmon/Security/process fields.
