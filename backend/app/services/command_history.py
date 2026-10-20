@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 import hashlib
+import html
 import re
 from typing import Any
 
@@ -14,9 +15,13 @@ from app.ingest.normalization.registry_modifications import correlate_registry_c
 from app.services.command_risk import score_command
 from app.services.host_identity import normalize_host_alias
 from app.services.investigation_memory import memory_command_history, wants_memory_source, wants_non_memory_source
+from app.services.windows_accounts import accounts_from_events, canonical_accounts
 
 
 COMMAND_SOURCE_EVENT_IDS = {1, 4688, 4103, 4104, 400, 403, 600, 4698, 4702, 4700, 4701}
+# PowerShell events that record a command or how PowerShell was started.
+POWERSHELL_COMMAND_EVENT_IDS = {4103, 4104, 400, 403, 600, 800}
+POWERSHELL_CHANNELS = ["Microsoft-Windows-PowerShell/Operational", "Windows PowerShell", "PowerShellCore/Operational"]
 COMMAND_FETCH_LIMIT = 5000
 SOURCE_PRIORITY = {
     "sysmon_1": 10,
@@ -86,9 +91,14 @@ def get_command_history(case_id: str, params: dict[str, Any], db: Session | None
     page = max(1, _to_int(params.get("page"), 1) or 1)
     page_size = min(max(_to_int(params.get("page_size"), 100) or 100, 1), 500)
     if wants_memory_source(params):
-        return memory_command_history(db, case_id, {**params, "page": page, "page_size": page_size})
+        payload = memory_command_history(db, case_id, {**params, "page": page, "page_size": page_size})
+        account_names = canonical_accounts([str(item.get("user") or "") for item in payload.get("items") or []], {})
+        for item in payload.get("items") or []:
+            item["user"] = account_names.get(item.get("user"), item.get("user"))
+        return payload
     commands: list[dict[str, Any]] = []
     warnings: list[str] = []
+    events: list[dict[str, Any]] = []
     if not wants_memory_source(params):
         events, truncated = _fetch_candidate_events(case_id, params)
         if truncated:
@@ -104,6 +114,12 @@ def get_command_history(case_id: str, params: dict[str, Any], db: Session | None
     if not wants_non_memory_source(params):
         memory_payload = memory_command_history(db, case_id, {**params, "page": 1, "page_size": 500})
         commands.extend(memory_payload.get("items") or [])
+    # One spelling per account ("MEGACORP\\alice", "alice" and her SID are one
+    # user), before filtering, so the user filter and facet see a single entry.
+    account_names = canonical_accounts([str(item.get("user") or "") for item in commands], accounts_from_events(events) if not wants_memory_source(params) else {})
+    for item in commands:
+        if item.get("user") in account_names:
+            item["user"] = account_names[item["user"]]
     # Filtering has to happen after the merge. Applying it to the disk-derived
     # half only meant memory commands ignored every filter the analyst set:
     # asking for only_suspicious, or risk_min=50, or a specific launcher,
@@ -211,7 +227,7 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> tuple[list[
     should = [
         {"term": {"windows.event_id": 1}},
         {"term": {"windows.event_id": 4688}},
-        {"terms": {"windows.event_id": [4103, 4104, 400, 403, 600]}},
+        {"bool": {"filter": [{"terms": {"windows.event_id": sorted(POWERSHELL_COMMAND_EVENT_IDS)}}, {"terms": {"windows.channel": POWERSHELL_CHANNELS}}]}},
         {"terms": {"windows.event_id": [4698, 4702, 4700, 4701]}},
         {"terms": {"windows.event_id": [12, 13, 14, 4657]}},
         {"exists": {"field": "powershell.command"}},
@@ -235,6 +251,23 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> tuple[list[
     # before _apply_filters ever got to text-match it. A required `must`
     # clause instead shrinks the ES-side result set to actual matches, so
     # the cap is applied to the filtered set, not the unfiltered one.
+    # PowerShell log events that record no command (4105/4106 script block
+    # start/stop alone can outnumber every real command) are left out of the
+    # capped fetch instead of filling it.
+    filters.append(
+        {
+            "bool": {
+                "must_not": [
+                    {
+                        "bool": {
+                            "filter": [{"terms": {"windows.channel": POWERSHELL_CHANNELS}}],
+                            "must_not": [{"terms": {"windows.event_id": sorted(POWERSHELL_COMMAND_EVENT_IDS)}}],
+                        }
+                    }
+                ]
+            }
+        }
+    )
     must = []
     if q:
         must.append({"simple_query_string": {"query": q, "fields": ["process.command_line", "powershell.command", "powershell.command_preview", "task.command", "linux.command", "search_text"], "default_operator": "and"}})
@@ -300,7 +333,11 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
     if source_type in {"sysmon_1", "security_4688"}:
         commands.append(_first(process.get("command_line"), process.get("executable"), process.get("path"), process.get("name")))
     elif source_type == "powershell_operational":
-        commands.append(_extract_powershell_command(event, powershell, process, windows_event_data))
+        if event_id is not None and event_id not in POWERSHELL_COMMAND_EVENT_IDS:
+            # Script block start/stop (4105/4106), WinRM and session events carry
+            # no command: every one of them would read "powershell.exe".
+            return []
+        commands.append(_extract_powershell_command(event, powershell, process, windows_event_data, event_id))
     elif source_type == "scheduled_task":
         command = " ".join(part for part in [task.get("command"), task.get("arguments")] if part)
         commands.append(command or _first(process.get("command_line"), event.get("search_text")))
@@ -533,7 +570,9 @@ def _source_type(event: dict[str, Any], event_id: int | None) -> str:
         return "sysmon_1"
     if event_id == 4688:
         return "security_4688"
-    if event_id in {4103, 4104, 400, 403, 600} or "powershell" in channel or artifact_type == "powershell":
+    # 400, 403, 600 and 800 are reused by other logs (drivers, AppX...): only
+    # PowerShell's own events are PowerShell commands.
+    if "powershell" in channel or "powershell" in provider or artifact_type == "powershell":
         if "consolehost_history" in source_file or "psreadline" in source_file:
             return "psreadline"
         if "transcript" in source_file:
@@ -640,7 +679,32 @@ def _normalize_launcher(value: Any) -> str:
     return text.lower() or "unknown"
 
 
-def _extract_powershell_command(event: dict[str, Any], powershell: dict[str, Any], process: dict[str, Any], event_data: dict[str, Any]) -> str:
+def _extract_powershell_command(event: dict[str, Any], powershell: dict[str, Any], process: dict[str, Any], event_data: dict[str, Any], event_id: int | None = None) -> str:
+    # What ran, before the host that ran it: 4104 holds the script block, 4103
+    # and 800 the commands of a pipeline; 400/403/600 only how PowerShell started.
+    if event_id == 4104:
+        script_block = _clean_command_value(_first(event_data.get("ScriptBlockText"), powershell.get("script_block_text"), powershell.get("script_block")))
+        if script_block:
+            return script_block
+    if event_id in {4103, 800}:
+        invocation = _powershell_pipeline_command(event, event_data)
+        # A bare script name the host application already runs ("-File ...\\x.ps1")
+        # says less than the host application line, which the chain below picks.
+        host_application = _first(
+            powershell.get("host_application"),
+            event_data.get("HostApplication"),
+            _extract_prefixed_payload_value(event, event_data, ["HostApplication", "Host Application"]),
+            _extract_labeled_payload_value(event, event_data, ["HostApplication", "Host Application"]),
+        ).lower()
+        bare_script_of_host = " " not in invocation and invocation.lower() in host_application
+        if invocation and not bare_script_of_host:
+            return invocation
+    if event_id == 800:
+        # Classic "Windows PowerShell" 800 keeps the pipeline's text as its first
+        # unnamed <Data>; EvtxECmd leaves it in Payload up to the first line break.
+        pipeline_text = _first_unnamed_payload_data(event_data)
+        if pipeline_text:
+            return pipeline_text
     candidates = [
         powershell.get("host_application"),
         event_data.get("HostApplication"),
@@ -667,6 +731,11 @@ def _extract_powershell_command(event: dict[str, Any], powershell: dict[str, Any
     ]
     for candidate in candidates:
         text = _clean_command_value(candidate)
+        # A value run together with the event's context block ("... EngineVersion=5.1
+        # RunspaceId=...") keeps only what precedes it; a bare context block is skipped.
+        context = _CONTEXT_FIELD_RE.search(text) if text else None
+        if context:
+            text = _clean_command_value(text[: context.start()])
         if text:
             return text
     return ""
@@ -700,6 +769,57 @@ def _extract_raw_payload(event: dict[str, Any], event_data: dict[str, Any]) -> s
     if payload_values:
         return "\n".join(_clean(value) for value in payload_values if _clean(value))
     return _clean(_obj(event.get("event")).get("message") or event.get("search_text"))
+
+
+_INVOCATION_RE = re.compile(r'CommandInvocation\(([^)]+)\):\s*"([^"]*)"')
+_BINDING_RE = re.compile(r'ParameterBinding\(([^)]+)\):\s*name="([^"]*)";\s*value="([^"]*)"')
+
+
+def _powershell_pipeline_command(event: dict[str, Any], event_data: dict[str, Any]) -> str:
+    """Rebuild "Set-Alias -Name x -Value y" from module/pipeline logging details.
+
+    4103 and 800 list each command of the pipeline as CommandInvocation(Name)
+    followed by one ParameterBinding(Name) per parameter.
+    """
+    for value in [event_data.get("Payload"), event_data.get("Details"), *_payload_text_values(event, event_data)]:
+        text = str(value or "")
+        invocations = [match.group(2) or match.group(1) for match in _INVOCATION_RE.finditer(text)]
+        if not invocations:
+            continue
+        bindings: dict[str, list[str]] = {}
+        for match in _BINDING_RE.finditer(text):
+            name, parameter, argument = match.group(1), match.group(2), match.group(3)
+            part = f"-{parameter} {argument}".strip() if parameter else argument
+            if _needs_quotes(argument):
+                part = f"-{parameter} '{argument}'" if parameter else f"'{argument}'"
+            bindings.setdefault(name, []).append(part)
+        commands = []
+        for name in dict.fromkeys(invocations):
+            commands.append(" ".join([name, *bindings.get(name, [])]))
+        return " | ".join(commands)
+    return ""
+
+
+_UNNAMED_DATA_RE = re.compile(r'"+Data"+\s*:\s*"+(.*?)(?:\\[rn]|"+\s*[,}\]]|$)')
+
+
+_CONTEXT_FIELD_RE = re.compile(r"(?:DetailSequence|DetailTotal|SequenceNumber|EngineVersion|RunspaceId|PipelineId|HostName|HostVersion|HostId)=")
+
+
+def _first_unnamed_payload_data(event_data: dict[str, Any]) -> str:
+    payload = _obj(event_data.get("payload_columns")).get("Payload") or event_data.get("Payload")
+    match = _UNNAMED_DATA_RE.search(str(payload or ""))
+    if not match:
+        return ""
+    # The payload is cut JSON, so its escapes were never decoded.
+    text = html.unescape(match.group(1).replace('\\"', '"').replace("\\\\", "\\"))
+    if _CONTEXT_FIELD_RE.search(text):
+        return ""  # the context block (DetailSequence=..., EngineVersion=...), not a command
+    return _clean_command_value(text)
+
+
+def _needs_quotes(argument: str) -> bool:
+    return bool(argument) and any(character.isspace() for character in argument)
 
 
 def _extract_payload_command_invocation(event: dict[str, Any], event_data: dict[str, Any]) -> str:

@@ -49,3 +49,28 @@ def test_max_nodes_is_enforced() -> None:
     assert compact["truncated"] is True
     assert len(compact["nodes"]) == 1
     assert compact["summary"]["node_cap"] == 1
+
+
+def test_truncated_graph_keeps_the_parents_of_the_kept_processes() -> None:
+    # Riskier processes rank first; their low-risk parents come with them,
+    # instead of the cap filling up with unrelated processes.
+    nodes = [
+        {"id": "root", "name": "services.exe", "risk_score": 0},
+        {"id": "svc", "name": "svchost.exe", "risk_score": 0},
+        {"id": "evil", "name": "powershell.exe", "risk_score": 90},
+        {"id": "noise-a", "name": "a.exe", "risk_score": 10},
+        {"id": "noise-b", "name": "b.exe", "risk_score": 10},
+    ]
+    edges = [
+        {"source": "root", "target": "svc", "type": "spawned"},
+        {"source": "svc", "target": "evil", "type": "spawned"},
+        {"source": "root", "target": "noise-a", "type": "spawned"},
+        {"source": "root", "target": "noise-b", "type": "spawned"},
+    ]
+
+    compact = _compact_process_graph({"nodes": nodes, "edges": edges, "summary": {}}, max_nodes=4)
+
+    kept = {node["id"] for node in compact["nodes"]}
+    assert {"root", "svc", "evil"} <= kept
+    assert len(kept) == 4
+    assert {(edge["source"], edge["target"]) for edge in compact["edges"]} >= {("root", "svc"), ("svc", "evil")}

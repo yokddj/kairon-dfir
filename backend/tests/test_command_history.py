@@ -597,3 +597,106 @@ def test_command_history_filters_preserve_sort_count(monkeypatch) -> None:
     assert result["sort_order"] == "desc"
     assert result["items"][0]["source_event_id"] == "event-new"
     assert "new.ps1" in result["items"][0]["command"]
+
+
+_PS_OPERATIONAL = {"provider": "Microsoft-Windows-PowerShell", "channel": "Microsoft-Windows-PowerShell/Operational"}
+_PS_PROCESS = {"name": "powershell.exe", "command_line": "powershell.exe"}
+
+
+def test_powershell_4104_shows_the_script_block_not_the_host() -> None:
+    items = command_history._commands_from_event(
+        "case-1",
+        _event(
+            4104,
+            event=_PS_OPERATIONAL,
+            process=_PS_PROCESS,
+            powershell={"script_block_text": "cd .\\tools\\", "host_application": "powershell.exe"},
+            windows={"event_id": 4104, "event_data": {"ScriptBlockText": "cd .\\tools\\", "MessageNumber": "1", "MessageTotal": "1"}},
+        ),
+    )
+
+    assert [item["command"] for item in items] == ["cd .\\tools\\"]
+
+
+def test_powershell_4103_rebuilds_the_invoked_command() -> None:
+    payload = (
+        'CommandInvocation(Set-Alias): "Set-Alias", '
+        'ParameterBinding(Set-Alias): name="Name"; value="nwsn", '
+        'ParameterBinding(Set-Alias): name="Value"; value="New-PSWorkflowSession",'
+    )
+    items = command_history._commands_from_event(
+        "case-1",
+        _event(
+            4103,
+            event=_PS_OPERATIONAL,
+            process={"name": "powershell.exe", "command_line": "\\"},
+            powershell={"command_invocation": "\\", "payload": payload},
+            windows={"event_id": 4103, "event_data": {"Payload": payload, "ContextInfo": "Host Application = powershell.exe -ep bypass"}},
+        ),
+    )
+
+    assert [item["command"] for item in items] == ["Set-Alias -Name nwsn -Value New-PSWorkflowSession"]
+
+
+def test_powershell_800_reads_the_pipeline_text_from_a_cut_payload() -> None:
+    # Classic "Windows PowerShell" 800: the pipeline is the first unnamed <Data>,
+    # and EvtxECmd leaves it as cut, still-escaped JSON.
+    payload = '{"EventData"":{""Data"":""cd .\\\\tools\\\\ ; Get-Item &amp; Out-Null\\n'
+    items = command_history._commands_from_event(
+        "case-1",
+        _event(
+            800,
+            event={"provider": "PowerShell", "channel": "Windows PowerShell"},
+            process=_PS_PROCESS,
+            powershell={"host_application": "powershell.exe -ep bypass -NoExit C:\\work\\check.ps1"},
+            windows={"event_id": 800, "event_data": {"ProcessId": "1228", "payload_columns": {"Payload": payload}}},
+        ),
+    )
+
+    assert [item["command"] for item in items] == ["cd .\\tools\\ ; Get-Item & Out-Null"]
+
+
+def test_powershell_800_context_block_falls_back_to_the_host_application() -> None:
+    payload = '{"EventData"":{""Data"":""\\tDetailSequence=1\\n'
+    items = command_history._commands_from_event(
+        "case-1",
+        _event(
+            800,
+            event={"provider": "PowerShell", "channel": "Windows PowerShell"},
+            process={"name": "powershell.exe"},
+            powershell={"host_application": "powershell.exe -ep bypass EngineVersion=5.1 RunspaceId=abc"},
+            windows={"event_id": 800, "event_data": {"payload_columns": {"Payload": payload}}},
+        ),
+    )
+
+    assert [item["command"] for item in items] == ["powershell.exe -ep bypass"]
+
+
+def test_powershell_events_without_a_command_are_not_commands() -> None:
+    for event_id in (4105, 4106, 40961, 53504, 8193):
+        items = command_history._commands_from_event(
+            "case-1",
+            _event(event_id, event=_PS_OPERATIONAL, process=_PS_PROCESS, powershell={"command": "powershell.exe"}, windows={"event_id": event_id}),
+        )
+        assert items == [], event_id
+
+
+def test_event_400_of_another_log_is_not_a_powershell_command() -> None:
+    event = _event(400, event={"provider": "Microsoft-Windows-AppXDeploymentServer", "channel": "Microsoft-Windows-AppXDeploymentServer/Operational"})
+
+    assert command_history._source_type(event, 400) != "powershell_operational"
+
+
+def test_powershell_4103_bare_command_is_not_replaced_by_the_host() -> None:
+    payload = 'CommandInvocation(Get-ChildItem): "Get-ChildItem"'
+    items = command_history._commands_from_event(
+        "case-1",
+        _event(
+            4103,
+            event=_PS_OPERATIONAL,
+            process=_PS_PROCESS,
+            windows={"event_id": 4103, "event_data": {"Payload": payload, "ContextInfo": "Host Application = powershell.exe -ep bypass"}},
+        ),
+    )
+
+    assert [item["command"] for item in items] == ["Get-ChildItem"]

@@ -1096,10 +1096,32 @@ def _compact_process_graph(
             )
             for node in kept_nodes
         }
-        selected_ids = {
-            node_id
-            for node_id, _score in sorted(priority.items(), key=lambda item: item[1], reverse=True)[:max_nodes]
+        # Each process comes with its chain of parents when it fits, so the kept
+        # nodes stay connected instead of max_nodes loose processes whose parents
+        # were ranked lower.
+        parent_of = {
+            str(edge.get("target") or ""): str(edge.get("source") or "")
+            for edge in kept_edges
+            if str(edge.get("type") or "") in process_edge_types
         }
+        selected_order: dict[str, None] = {}
+        for node_id, _score in sorted(priority.items(), key=lambda item: item[1], reverse=True):
+            if len(selected_order) >= max_nodes:
+                break
+            if node_id in selected_order:
+                continue
+            chain = [node_id]
+            current = node_id
+            while current in parent_of:
+                current = parent_of[current]
+                if current in selected_order or current in chain or current not in priority:
+                    break
+                chain.append(current)
+            if len(selected_order) + len(chain) <= max_nodes:
+                selected_order.update((item, None) for item in reversed(chain))
+            else:
+                selected_order[node_id] = None
+        selected_ids = set(selected_order)
         for node in kept_nodes:
             node_id = str(node.get("id") or "")
             if node_id not in selected_ids and str(node.get("node_type") or "") == "activity":

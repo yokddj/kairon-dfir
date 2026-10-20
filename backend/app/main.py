@@ -241,6 +241,17 @@ def _reconcile_memory_startup_state(logger: logging.Logger) -> None:
         reconcile_memory_batches(db)
     finally:
         db.close()
+    from app.services.memory.artifact_identity_repair import repair_memory_artifact_identity
+
+    db = SessionLocal()
+    try:
+        repaired = repair_memory_artifact_identity(db)
+        if repaired:
+            logger.info("memory artifact identity repair updated %d document(s)", repaired)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory artifact identity repair skipped: %s", exc)
+    finally:
+        db.close()
     # Recover per-evidence symbol readiness for legacy evidences.
     # The backfill is idempotent: it never overwrites an existing
     # valid requirement, never executes Volatility and never
