@@ -30,6 +30,11 @@ COMMAND_RISK_CHECKS: list[tuple[tuple[str, ...], int, str]] = [
     (("psexec", "psexesvc"), 30, "PsExec activity"),
     (("\\temp\\", "\\downloads\\", "\\appdata\\"), 15, "execution path in user-writable location"),
     (("whoami",), 10, "reconnaissance command"),
+    # In-memory code execution (shellcode runners, injection): allocating or
+    # writing executable memory, then running code from a raw pointer.
+    (("virtualalloc", "virtualprotect", "ntallocatevirtualmemory", "writeprocessmemory"), 30, "allocates or writes process memory"),
+    (("getdelegateforfunctionpointer", "createthread", "createremotethread", "queueuserapc"), 30, "runs code from a memory pointer"),
+    (("[dllimport(",), 15, "imports native Windows APIs"),
 ]
 
 _SUSPICIOUS_PARENTS = ("winword", "excel", "chrome", "firefox", "msedge", "explorer")
