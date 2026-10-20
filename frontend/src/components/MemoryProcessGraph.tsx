@@ -14,6 +14,8 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
+import { FullscreenToggle } from "./FullscreenToggle";
+import { useFullscreenPanel } from "../hooks/useFullscreenPanel";
 import {
   type MemoryProcessEntity,
   type MemoryProcessEntityDetail,
@@ -141,6 +143,7 @@ export function MemoryProcessGraph({
     externalSelectedEntityId !== undefined ? externalSelectedEntityId : internalSelectedEntityId;
   const setSelectedEntityId = externalOnSelectEntityId ?? setInternalSelectedEntityId;
   const [zoom, setZoom] = useState(1);
+  const { fullscreen, toggle: toggleFullscreen } = useFullscreenPanel();
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragStart, setDragStart] = useState<{ x: number; y: number; pan: { x: number; y: number } } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -362,7 +365,11 @@ export function MemoryProcessGraph({
 
   return (
     <section
-      className="rounded-[28px] border border-line bg-panel/60 p-5 space-y-4"
+      className={
+        fullscreen
+          ? "fixed inset-0 z-50 space-y-4 overflow-auto bg-abyss p-5"
+          : "rounded-[28px] border border-line bg-panel/60 p-5 space-y-4"
+      }
       data-testid="memory-process-graph"
       aria-label="Interactive memory process graph"
     >
@@ -512,6 +519,7 @@ export function MemoryProcessGraph({
           <RotateCcw className="mr-1 inline h-3.5 w-3.5" />
           Reset
         </button>
+        <FullscreenToggle fullscreen={fullscreen} onToggle={toggleFullscreen} testId="memory-graph-fullscreen" />
       </div>
 
       <div className="grid gap-2 md:grid-cols-3 text-xs">
@@ -557,7 +565,7 @@ export function MemoryProcessGraph({
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
-          className="relative h-[28rem] overflow-hidden rounded-2xl border border-line bg-abyss/60"
+          className={`relative ${fullscreen ? "h-[80vh]" : "h-[28rem]"} overflow-hidden rounded-2xl border border-line bg-abyss/60`}
           data-testid="memory-process-canvas"
           aria-label="Memory process graph canvas"
         >

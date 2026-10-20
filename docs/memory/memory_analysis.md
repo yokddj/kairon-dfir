@@ -93,6 +93,7 @@ Supported profiles:
 - `metadata_only`: `windows.info`
 - `processes_basic`: `windows.info`, `windows.pslist`, `windows.pstree`, `windows.cmdline`
 - `processes_extended`: `windows.psscan`, `windows.envars`, `windows.getsids`, `windows.privileges`
+  (Environment variables, SIDs and privileges indexed before 2026-10-20 lacked the evidence and run ids, so no view found them; the backend repairs them on start, without re-running anything.)
 - `network_basic`: `windows.netscan`, `windows.netstat`
 - `modules_basic`: `windows.dlllist`, `windows.ldrmodules`
 - `handles_basic`: `windows.handles`

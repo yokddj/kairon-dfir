@@ -7,12 +7,14 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
+from app.core.opensearch import get_memory_index, get_opensearch_client
 from app.models.case_host import CaseHost
 from app.models.evidence import Evidence, EvidenceType
 from app.services.command_risk import score_command
 from app.services.memory.command_history import build_command_line_history
 from app.services.memory.search import search_memory_artifacts
 from app.services.memory.timeline import get_memory_timeline
+from app.services.windows_accounts import service_account
 
 
 SOURCE_CATEGORY_MEMORY = "Memory"
@@ -232,7 +234,8 @@ def _memory_command_history(db: Session, case_id: str, params: dict[str, Any]) -
             page_size=500,
         )
         host_name = _evidence_host_name(db, evidence)
-        rows.extend(_memory_command_row(case_id, evidence, row, payload.get("selected_run"), host_name) for row in payload.get("items") or [])
+        owners = _memory_process_owners(case_id, str(evidence.id))
+        rows.extend(_memory_command_row(case_id, evidence, row, payload.get("selected_run"), host_name, owners) for row in payload.get("items") or [])
 
         # windows.consoles / linux.bash recover literal shell/console input
         # directly from memory (cmd.exe and PowerShell console buffers on
@@ -262,7 +265,7 @@ def _memory_command_history(db: Session, case_id: str, params: dict[str, Any]) -
             page_size=500,
             mixed_run=True,
         )
-        rows.extend(_memory_shell_history_row(case_id, evidence, result, host_name) for result in shell_history_payload.get("results") or [])
+        rows.extend(_memory_shell_history_row(case_id, evidence, result, host_name, owners) for result in shell_history_payload.get("results") or [])
     rows.sort(key=lambda item: (item.get("timestamp") is None, item.get("timestamp") or "", item.get("id") or ""), reverse=str(params.get("sort") or params.get("sort_order") or "").endswith("desc"))
     total = len(rows)
     start = (page - 1) * page_size
@@ -397,7 +400,40 @@ def _untruncated_process_name(process_name: str | None, command_line: str | None
     return process_name
 
 
-def _memory_command_row(case_id: str, evidence: Evidence, row: dict[str, Any], selected_run: dict[str, Any] | None, host_name: str | None = None) -> dict[str, Any]:
+def _memory_process_owners(case_id: str, evidence_id: str) -> dict[int, str]:
+    """PID -> account that owns the process token, from windows.getsids.
+
+    getsids lists a token's user SID first and its groups after it, so the
+    owner is each PID's lowest-numbered row. Any run of the image will do:
+    the PIDs are the image's.
+    """
+    body = {
+        "size": 0,
+        "query": {"bool": {"filter": [{"term": {"evidence_id": evidence_id}}, {"bool": {"should": [{"term": {"document_type": "memory_sid"}}, {"term": {"document_type.keyword": "memory_sid"}}], "minimum_should_match": 1}}]}},
+        "aggs": {
+            "pids": {
+                "terms": {"field": "pid", "size": 10000},
+                "aggs": {"owner": {"top_hits": {"size": 1, "sort": [{"source_record_index": {"order": "asc"}}], "_source": ["sid", "resolved_name"]}}},
+            }
+        },
+    }
+    try:
+        response = get_opensearch_client().search(index=get_memory_index(case_id), body=body, params={"ignore_unavailable": "true"})
+    except Exception:  # noqa: BLE001 - owners are an enrichment; commands still list without them
+        return {}
+    owners: dict[int, str] = {}
+    for bucket in ((response.get("aggregations") or {}).get("pids") or {}).get("buckets") or []:
+        hits = ((bucket.get("owner") or {}).get("hits") or {}).get("hits") or []
+        source = (hits[0].get("_source") or {}) if hits else {}
+        sid = str(source.get("sid") or "")
+        if not sid.upper().startswith("S-"):
+            continue  # "Token unreadable" and similar
+        name = str(source.get("resolved_name") or "").strip()
+        owners[int(bucket["key"])] = service_account(sid) or name or sid
+    return owners
+
+
+def _memory_command_row(case_id: str, evidence: Evidence, row: dict[str, Any], selected_run: dict[str, Any] | None, host_name: str | None = None, owners: dict[int, str] | None = None) -> dict[str, Any]:
     run_id = (selected_run or {}).get("id")
     plugin = ",".join(row.get("source_plugins") or []) or "windows.cmdline"
     command_id = f"memory-command:{evidence.id}:{run_id or 'active'}:{row.get('process_entity_id')}:{row.get('pid')}"
@@ -438,7 +474,7 @@ def _memory_command_row(case_id: str, evidence: Evidence, row: dict[str, Any], s
         "artifact_type": "memory_command_line",
         "source_event_id": command_id,
         "source_file": evidence.original_filename,
-        "user": None,
+        "user": (owners or {}).get(_int_or_none(row.get("pid")) or -1),
         "process": {"name": process_name, "pid": row.get("pid"), "guid": row.get("process_entity_id"), "entity_id": row.get("process_entity_id"), "command_line": row.get("command_line")},
         "parent_process": {"pid": row.get("ppid"), "guid": row.get("parent_entity_id")},
         "process_entity_id": row.get("process_entity_id"),
@@ -451,7 +487,7 @@ def _memory_command_row(case_id: str, evidence: Evidence, row: dict[str, Any], s
     }
 
 
-def _memory_shell_history_row(case_id: str, evidence: Evidence, result: dict[str, Any], host_name: str | None = None) -> dict[str, Any]:
+def _memory_shell_history_row(case_id: str, evidence: Evidence, result: dict[str, Any], host_name: str | None = None, owners: dict[int, str] | None = None) -> dict[str, Any]:
     """windows.consoles / linux.bash recovered console/shell input -- see
     the call site above. No timestamp is ever available from either
     plugin (verified against volatility3's own consoles/bash plugin
@@ -493,7 +529,7 @@ def _memory_shell_history_row(case_id: str, evidence: Evidence, result: dict[str
         "source_event_id": command_id,
         "source_file": evidence.original_filename,
         # Known for commands from a PowerShell history file: the profile that holds it.
-        "user": raw.get("user"),
+        "user": raw.get("user") or (owners or {}).get(_int_or_none(raw.get("pid") or result.get("pid")) or -1),
         "process": {"name": process_name, "pid": raw.get("pid") or result.get("pid"), "guid": None, "entity_id": raw.get("process_entity_id"), "command_line": command},
         "parent_process": {"pid": None, "guid": None},
         "process_entity_id": raw.get("process_entity_id"),

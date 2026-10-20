@@ -24,6 +24,8 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
+import { FullscreenToggle } from "./FullscreenToggle";
+import { useFullscreenPanel } from "../hooks/useFullscreenPanel";
 import { useNavigate } from "react-router-dom";
 import { useTimezonePreference } from "../context/TimezoneContext";
 
@@ -687,6 +689,7 @@ export default function ProcessTreePanel({
   const [includeSiblings, setIncludeSiblings] = useState(false);
   const [fullGraphConfirmed, setFullGraphConfirmed] = useState(false);
   const [graphZoom, setGraphZoom] = useState(1);
+  const { fullscreen: graphFullscreen, toggle: toggleGraphFullscreen } = useFullscreenPanel();
   const [includeActivity, setIncludeActivity] = useState(false);
   const [maxNodes, setMaxNodes] = useState(50);
   const [maxActivityPerProcess, setMaxActivityPerProcess] = useState(10);
@@ -2511,7 +2514,10 @@ export default function ProcessTreePanel({
       ) : (
         <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1.3fr)_minmax(340px,0.9fr)]">
           <div className="min-w-0 space-y-4">
-            <div className="rounded-[28px] border border-line bg-panel/70 p-5 shadow-panel">
+            <div
+              className={graphFullscreen ? "fixed inset-0 z-50 overflow-auto bg-abyss p-5" : "rounded-[28px] border border-line bg-panel/70 p-5 shadow-panel"}
+              data-testid="execution-story-graph-card"
+            >
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Graph canvas</p>
@@ -2564,6 +2570,7 @@ export default function ProcessTreePanel({
                       Reset
                     </button>
                     <span className="text-xs text-muted" data-testid="execution-story-graph-zoom-level">{Math.round(graphZoom * 100)}%</span>
+                    <FullscreenToggle fullscreen={graphFullscreen} onToggle={toggleGraphFullscreen} testId="execution-story-graph-fullscreen" />
                   </div>
                 </div>
               </div>
@@ -2582,7 +2589,7 @@ export default function ProcessTreePanel({
                   </div>
                 </div>
               ) : (
-                <div ref={graphViewportRef} className="mt-4 max-h-[38rem] overflow-auto rounded-2xl border border-line bg-abyss/50 p-3">
+                <div ref={graphViewportRef} className={`mt-4 ${graphFullscreen ? "max-h-[85vh]" : "max-h-[38rem]"} overflow-auto rounded-2xl border border-line bg-abyss/50 p-3`}>
                   <div style={{ width: graphLayout.width * graphZoom, height: graphLayout.height * graphZoom }}>
                   <div className="relative origin-top-left" style={{ width: graphLayout.width, height: graphLayout.height, transform: `scale(${graphZoom})` }}>
                     <svg className="absolute inset-0 h-full w-full" width={graphLayout.width} height={graphLayout.height} aria-label="Graph canvas">

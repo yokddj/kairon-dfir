@@ -140,6 +140,18 @@ The following activities are created:
 - `powershell_credential_access`
 - `downloaded_and_executed_via_powershell`
 
+## In Command History
+
+Each PowerShell log event shows what ran, not the program that ran it:
+
+- `4104`: the script block text (a long script is logged in parts; each part is a row).
+- `4103` (module logging) and `800` (pipeline details): the commands of the pipeline with their parameters, rebuilt from `CommandInvocation`/`ParameterBinding` (`Set-Location -Path C:\work`). The classic `Windows PowerShell` log's `800` keeps the pipeline as its first unnamed field; EvtxECmd cuts it at the first line break, so only that line shows. When the only command is the script the host runs, the host line (`powershell.exe -File ...\x.ps1`) is shown instead.
+- `400`, `403`, `600`: how PowerShell was started (the host application).
+
+Events of these logs that record no command (4105/4106 script block start/stop, WinRM and session events) are not commands, and events 400/403/600/800 of other logs (drivers, AppX) are not PowerShell.
+
+Users are shown with one spelling per account: a SID takes the name an event in the case gives it, built-in accounts read `NT AUTHORITY\SYSTEM`, `LOCAL SERVICE`, `NETWORK SERVICE`, and a name without domain (a PSReadLine profile folder) takes the domain of the one account the case has by that name.
+
 ## Common false positives
 
 - legitimate administration with PowerShell
