@@ -456,3 +456,47 @@ def test_evtxecmd_csv_sysmon_rows_get_rich_fields(tmp_path: Path) -> None:
     assert dns_doc["event"]["type"] == "sysmon_dns_query"
     assert dns_doc["dns"]["question"]["name"] == "example.test"
     assert "example.test" in dns_doc["search_text"]
+
+
+_SECURITY_4688_EVENT_DATA = {
+    "NewProcessId": "0x22E0",
+    "NewProcessName": "C:\\Windows\\System32\\wevtutil.exe",
+    "ProcessId": "0x26E0",
+    "ParentProcessName": "C:\\Windows\\System32\\cmd.exe",
+    "SubjectUserName": "analyst",
+    "SubjectDomainName": "LAB",
+}
+
+
+def test_evtxecmd_4688_reads_the_creator_from_process_id(tmp_path: Path) -> None:
+    # Windows names the new process NewProcessId and its creator ProcessId;
+    # there is no ParentProcessId or CreatorProcessId in a 4688 event.
+    import csv
+    import json
+
+    payload = {"EventData": {"Data": [{"@Name": name, "#text": value} for name, value in _SECURITY_4688_EVENT_DATA.items()]}}
+    fixture = tmp_path / "EvtxECmd_Output.csv"
+    with fixture.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["TimeCreated", "EventId", "Provider", "Channel", "Computer", "EventRecordId", "Payload"])
+        writer.writerow(["2026-05-28T10:00:00Z", "4688", "Microsoft-Windows-Security-Auditing", "Security", "HOSTA", "1", json.dumps(payload)])
+
+    doc = parse_evtxecmd_file(
+        "case-1",
+        "evidence-1",
+        "artifact-1",
+        fixture,
+        {"artifact_type": "windows_event", "parser": EVTXECMD_BACKEND_CSV, "source_path": "Windows/System32/winevt/Logs/Security.evtx", "ingest_run_id": "run-1", "contract_version": "v1"},
+    )[0]
+
+    assert doc["process"]["pid"] == 0x22E0
+    assert doc["process"]["parent_pid"] == 0x26E0
+    assert doc["process"]["ppid"] == 0x26E0
+    assert doc["process"]["parent_name"] == "cmd.exe"
+
+
+def test_evtx_row_4688_reads_the_creator_from_process_id() -> None:
+    doc = _evtx_doc({"EventID": "4688", "Channel": "Security", "Provider": "Microsoft-Windows-Security-Auditing", "Computer": "HOSTA", **_SECURITY_4688_EVENT_DATA})
+
+    assert doc["process"]["pid"] == 0x22E0
+    assert doc["process"]["parent_pid"] == 0x26E0

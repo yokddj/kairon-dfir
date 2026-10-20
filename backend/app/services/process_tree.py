@@ -63,6 +63,13 @@ def _build_scope_search_request(context: _ProcessTreeContext, *, page_size: int)
     return search_request
 
 
+# Process start events read for one graph. They are paged, so an evidence with
+# more than a page is read whole up to this limit; the report says when the
+# limit cut events off.
+_PROCESS_EVENT_LIMIT = 50_000
+_SEARCH_PAGE_SIZE = 5_000
+
+
 def _search_scope_events(
     context: _ProcessTreeContext,
     *,
@@ -90,9 +97,27 @@ def _search_scope_events(
     if extra_filters:
         filters = (((body.get("query") or {}).get("bool") or {}).get("filter") or [])
         filters.extend(extra_filters)
-    response = search_documents(get_events_index(context.case.id), body)
-    hits = response.get("hits", {}).get("hits", [])
-    total = int((((response.get("hits") or {}).get("total") or {}).get("value")) or 0)
+    index = get_events_index(context.case.id)
+    hits: list[dict] = []
+    total = 0
+    if size <= _SEARCH_PAGE_SIZE:
+        response = search_documents(index, body)
+        hits = response.get("hits", {}).get("hits", [])
+        total = int((((response.get("hits") or {}).get("total") or {}).get("value")) or 0)
+    else:
+        # Paged with search_after (from/size stops at the index's result window);
+        # event_id is the document id, so pages neither skip nor repeat events.
+        body.pop("from", None)
+        body["sort"] = [*(body.get("sort") or []), {"event_id": {"order": "asc", "missing": "_last"}}]
+        while len(hits) < size:
+            body["size"] = min(_SEARCH_PAGE_SIZE, size - len(hits))
+            response = search_documents(index, body)
+            page = response.get("hits", {}).get("hits", [])
+            total = int((((response.get("hits") or {}).get("total") or {}).get("value")) or 0)
+            hits.extend(page)
+            if len(page) < body["size"] or not page[-1].get("sort"):
+                break
+            body["search_after"] = page[-1]["sort"]
     events = [{"opensearch_id": hit.get("_id"), "search_doc_id": hit.get("_id"), "id": hit.get("_id"), **(hit.get("_source") or {})} for hit in hits]
     return events, total, body.get("query")
 
@@ -321,6 +346,49 @@ def _node_matches_event_path(node: dict, event: dict) -> bool:
     node_name = str(node.get("name") or "").lower()
     event_process_name = str(_nested_get(event, "process.name") or "").lower()
     return bool(node_name and event_process_name and node_name == event_process_name)
+
+
+class _NodeMatchIndex:
+    """Nodes by the keys _node_matches_event_path compares, in insertion order."""
+
+    def __init__(self) -> None:
+        self._order: dict[int, int] = {}
+        self._by_entity: dict[str, list[dict]] = defaultdict(list)
+        self._by_pid: dict[int, list[dict]] = defaultdict(list)
+        self._by_path: dict[str, list[dict]] = defaultdict(list)
+        self._by_name: dict[str, list[dict]] = defaultdict(list)
+
+    def add(self, node: dict) -> None:
+        if id(node) in self._order:
+            return
+        self._order[id(node)] = len(self._order)
+        entity_id = str(node.get("id") or node.get("entity_id") or "").strip()
+        if entity_id:
+            self._by_entity[entity_id].append(node)
+        pid = _safe_intish(node.get("pid"))
+        if pid is not None:
+            self._by_pid[pid].append(node)
+        path = normalize_windows_path_for_classification(str(node.get("path") or "").strip())
+        if path:
+            self._by_path[path.lower()].append(node)
+        name = str(node.get("name") or "").lower()
+        if name:
+            self._by_name[name].append(node)
+
+    def candidates(self, event: dict) -> list[dict]:
+        found: dict[int, dict] = {}
+        entity_id = str(_nested_get(event, "process.entity_id") or _nested_get(event, "process.guid") or "").strip()
+        if entity_id:
+            found.update((id(node), node) for node in self._by_entity.get(entity_id, []))
+        pid = _safe_intish(_nested_get(event, "process.pid"))
+        if pid is not None:
+            found.update((id(node), node) for node in self._by_pid.get(pid, []))
+        for path in _event_path_candidates(event):
+            found.update((id(node), node) for node in self._by_path.get(path, []))
+        name = str(_nested_get(event, "process.name") or "").lower()
+        if name:
+            found.update((id(node), node) for node in self._by_name.get(name, []))
+        return sorted(found.values(), key=lambda node: self._order[id(node)])
 
 
 # Sysmon 12/13/14 are indexed with the generic registry names (the same ones Security
@@ -619,12 +687,19 @@ def _build_process_graph(events: list[dict], case_id: str, evidence_id: str | No
             continue
 
     activity_counts_by_node: Counter[str] = Counter()
+    # Each event is compared only with the nodes an index says can match it
+    # (_node_matches_event_path still decides), not with every node: comparing
+    # every pair took minutes on an evidence with a few thousand processes.
+    node_index = _NodeMatchIndex()
+    for node in nodes_by_id.values():
+        node_index.add(node)
+    edge_ids = {str(edge.get("id")) for edge in edges if edge.get("id")}
     for event in events:
         if _is_process_start_event(event):
             continue
         artifact_type = str(_nested_get(event, "artifact.type") or "")
         event_type = str(_nested_get(event, "event.type") or "")
-        for node in list(nodes_by_id.values()):
+        for node in node_index.candidates(event):
             if not _node_matches_event_path(node, event):
                 continue
             activity_payload = _activity_node_payload(event)
@@ -632,8 +707,10 @@ def _build_process_graph(events: list[dict], case_id: str, evidence_id: str | No
                 activity_id = str(activity_payload["id"])
                 if activity_id not in nodes_by_id:
                     nodes_by_id[activity_id] = activity_payload
+                    node_index.add(activity_payload)
                 edge_id = f"activity:{node.get('id')}->{activity_id}"
-                if not any(edge.get("id") == edge_id for edge in edges):
+                if edge_id not in edge_ids:
+                    edge_ids.add(edge_id)
                     activity_type = _activity_edge_type(event)
                     edges.append(
                         {
@@ -682,7 +759,8 @@ def _build_process_graph(events: list[dict], case_id: str, evidence_id: str | No
             node["badges"] = list(dict.fromkeys(badges))
             node["risk_score"] = min(score, 100)
 
-    root_nodes_count = sum(1 for node in nodes_by_id.values() if all(edge["target"] != node["id"] for edge in edges))
+    edge_targets = {edge["target"] for edge in edges}
+    root_nodes_count = sum(1 for node in nodes_by_id.values() if node["id"] not in edge_targets)
     high_risk_nodes_count = sum(1 for node in nodes_by_id.values() if int(node.get("risk_score") or 0) >= 70)
     suspicious_chains_count = sum(1 for edge in edges if "suspicious_chain" in (nodes_by_id.get(edge["target"], {}).get("badges") or []))
     orphan_nodes_count = sum(1 for node in nodes_by_id.values() if "process_graph_orphan" in (node.get("data_quality") or []))
@@ -1434,7 +1512,8 @@ def build_process_tree_bundle(
     if focus_filter:
         process_filters.append(focus_filter)
     focused_query = bool(focus_filter)
-    process_events, _, _ = _search_scope_events(context, size=500 if focused_query else 2000, extra_filters=process_filters)
+    process_events, process_events_total, _ = _search_scope_events(context, size=500 if focused_query else _PROCESS_EVENT_LIMIT, extra_filters=process_filters)
+    process_events_read = len(process_events)
     # Captured here, before parent and context events are appended below: those
     # are fetched without the focus filter, so including them would make every
     # search match everything.
@@ -1467,7 +1546,7 @@ def build_process_tree_bundle(
             }
             parent_guid_events, _, _ = _search_scope_events(context, size=min(max(len(parent_entity_ids) * 4, 50), 500), extra_filters=[*base_process_filters, parent_guid_filter])
             process_events = [*process_events, *parent_guid_events]
-        parent_context_events, _, _ = _search_scope_events(context, size=1500, extra_filters=base_process_filters)
+        parent_context_events, _, _ = _search_scope_events(context, size=_PROCESS_EVENT_LIMIT, extra_filters=base_process_filters)
         process_events = [*process_events, *parent_context_events]
     enrichment_filters = [
         {
@@ -1525,6 +1604,14 @@ def build_process_tree_bundle(
         only_suspicious=only_suspicious,
         only_marked=only_marked,
     )
+    if not focused_query and process_events_total > process_events_read:
+        summary = compact_graph.setdefault("summary", {})
+        summary["warnings"] = sorted(
+            {
+                *(summary.get("warnings") or []),
+                f"Read the latest {process_events_read} of {process_events_total} process start events; older processes and their links are not in the graph.",
+            }
+        )
     report = _build_process_tree_report(compact_graph, deduped_events, selected_scope=scope)
     sample_chains = _build_process_tree_sample_chains(compact_graph)
     compact_graph.setdefault("summary", {})
