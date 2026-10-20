@@ -5,6 +5,7 @@ import { api } from "./api/client";
 import Layout from "./components/Layout";
 import NoActiveCaseState from "./components/NoActiveCaseState";
 import { ProtectedRoute } from "./components/ProtectedRoute";
+import { MemoryCapabilityGate } from "./components/MemoryCapabilityGate";
 import { MemoryWorkspace } from "./components/MemoryWorkspace";
 import { ActiveCaseProvider } from "./context/ActiveCaseContext";
 import { useActiveCase } from "./context/ActiveCaseContext";
@@ -173,8 +174,8 @@ export default function App() {
                         <Route path="/cases/:caseId/reports" element={<CaseReportsPage />} />
                         <Route path="/cases/:caseId/w" element={<WorkbenchOverviewPage workbenchId="windows" />} />
                         <Route path="/cases/:caseId/l" element={<WorkbenchOverviewPage workbenchId="linux" />} />
-                        <Route path="/cases/:caseId/m" element={<WorkbenchOverviewPage workbenchId="memory" />} />
-                        <Route path="/cases/:caseId/m/runs" element={<MemoryRunsPage />} />
+                        <Route path="/cases/:caseId/m" element={<MemoryCapabilityGate><WorkbenchOverviewPage workbenchId="memory" /></MemoryCapabilityGate>} />
+                        <Route path="/cases/:caseId/m/runs" element={<MemoryCapabilityGate><MemoryRunsPage /></MemoryCapabilityGate>} />
                         {/* A single parameterized route -- not one literal <Route> per
                             tab -- so :memoryTab actually lands in useParams(). The 11
                             literal routes this replaced (path="/m/:evidenceId/processes",
@@ -185,18 +186,18 @@ export default function App() {
                             a legacy fallback effect kept re-forcing ?tab=overview after
                             every tab click -- every tab silently rendered Overview
                             regardless of which path segment was in the URL. */}
-                        <Route path="/cases/:caseId/m/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
-                        <Route path="/cases/:caseId/entities/memory-process/:entityId" element={<MemoryProcessEntityPage />} />
+                        <Route path="/cases/:caseId/m/:evidenceId/:memoryTab" element={<MemoryCapabilityGate><MemoryEvidencePage /></MemoryCapabilityGate>} />
+                        <Route path="/cases/:caseId/entities/memory-process/:entityId" element={<MemoryCapabilityGate><MemoryProcessEntityPage /></MemoryCapabilityGate>} />
                         <Route path="/cases/:caseId/linux-authentication" element={<LegacyCaseParamRedirect suffix="/l/access/authentication" />} />
                         <Route path="/cases/:caseId/command-history" element={<CommandHistoryPage />} />
                         <Route path="/cases/:caseId/process-graph" element={<LegacyCaseParamRedirect suffix="/w/execution/stories" />} />
                         <Route path="/cases/:caseId/process-tree" element={<LegacyCaseParamRedirect suffix="/w/execution/stories" />} />
                         <Route path="/cases/:caseId/artifact-search" element={<LegacyCaseParamRedirect suffix="/artifacts" />} />
-                        <Route path="/cases/:caseId/memory" element={<LegacyMemoryRootRedirect />} />
-                        <Route path="/cases/:caseId/memory/landing" element={<LegacyMemoryRootRedirect />} />
+                        <Route path="/cases/:caseId/memory" element={<MemoryCapabilityGate><LegacyMemoryRootRedirect /></MemoryCapabilityGate>} />
+                        <Route path="/cases/:caseId/memory/landing" element={<MemoryCapabilityGate><LegacyMemoryRootRedirect /></MemoryCapabilityGate>} />
                         <Route path="/cases/:caseId/memory/upload" element={<AddEvidenceRedirect expectedKind="memory_dump" />} />
-                        <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<LegacyMemoryEvidenceRedirect />} />
-                        <Route path="/cases/:caseId/memory/:evidenceId" element={<LegacyMemoryEvidenceRedirect />} />
+                        <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<MemoryCapabilityGate><LegacyMemoryEvidenceRedirect /></MemoryCapabilityGate>} />
+                        <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryCapabilityGate><LegacyMemoryEvidenceRedirect /></MemoryCapabilityGate>} />
                         <Route path="/cases/:caseId/dashboard" element={<LegacyCaseParamRedirect suffix="/overview" />} />
                         <Route path="/cases/:caseId" element={<LegacyCaseParamRedirect suffix="/evidence" />} />
                         <Route path="/evidences/:evidenceId" element={<EvidenceDetail />} />

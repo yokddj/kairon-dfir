@@ -48,7 +48,7 @@ describe("Memory tab <-> route contract", () => {
   it("registers a single parameterized evidence-scoped Memory route that captures :memoryTab", () => {
     const source = appTsxSource();
     expect(
-      source.includes('<Route path="/cases/:caseId/m/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />'),
+      source.includes('<Route path="/cases/:caseId/m/:evidenceId/:memoryTab" element={<MemoryCapabilityGate><MemoryEvidencePage /></MemoryCapabilityGate>} />'),
       "App.tsx must register /cases/:caseId/m/:evidenceId/:memoryTab as ONE parameterized route -- not a literal <Route> per tab segment, which never captures :memoryTab into useParams() at all",
     ).toBe(true);
   });

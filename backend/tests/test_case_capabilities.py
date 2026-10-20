@@ -163,6 +163,21 @@ def test_case_capabilities_separates_memory_domain_from_os_platform():
     assert any(action["route"] == f"/cases/{CASE_ID}/m/{MEMORY_EVIDENCE_ID}/processes" for action in memory["overview"]["quick_actions"])
 
 
+def test_memory_workbench_is_hidden_when_memory_is_disabled(monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "memory_enabled", False)
+    db = _db()
+    _case(db)
+    _evidence(db, MEMORY_EVIDENCE_ID, "mem.raw", EvidenceType.memory_dump, "memory", metadata={"probable_os": "windows"})
+    db.commit()
+
+    body = _client(db).get(f"/api/cases/{CASE_ID}/capabilities").json()
+
+    assert not any(item["id"] == "memory" for item in body["workbenches"])
+    assert all(not item["visible"] for item in body["capabilities"] if item["evidence_domain"] == "memory")
+
+
 def test_windows_workbench_appears_for_memory_only_case_via_volatility_probe():
     """Regression test: a memory-only case whose Evidence.metadata_json
     carries none of the platform hint keys (platform/os/probable_os/

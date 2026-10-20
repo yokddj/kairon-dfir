@@ -50,8 +50,9 @@ Postfix/Dovecot/Exim mail, OpenVPN and strongSwan, firewalls and fail2ban,
 Docker/Kubernetes logs and audit, Sysmon for Linux, shell history, cron,
 systemd units, SSH, sudoers, packages, persistence hooks and OS identity.
 Linux Sigma rules (including the web-server rules) run against these logs.
-Linux memory images are accepted and analyzed for process listing, network
-connections and shell history via Volatility 3, but Kairon does not provide full advanced Linux memory analysis yet.
+Linux memory images are analyzed with Volatility 3 (processes, network, open
+files, kernel modules, suspicious memory, bash history, page-cache files and a
+Linux Find Evil) once a symbol file for the exact kernel is provided.
 See [docs/linux/linux-support.md](docs/linux/linux-support.md) for exact
 coverage and known gaps.
 
