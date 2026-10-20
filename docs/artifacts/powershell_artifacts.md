@@ -144,9 +144,11 @@ The following activities are created:
 
 Each PowerShell log event shows what ran, not the program that ran it:
 
-- `4104`: the script block text (a long script is logged in parts; each part is a row).
+- `4104`: the script block text. A long script is logged in parts (same ScriptBlockId); they are joined into one row, which says how many parts there are and how many were found, and is scored on the whole script.
 - `4103` (module logging) and `800` (pipeline details): the commands of the pipeline with their parameters, rebuilt from `CommandInvocation`/`ParameterBinding` (`Set-Location -Path C:\work`). The classic `Windows PowerShell` log's `800` keeps the pipeline as its first unnamed field; EvtxECmd cuts it at the first line break, so only that line shows. When the only command is the script the host runs, the host line (`powershell.exe -File ...\x.ps1`) is shown instead.
 - `400`, `403`, `600`: how PowerShell was started (the host application).
+
+A pipeline or script shown on its own is scored together with the line that started its PowerShell session, so `-ep bypass` or `-w hidden` on the launch still counts. Scripts that allocate executable memory and run code from a pointer (`VirtualAlloc` + `GetDelegateForFunctionPointer`/`CreateThread`, typical of shellcode runners) are flagged.
 
 Events of these logs that record no command (4105/4106 script block start/stop, WinRM and session events) are not commands, and events 400/403/600/800 of other logs (drivers, AppX) are not PowerShell.
 

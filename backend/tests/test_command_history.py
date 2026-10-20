@@ -700,3 +700,72 @@ def test_powershell_4103_bare_command_is_not_replaced_by_the_host() -> None:
     )
 
     assert [item["command"] for item in items] == ["Get-ChildItem"]
+
+
+def _script_part(number: int, total: int, text: str, timestamp: str) -> dict:
+    return _event(
+        4104,
+        id=f"part-{number}",
+        **{"@timestamp": timestamp},
+        event=_PS_OPERATIONAL,
+        process=_PS_PROCESS,
+        windows={"event_id": 4104, "event_data": {"ScriptBlockText": text, "ScriptBlockId": "block-1", "MessageNumber": str(number), "MessageTotal": str(total)}},
+    )
+
+
+def test_a_script_logged_in_parts_is_one_command() -> None:
+    # PowerShell cuts long scripts at arbitrary characters; the risk only shows
+    # once the parts are put back together.
+    events = [
+        _script_part(2, 3, "c(IntPtr.Zero, 4096, 0x1000, 0x40); Marshal.GetDelegateFor", "2024-03-22T12:00:01Z"),
+        _script_part(1, 3, "[DllImport(\"kernel32.dll\")] VirtualAllo", "2024-03-22T12:00:00Z"),
+        _script_part(3, 3, "FunctionPointer&lt;Run&gt;(pointer)", "2024-03-22T12:00:02Z"),
+    ]
+    items = command_history._join_script_blocks([item for event in events for item in command_history._commands_from_event("case-1", event)])
+
+    assert len(items) == 1
+    item = items[0]
+    assert item["command"] == '[DllImport("kernel32.dll")] VirtualAlloc(IntPtr.Zero, 4096, 0x1000, 0x40); Marshal.GetDelegateForFunctionPointer<Run>(pointer)'
+    assert item["script_block"] == {"id": "block-1", "parts": 3, "parts_found": 3}
+    assert item["timestamp"] == "2024-03-22T12:00:00Z"
+    assert len(item["supporting_events"]) == 3
+    assert {"allocates or writes process memory", "runs code from a memory pointer"} <= set(item["risk_reasons"])
+    assert item["risk_score"] >= 50
+
+
+def test_a_script_with_missing_parts_says_so() -> None:
+    events = [_script_part(1, 3, "Get-", "2024-03-22T12:00:00Z"), _script_part(3, 3, "Item", "2024-03-22T12:00:02Z")]
+    items = command_history._join_script_blocks([item for event in events for item in command_history._commands_from_event("case-1", event)])
+
+    assert [item["script_block"]["parts_found"] for item in items] == [2]
+
+
+def test_a_service_image_path_is_its_own_source() -> None:
+    event = _event(
+        0,
+        windows={},
+        event={},
+        artifact={"type": "service", "parser": "windows_service_registry"},
+        process={"command_line": "C:\\Windows\\System32\\svchost.exe -k netsvcs -p"},
+        source_file="C\\Windows\\System32\\config\\SYSTEM",
+    )
+    items = command_history._commands_from_event("case-1", event)
+
+    assert [(item["source_type"], item["confidence"]) for item in items] == [("service", "medium")]
+
+
+def test_a_pipeline_keeps_the_risk_of_the_session_that_ran_it() -> None:
+    payload = '{"EventData"":{""Data"":""$data = $content | ForEach-Object { $_ -bxor $key }\\n'
+    items = command_history._commands_from_event(
+        "case-1",
+        _event(
+            800,
+            event={"provider": "PowerShell", "channel": "Windows PowerShell"},
+            process=_PS_PROCESS,
+            powershell={"host_application": "powershell.exe -ep bypass -w hidden -NoExit C:\\work\\check.ps1"},
+            windows={"event_id": 800, "event_data": {"payload_columns": {"Payload": payload}}},
+        ),
+    )
+
+    assert items[0]["command"].startswith("$data = $content")
+    assert {"PowerShell execution policy bypass", "hidden window execution"} <= set(items[0]["risk_reasons"])

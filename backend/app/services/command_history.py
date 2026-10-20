@@ -30,6 +30,7 @@ SOURCE_PRIORITY = {
     "transcript": 40,
     "psreadline": 50,
     "scheduled_task": 60,
+    "service": 65,
     "prefetch": 70,
     "linux_shell_history": 80,
     "other": 90,
@@ -107,7 +108,7 @@ def get_command_history(case_id: str, params: dict[str, Any], db: Session | None
                 "showing the ones closest to the current sort order. Narrow by host, "
                 "time range or search text to see the rest."
             )
-        commands = _dedupe_commands([item for event in events for item in _commands_from_event(case_id, event)])
+        commands = _dedupe_commands(_join_script_blocks([item for event in events for item in _commands_from_event(case_id, event)]))
         registry_events = [event for event in events if str(_obj(event.get("artifact")).get("type") or "").lower() == "registry_event" or _to_int(_obj(event.get("windows")).get("event_id") or event.get("event_id"), None) in {12, 13, 14, 4657}]
         commands = correlate_registry_commands(commands, registry_events)
         commands = [_add_command_source_provenance(item) for item in commands]
@@ -357,7 +358,14 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
         user_value = _extract_user(event, powershell, windows_event_data)
         raw_payload = _extract_raw_payload(event, windows_event_data)
         classification = _classify_command(command, process, parent, source_type)
-        risk_score, risk_reasons = _risk(command, process, parent)
+        risk_text = command
+        if source_type == "powershell_operational":
+            # A pipeline or script shown on its own still ran in a session started
+            # with -ep bypass / -w hidden; that launch line is part of its risk.
+            host_application = _powershell_host_application(event, powershell, windows_event_data)
+            if host_application and host_application.lower() not in command.lower():
+                risk_text = f"{command} {host_application}"
+        risk_score, risk_reasons = _risk(risk_text, process, parent)
         registry_command = detect_registry_command(command)
         if registry_command:
             risk_score = max(risk_score, 35)
@@ -413,8 +421,67 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
             "supporting_events": [_supporting_event(event, source_type)],
             "linked_search_url": _search_url(case_id, event.get("evidence_id"), event_doc_id),
         }
+        script_block = _script_block_part(event_id, windows_event_data, powershell)
+        if script_block:
+            item["script_block"] = script_block
         item["dedupe_key"] = _dedupe_key(item)
         output.append(item)
+    return output
+
+
+def _script_block_part(event_id: int | None, event_data: dict[str, Any], powershell: dict[str, Any]) -> dict[str, Any] | None:
+    """Where a 4104 row sits in a script PowerShell logged in several parts."""
+    if event_id != 4104:
+        return None
+    block_id = str(event_data.get("ScriptBlockId") or "").strip()
+    part = _to_int(event_data.get("MessageNumber"), None)
+    parts = _to_int(event_data.get("MessageTotal"), None)
+    if not block_id or not part or not parts or parts < 2:
+        return None
+    text = event_data.get("ScriptBlockText") or powershell.get("script_block_text") or ""
+    return {"id": block_id, "part": part, "parts": parts, "text": str(text)}
+
+
+def _join_script_blocks(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per script PowerShell split over several 4104 events.
+
+    The parts are cut at arbitrary characters, so they are joined as they are
+    and only then cleaned; risk is scored on the whole script, since what
+    makes it suspicious can straddle two parts.
+    """
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    kept: dict[tuple[str, str, str], dict[str, Any]] = {}
+    output: list[dict[str, Any]] = []
+    for item in items:
+        block = item.get("script_block")
+        if not block:
+            output.append(item)
+            continue
+        key = (str(item.get("evidence_id") or ""), str(item.get("host") or ""), str(block["id"]))
+        if key not in groups:
+            groups[key] = []
+            kept[key] = item  # the row that stays where the first part was
+            output.append(item)
+        groups[key].append(item)
+    for key, parts in groups.items():
+        parts.sort(key=lambda part: part["script_block"]["part"])
+        first = kept[key]
+        seen_parts: dict[int, str] = {}
+        for part in parts:
+            seen_parts.setdefault(part["script_block"]["part"], part["script_block"]["text"])
+        # EvtxECmd leaves the event XML's entities in the text (&lt; for <).
+        command = _clean_command_value(html.unescape("".join(seen_parts[number] for number in sorted(seen_parts)))) or parts[0]["command"]
+        risk_score, risk_reasons = _risk(command, first.get("process") or {}, first.get("parent_process") or {})
+        first["command"] = command
+        first["command_normalized"] = _normalize_command(command)
+        first["timestamp"] = min((part.get("timestamp") for part in parts if part.get("timestamp")), default=first.get("timestamp"))
+        first["risk_score"] = max([risk_score, *(int(part.get("risk_score") or 0) for part in parts)])
+        first["risk_reasons"] = sorted(set(risk_reasons).union(*(set(part.get("risk_reasons") or []) for part in parts)))
+        first["supporting_events"] = _dedupe_supporting([event for part in parts for event in part.get("supporting_events") or []])
+        first["script_block"] = {"id": first["script_block"]["id"], "parts": first["script_block"]["parts"], "parts_found": len(seen_parts)}
+        first["source_event_id"] = parts[0].get("source_event_id")
+        first["linked_search_url"] = parts[0].get("linked_search_url")
+        first["dedupe_key"] = _dedupe_key(first)
     return output
 
 
@@ -582,6 +649,9 @@ def _source_type(event: dict[str, Any], event_id: int | None) -> str:
         return "scheduled_task"
     if artifact_type == "prefetch":
         return "prefetch"
+    if artifact_type == "service":
+        # A service's configured command line (ImagePath), not a run of it.
+        return "service"
     if artifact_type == "linux_shell_history":
         return "linux_shell_history"
     return "other"
@@ -683,19 +753,14 @@ def _extract_powershell_command(event: dict[str, Any], powershell: dict[str, Any
     # What ran, before the host that ran it: 4104 holds the script block, 4103
     # and 800 the commands of a pipeline; 400/403/600 only how PowerShell started.
     if event_id == 4104:
-        script_block = _clean_command_value(_first(event_data.get("ScriptBlockText"), powershell.get("script_block_text"), powershell.get("script_block")))
+        script_block = _clean_command_value(html.unescape(_first(event_data.get("ScriptBlockText"), powershell.get("script_block_text"), powershell.get("script_block"))))
         if script_block:
             return script_block
     if event_id in {4103, 800}:
         invocation = _powershell_pipeline_command(event, event_data)
         # A bare script name the host application already runs ("-File ...\\x.ps1")
         # says less than the host application line, which the chain below picks.
-        host_application = _first(
-            powershell.get("host_application"),
-            event_data.get("HostApplication"),
-            _extract_prefixed_payload_value(event, event_data, ["HostApplication", "Host Application"]),
-            _extract_labeled_payload_value(event, event_data, ["HostApplication", "Host Application"]),
-        ).lower()
+        host_application = _powershell_host_application(event, powershell, event_data).lower()
         bare_script_of_host = " " not in invocation and invocation.lower() in host_application
         if invocation and not bare_script_of_host:
             return invocation
@@ -769,6 +834,17 @@ def _extract_raw_payload(event: dict[str, Any], event_data: dict[str, Any]) -> s
     if payload_values:
         return "\n".join(_clean(value) for value in payload_values if _clean(value))
     return _clean(_obj(event.get("event")).get("message") or event.get("search_text"))
+
+
+def _powershell_host_application(event: dict[str, Any], powershell: dict[str, Any], event_data: dict[str, Any]) -> str:
+    text = _first(
+        powershell.get("host_application"),
+        event_data.get("HostApplication"),
+        _extract_prefixed_payload_value(event, event_data, ["HostApplication", "Host Application"]),
+        _extract_labeled_payload_value(event, event_data, ["HostApplication", "Host Application"]),
+    )
+    context = _CONTEXT_FIELD_RE.search(text)
+    return text[: context.start()].strip() if context else text
 
 
 _INVOCATION_RE = re.compile(r'CommandInvocation\(([^)]+)\):\s*"([^"]*)"')
@@ -961,7 +1037,7 @@ def _first_executable(command: str) -> str:
 def _confidence(source_type: str, command: str, timestamp: Any) -> str:
     if source_type in {"sysmon_1", "security_4688", "powershell_operational"} and command and timestamp:
         return "high"
-    if source_type in {"scheduled_task", "transcript"}:
+    if source_type in {"scheduled_task", "service", "transcript"}:
         return "medium"
     return "low"
 
