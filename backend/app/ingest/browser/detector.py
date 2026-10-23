@@ -89,11 +89,32 @@ def _looks_like_sensitive_browser_name(name: str) -> bool:
     return any(token in normalized for token in SENSITIVE_BROWSER_FILES)
 
 
+_SQLITE_MAGIC = b"SQLite format 3\x00"
+
+
+def _is_browser_database(path: Path) -> bool:
+    """``History`` and ``places.sqlite`` are SQLite databases. Other files share the name (zypper's
+    ``/var/log/zypp/history`` is text): inside a browser profile the name is enough (a damaged
+    database is still the browser's), elsewhere a readable file must carry the SQLite header and a
+    path seen without its file is judged by where it lives."""
+    if any(token in str(path).replace("/", "\\").lower() for token in BROWSER_PATH_TOKENS):
+        return True
+    try:
+        if path.is_file():
+            with path.open("rb") as handle:
+                return handle.read(len(_SQLITE_MAGIC)) == _SQLITE_MAGIC
+    except OSError:
+        pass
+    return "/var/log/" not in "/" + str(path).replace("\\", "/").lower().lstrip("/")
+
+
 def looks_like_browser_artifact(path: Path, headers: list[str] | None = None) -> bool:
     lower_name = path.name.lower()
     lower_path = str(path).replace("/", "\\").lower()
     header_set = _normalized_headers(headers)
-    if lower_name in CHROMIUM_DB_NAMES | FIREFOX_DB_NAMES | SENSITIVE_BROWSER_FILES or _looks_like_sensitive_browser_name(lower_name):
+    if lower_name in CHROMIUM_DB_NAMES | FIREFOX_DB_NAMES:
+        return _is_browser_database(path)
+    if lower_name in SENSITIVE_BROWSER_FILES or _looks_like_sensitive_browser_name(lower_name):
         return True
     if any(hint in lower_name for hint in BROWSER_FILENAME_HINTS):
         return True

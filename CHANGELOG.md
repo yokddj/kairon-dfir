@@ -68,6 +68,7 @@
 
 ### Fixed
 
+- zypper's `/var/log/zypp/history` was taken for a Chrome `History` database and gave no rows: outside a browser profile, a file with that name must now be SQLite.
 - Linux packages: `/var/lib/dpkg/status` gave one row per line (descriptions, conffiles) instead of one per package; dpkg, apt and zypper local times were read as UTC instead of the host's timezone; yum.log rows named the action ("Installed") as the package; modern dnf logs (ISO times) were not parsed.
 - Large OpenSearch deletions (an evidence's events, a memory image's previous MemProcFS timeline) no longer fail with "got more than 100 headers": OpenSearch 2.x sends one `TASK_RESOURCE_USAGE` header per scroll batch, so a deletion of more than ~100 batches broke the HTTP response while the deletion went on in the background, and was reported as 0 deleted (or as a failure when deleting evidence). They now run as a server-side task that Kairon waits for.
 - Memory Find Evil no longer hangs a whole analysis batch when MemProcFS's forensic scan stops making progress (seen at 90 % on a Windows 11 24H2 crash dump): after 10 minutes without progress it gives up with that reason instead of waiting for the worker to be killed 80 minutes later, and leaves without the MemProcFS shutdown call that never returned.
