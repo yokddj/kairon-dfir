@@ -40,7 +40,7 @@ check "ERROR" "FROM redis:7-alpine" "Floating redis:7-alpine (add @sha256 digest
 
 echo "--- Tool downloads ---"
 check "ERROR" "latest" "latest references in download URLs"
-check "WARN" "ericzimmermanstools.com/net9" "EZ tools use mutable net9 path (no version pin)"
+check "WARN" "ericzimmermanstools.com/net/" "EZ tools use mutable /net/ path (no version pin)"
 
 echo "--- Version metadata ---"
 check "ERROR" "KAIRON_COMMIT:-unknown" "KAIRON_COMMIT defaults to unknown"
