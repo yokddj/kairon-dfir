@@ -723,22 +723,133 @@
   },
   {
     "family": "linux_packages",
-    "display_name": "Linux Package Logs",
+    "display_name": "Linux Packages",
     "status": "partial",
-    "input_formats": ["LOG", "TXT"],
-    "recognized_filenames": ["dpkg.log", "yum.log", "dnf.log"],
-    "source_tools": ["manual ZIP collections"],
-    "evidence_types": ["linux_triage", "parsed_folder"],
-    "normalized_fields": ["timestamp", "package_manager", "action", "package", "version", "source_file"],
-    "views": ["Artifact Explorer", "Search"],
+    "input_formats": [
+      "LOG",
+      "TXT",
+      "SQLITE"
+    ],
+    "recognized_filenames": [
+      "dpkg.log",
+      "apt/history.log",
+      "apt/term.log",
+      "/var/lib/dpkg/status",
+      "yum.log",
+      "dnf.log",
+      "dnf.rpm.log",
+      "dnf5.log",
+      "dnf/history.sqlite",
+      "libdnf5/transaction_history.sqlite",
+      "yum/history/history-*.sqlite",
+      "rpmdb.sqlite",
+      "pacman.log",
+      "pacman/local/*/desc",
+      "zypp/history",
+      "apk/db/installed",
+      "etc/apk/world",
+      "etc/apk/repositories"
+    ],
+    "source_tools": [
+      "manual ZIP/TAR collections",
+      "Velociraptor"
+    ],
+    "evidence_types": [
+      "linux_triage",
+      "parsed_folder",
+      "disk_image"
+    ],
+    "normalized_fields": [
+      "timestamp",
+      "package_manager",
+      "action",
+      "package",
+      "version",
+      "previous_version",
+      "package_arch",
+      "package_repository",
+      "package_reason",
+      "command",
+      "username",
+      "uid",
+      "source_file"
+    ],
+    "views": [
+      "Artifact Explorer",
+      "Search",
+      "Timeline"
+    ],
     "searchable": true,
     "timeline_supported": true,
     "host_aware": true,
     "multi_host_supported": true,
-    "limitations": ["Package manager detection is format-based, not exhaustive", "Some rpm formats not covered"],
+    "limitations": [
+      "Berkeley DB / NDB RPM databases are not read",
+      "dpkg and apk keep no per-package install time"
+    ],
     "test_coverage": "partial",
     "docs_url": "docs/linux/linux-support.md",
-    "notes": "Parses dpkg.log, yum.log, and dnf.log for package install/upgrade/remove events."
+    "notes": "dpkg, apt, yum, dnf, dnf5, rpm, pacman, zypper and apk history and installed-package databases, with the command line and user where the format records them."
+  },
+  {
+    "family": "linux_cloud_init",
+    "display_name": "cloud-init",
+    "status": "partial",
+    "input_formats": [
+      "LOG",
+      "TXT",
+      "YAML",
+      "JSON"
+    ],
+    "recognized_filenames": [
+      "cloud-init.log",
+      "cloud-init-output.log",
+      "instances/*/user-data.txt",
+      "instances/*/vendor-data*.txt",
+      "seed/*/user-data",
+      "instances/*/scripts/*",
+      "scripts/per-boot/*",
+      "etc/cloud/cloud.cfg(.d/*.cfg)",
+      "data/status.json",
+      "data/instance-id"
+    ],
+    "source_tools": [
+      "manual ZIP/TAR collections",
+      "Velociraptor"
+    ],
+    "evidence_types": [
+      "linux_triage",
+      "parsed_folder",
+      "disk_image"
+    ],
+    "normalized_fields": [
+      "timestamp",
+      "event_action",
+      "command",
+      "username",
+      "file_path",
+      "cloud_init_stage",
+      "config_key",
+      "instance_id",
+      "suspicious_indicators",
+      "source_file"
+    ],
+    "views": [
+      "Artifact Explorer",
+      "Search",
+      "Timeline"
+    ],
+    "searchable": true,
+    "timeline_supported": true,
+    "host_aware": true,
+    "multi_host_supported": true,
+    "limitations": [
+      "User-data, scripts and configuration are undated",
+      "#include URLs are not fetched"
+    ],
+    "test_coverage": "partial",
+    "docs_url": "docs/linux/linux-support.md",
+    "notes": "cloud-init logs, user-data/vendor-data (cloud-config, scripts, MIME, gzip), boot scripts and instance state, flagged for review."
   },
   {
     "family": "linux_network",

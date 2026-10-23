@@ -3789,6 +3789,23 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["package_action"] = (row.get("action") or "") if row.get("artifact_family") == "linux_packages" else ""
     linux_data["package_status"] = row.get("package_status") or ""
     linux_data["package_manager"] = row.get("package_manager") or ""
+    linux_data["package_arch"] = row.get("package_arch") or ""
+    linux_data["package_repository"] = row.get("package_repository") or ""
+    linux_data["repository_url"] = row.get("repository_url") or ""
+    linux_data["package_reason"] = row.get("package_reason") or ""
+    linux_data["package_vendor"] = row.get("package_vendor") or ""
+    linux_data["transaction_id"] = row.get("transaction_id", None)
+    # cloud-init (see app.ingest.linux.cloud_init).
+    linux_data["file_path"] = row.get("file_path") or ""
+    linux_data["cloud_init_stage"] = row.get("cloud_init_stage") or ""
+    linux_data["cloud_init_module"] = row.get("cloud_init_module") or ""
+    linux_data["cloud_init_version"] = row.get("cloud_init_version") or ""
+    linux_data["config_key"] = row.get("config_key") or ""
+    linux_data["datasource"] = row.get("datasource") or ""
+    linux_data["instance_id"] = row.get("instance_id") or ""
+    linux_data["user_data_part"] = row.get("user_data_part") or ""
+    linux_data["user_sudo"] = row.get("user_sudo") or ""
+    linux_data["ssh_key_comment"] = row.get("ssh_key_comment") or ""
     linux_data["db_engine"] = row.get("db_engine", "")
     linux_data["db_name"] = row.get("db_name", "")
     linux_data["db_command"] = row.get("db_command", "")
@@ -3953,6 +3970,13 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         if linux_data.get("http_status") is not None:
             doc["event"]["outcome"] = "failure" if int(linux_data["http_status"]) >= 400 else "success"
         doc["title"] = linux_data.get("message") or f"{(linux_data.get('web_server') or 'web server').capitalize()} log event"
+    elif family == "linux_cloud_init":
+        kind = linux_data.get("artifact_type") or "cloud_init"
+        doc["event"]["type"] = kind
+        doc["event"]["action"] = linux_data.get("event_action") or kind
+        if linux_data.get("file_path"):
+            doc.setdefault("file", {})["path"] = linux_data["file_path"]
+        doc["title"] = f"cloud-init: {str(linux_data.get('message') or kind)[:160]}"
     elif family == "linux_persistence":
         kind = linux_data.get("artifact_type") or "persistence"
         doc["event"]["type"] = kind
@@ -4096,6 +4120,12 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
 
         indicators = set(linux_data.get("suspicious_indicators") or [])
         event_severity = "high" if indicators & HIGH_SEVERITY_FLAGS else "medium" if indicators else "info"
+    elif family == "linux_cloud_init":
+        # Flags are leads for review; otherwise a log line takes the severity of its own level.
+        if linux_data.get("suspicious_indicators"):
+            event_severity = "medium"
+        else:
+            event_severity = _log_level_severity(row.get("severity")) or event_severity
     elif family == "linux_persistence":
         # A flagged line is a lead for review, never a confirmed detection. Any entry in
         # ld.so.preload is unusual in itself; an unusual path there is worse.

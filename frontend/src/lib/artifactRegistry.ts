@@ -60,6 +60,7 @@ const ARTIFACT_REGISTRY: UiArtifactDefinition[] = [
   { id: "linux_vpn", label: "VPN", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_k8s_audit", label: "Kubernetes Audit", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_persistence", label: "Persistence Config", platforms: ["linux"], view: "persistence", platformShortcut: true },
+  { id: "linux_cloud_init", label: "cloud-init", platforms: ["linux"], view: "auto", platformShortcut: true },
   { id: "linux_fail2ban", label: "fail2ban", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_generic_log", label: "Other Text Logs", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_audit", label: "Audit (auditd)", platforms: ["linux"], view: "network", platformShortcut: true },

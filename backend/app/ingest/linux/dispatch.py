@@ -37,6 +37,7 @@ LINUX_PARSER_TARGETS: dict[str, LinuxParserTarget] = {
     "linux_generic_raw": LinuxParserTarget("linux_generic_raw", "generic_log", "parse_generic_log"),
     "linux_fail2ban_raw": LinuxParserTarget("linux_fail2ban_raw", "fail2ban", "parse_fail2ban"),
     "linux_persistence_raw": LinuxParserTarget("linux_persistence_raw", "persistence", "parse_persistence"),
+    "linux_cloud_init_raw": LinuxParserTarget("linux_cloud_init_raw", "cloud_init", "parse_cloud_init"),
     "linux_k8s_audit_raw": LinuxParserTarget("linux_k8s_audit_raw", "k8s_audit", "parse_k8s_audit"),
     "linux_container_raw": LinuxParserTarget("linux_container_raw", "container_logs", "parse_container_artifact"),
     "linux_database_raw": LinuxParserTarget("linux_database_raw", "database_logs", "parse_database_log"),
@@ -120,7 +121,15 @@ def _parse_linux_artifact_file(path: Path, *, parser: str | None, artifact_type:
             # extensionless copy still parses; text exports fall through unchanged.
             if is_journal_file(path):
                 return parse_journal_binary_file(path, source_path=source_path)
-        if target.parser in {"linux_generic_raw", "linux_container_raw", "linux_database_raw", "linux_vpn_raw"}:
+        if target.parser == "linux_packages_raw":
+            from app.ingest.linux.packages import package_database_kind, parse_package_database
+
+            # The coarse family can arrive as artifact_type (disk images), so the SQLite package
+            # databases are recognised by their path, like localtime and wtmp above.
+            if package_database_kind(str(source_path or path.name)):
+                passwd_content = _read_linux_passwd_for_artifact(path, source_path)
+                return parse_package_database(path, source_path=source_path, passwd_content=passwd_content)
+        if target.parser in {"linux_generic_raw", "linux_container_raw", "linux_database_raw", "linux_vpn_raw", "linux_packages_raw", "linux_cloud_init_raw"}:
             # Capped, magic-byte-sniffed read (gzip/bzip2/xz): an unrecognised log can be
             # arbitrarily large or a compression bomb, unlike the fixed-name artifacts.
             from app.ingest.linux.generic_log import read_log_text

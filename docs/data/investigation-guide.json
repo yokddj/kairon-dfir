@@ -730,6 +730,10 @@
         {
           "label": "Flagged persistence (download-and-run, reverse shells, preloads, PAM)",
           "query": "artifact:linux_persistence AND (indicator:download_and_run OR indicator:reverse_shell OR indicator:obfuscation OR indicator:preload_library OR indicator:pam_exec OR indicator:auth_always_permit OR indicator:shadowed_command_alias)"
+        },
+        {
+          "label": "cloud-init user-data, boot scripts and configuration",
+          "query": "artifact:linux_cloud_init AND NOT linux.artifact_type:cloud_init_log AND NOT linux.artifact_type:cloud_init_output"
         }
       ],
       "views": [
@@ -747,6 +751,11 @@
           "label": "Persistence Config",
           "target": "artifacts",
           "artifact_type": "linux_persistence"
+        },
+        {
+          "label": "cloud-init",
+          "target": "artifacts",
+          "artifact_type": "linux_cloud_init"
         },
         {
           "label": "SSH",

@@ -22,6 +22,7 @@ SUPPORTED_ARTIFACTS: dict[str, dict[str, str]] = {
     "container": {"label": "containers (Docker / Kubernetes logs and configuration)", "family": "linux_container"},
     "k8s_audit": {"label": "Kubernetes audit", "family": "linux_k8s_audit"},
     "persistence": {"label": "persistence config (ld.so.preload, rc.local, shell init, PAM, at)", "family": "linux_persistence"},
+    "cloud_init": {"label": "cloud-init (logs, user-data, boot scripts)", "family": "linux_cloud_init"},
     "generic_log": {"label": "other text logs", "family": "linux_generic_log"},
     "audit_log": {"label": "audit.log", "family": "linux_audit"},
     "apache": {"label": "Web server logs (Apache, nginx)", "family": "linux_apache"},
@@ -100,6 +101,8 @@ def _artifact_key(family: str, artifact_type: str, path: str) -> str:
         return "k8s_audit"
     if family == "linux_persistence":
         return "persistence"
+    if family == "linux_cloud_init":
+        return "cloud_init"
     if family == "linux_audit":
         return "audit_log"
     if family == "linux_apache":
