@@ -1795,7 +1795,15 @@ def normalize_row(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
         or "\\windows\\tasks\\" in normalized_source_path
     )
 
-    if artifact_type == "mft" or "mftecmd" in name or {"entrynumber", "sequencenumber", "parententrynumber"} <= headers:
+    # A Linux or NetScaler row was routed by its parser; the Windows/browser name heuristics below
+    # must not take it over (zypper's "history" file once became a browser record).
+    if artifact_family.startswith("linux_"):
+        detected_host = document["host"]["hostname"]
+        document = normalize_linux_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
+    elif artifact_family.startswith("netscaler_"):
+        detected_host = document["host"]["hostname"]
+        document = normalize_netscaler_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
+    elif artifact_type == "mft" or "mftecmd" in name or {"entrynumber", "sequencenumber", "parententrynumber"} <= headers:
         document = normalize_mft_row(document, row, artifact_meta)
     elif is_native_prefetch_context or "pecmd" in name or "prefetch" in name:
         document = normalize_prefetch_row(document, row, artifact_meta)
@@ -1890,12 +1898,6 @@ def normalize_row(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
         document = normalize_ntfs_row(document, row, artifact_meta)
     elif artifact_type == "wmi" or _looks_like_wmi(artifact_path, artifact_meta):
         document = normalize_wmi_row(document, row, artifact_meta)
-    elif artifact_family.startswith("linux_"):
-        detected_host = document["host"]["hostname"]
-        document = normalize_linux_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
-    elif artifact_family.startswith("netscaler_"):
-        detected_host = document["host"]["hostname"]
-        document = normalize_netscaler_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
     elif artifact_type not in {"network", "wlan", "dns"} and (artifact_type in {"defender", "detection"} or looks_like_defender_artifact(artifact_path, list(row.keys()))):
         document = normalize_defender_row(document, row, artifact_meta)
     elif looks_like_autoruns_artifact(artifact_path, list(row.keys())):

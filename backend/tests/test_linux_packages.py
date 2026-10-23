@@ -415,3 +415,16 @@ def test_zypper_history_is_not_taken_for_a_browser_history(tmp_path):
     connection.close()
     assert classify_artifact(zypper)["parser"] == "linux_packages_raw"
     assert classify_artifact(chrome)["parser"] == "browser_chromium_history"
+
+
+@pytest.mark.parametrize("source_path", ["var/log/zypp/history", "history", "/staging/gone/var/log/zypp/history"])
+def test_a_linux_package_row_is_never_normalized_as_a_browser_record(source_path):
+    from app.ingest.normalizer import normalize_row
+
+    row = parse_packages(
+        "2026-10-23 18:14:40|install|nano|7.2-bp156.3.3.1|aarch64|root@h|repo-oss|abc|\n", source_path="var/log/zypp/history",
+    )[0]
+    meta = {"artifact_type": "linux_packages", "artifact_family": "linux_packages", "parser": "linux_packages_raw", "source_path": source_path, "name": "history"}
+    doc = normalize_row("case-1", "ev-1", "art-1", row, meta)
+    assert doc["linux"]["artifact_family"] == "linux_packages" and doc["linux"]["package"] == "nano"
+    assert doc["event"]["category"] != "web"

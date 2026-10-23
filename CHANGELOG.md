@@ -68,6 +68,7 @@
 
 ### Fixed
 
+- Linux and NetScaler rows are normalized by their own family before the Windows and browser name heuristics; a Linux file named like a browser or Windows artifact (zypper's `history`) could be indexed as one.
 - zypper's `/var/log/zypp/history` was taken for a Chrome `History` database and gave no rows: outside a browser profile, a file with that name must now be SQLite.
 - Linux packages: `/var/lib/dpkg/status` gave one row per line (descriptions, conffiles) instead of one per package; dpkg, apt and zypper local times were read as UTC instead of the host's timezone; yum.log rows named the action ("Installed") as the package; modern dnf logs (ISO times) were not parsed.
 - Large OpenSearch deletions (an evidence's events, a memory image's previous MemProcFS timeline) no longer fail with "got more than 100 headers": OpenSearch 2.x sends one `TASK_RESOURCE_USAGE` header per scroll batch, so a deletion of more than ~100 batches broke the HTTP response while the deletion went on in the background, and was reported as 0 deleted (or as a failure when deleting evidence). They now run as a server-side task that Kairon waits for.
