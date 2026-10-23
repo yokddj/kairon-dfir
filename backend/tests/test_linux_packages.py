@@ -398,3 +398,20 @@ def test_package_database_dispatch_reads_the_write_ahead_log(tmp_path):
 def test_an_unknown_schema_yields_no_rows(tmp_path):
     db = _database(tmp_path / "history.sqlite", "CREATE TABLE something (id INTEGER);")
     assert parse_package_database(db, source_path="var/lib/dnf/history.sqlite") == []
+
+
+def test_zypper_history_is_not_taken_for_a_browser_history(tmp_path):
+    """Chrome's ``History`` is SQLite; zypper's text ``history`` must reach the package parser."""
+    from app.ingest.detector import classify_artifact
+
+    zypper = tmp_path / "var" / "log" / "zypp" / "history"
+    zypper.parent.mkdir(parents=True)
+    zypper.write_text("2026-10-23 18:14:40|install|nano|7.2-bp156.3.3.1|aarch64|root@h|repo-oss|abc|\n")
+    chrome = tmp_path / "home" / "a" / ".config" / "google-chrome" / "Default" / "History"
+    chrome.parent.mkdir(parents=True)
+    connection = sqlite3.connect(chrome)
+    connection.execute("CREATE TABLE urls (id INTEGER)")
+    connection.commit()
+    connection.close()
+    assert classify_artifact(zypper)["parser"] == "linux_packages_raw"
+    assert classify_artifact(chrome)["parser"] == "browser_chromium_history"
