@@ -4,9 +4,11 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from app.ingest.linux.cloud_init import cloud_init_kind
 from app.ingest.linux.container_logs import container_kind
 from app.ingest.linux.database_logs import database_engine
 from app.ingest.linux.vpn_logs import vpn_kind
+from app.ingest.linux.packages import package_database_kind
 from app.ingest.linux.persistence import persistence_kind
 
 _LINUX_ARTIFACT_MAP: dict[str, tuple[str, str, str]] = {
@@ -61,9 +63,16 @@ _LINUX_ARTIFACT_MAP: dict[str, tuple[str, str, str]] = {
     "dpkg.log": ("linux_packages", "dpkg_log", "linux_packages_raw"),
     "yum.log": ("linux_packages", "yum_log", "linux_packages_raw"),
     "dnf.log": ("linux_packages", "dnf_log", "linux_packages_raw"),
+    "dnf.rpm.log": ("linux_packages", "dnf_rpm_log", "linux_packages_raw"),
+    "dnf5.log": ("linux_packages", "dnf5_log", "linux_packages_raw"),
+    "pacman.log": ("linux_packages", "pacman_log", "linux_packages_raw"),
+    "var/log/zypp/history": ("linux_packages", "zypper_history", "linux_packages_raw"),
     "apt/history.log": ("linux_packages", "apt_history", "linux_packages_raw"),
     "apt/term.log": ("linux_packages", "apt_term", "linux_packages_raw"),
     "var/lib/dpkg/status": ("linux_packages", "dpkg_status", "linux_packages_raw"),
+    "apk/db/installed": ("linux_packages", "apk_installed", "linux_packages_raw"),
+    "etc/apk/world": ("linux_packages", "apk_world", "linux_packages_raw"),
+    "etc/apk/repositories": ("linux_packages", "apk_repositories", "linux_packages_raw"),
     "hosts": ("linux_network", "etc_hosts", "linux_network_raw"),
     "resolv.conf": ("linux_network", "resolv_conf", "linux_network_raw"),
     "/netplan/": ("linux_network", "netplan", "linux_network_raw"),
@@ -78,6 +87,7 @@ _EXIM_LOG_RE = re.compile(
     r"(^|/)var/log/exim4?/(?P<name>(?:mainlog|rejectlog|paniclog)(?:[._-].*)?)$",
     re.IGNORECASE,
 )
+_PACMAN_LOCAL_DESC_RE = re.compile(r"(^|/)var/lib/pacman/local/[^/]+/desc$")
 _LASTLOG_RE = re.compile(r"(^|/)var/log/lastlog$", re.IGNORECASE)
 _ETC_TIMEZONE_RE = re.compile(r"(^|/)etc/timezone$", re.IGNORECASE)
 _ETC_LOCALTIME_RE = re.compile(r"(^|/)etc/localtime$", re.IGNORECASE)
@@ -213,6 +223,10 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
     persistence_type = persistence_kind(path_str)
     if persistence_type:
         return ("linux_persistence", persistence_type, "linux_persistence_raw")
+    # Before the generic-log rules, which would otherwise take cloud-init.log as an unknown log.
+    cloud_init_type = cloud_init_kind(path_str)
+    if cloud_init_type:
+        return ("linux_cloud_init", cloud_init_type, "linux_cloud_init_raw")
     apache_match = _APACHE_LOG_RE.search(path_str) or (_LOOSE_WEB_LOG_RE.search(path_str) if _in_log_folder(path_str) else None)
     if apache_match:
         apache_name = apache_match.group("name")
@@ -256,6 +270,13 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
         return ("linux_os_info", "hostnamectl", "linux_os_info_raw")
     if _UNAME_RE.search(path_str) and not _BIN_OR_SHARE_DIR_RE.search(path_str):
         return ("linux_os_info", "uname", "linux_os_info_raw")
+    package_database = package_database_kind(path_str)
+    if package_database:
+        # SQLite transaction histories and the RPM database (see app.ingest.linux.packages);
+        # checked before the generic-log rules, which skip every .sqlite file.
+        return ("linux_packages", "rpmdb" if package_database == "rpm" else f"{package_database}_history", "linux_packages_raw")
+    if _PACMAN_LOCAL_DESC_RE.search(path_str):
+        return ("linux_packages", "pacman_local", "linux_packages_raw")
     if path_str.lower().endswith("var/lib/dpkg/status-old"):
         # dpkg's backup of the package database before its last change: parsing it would list
         # every installed package a second time.

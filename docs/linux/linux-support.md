@@ -286,6 +286,15 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 - Timestamps: these are configuration snapshots with no time in their content, so rows are undated (`timestamp_status: missing`) and are not shown on the timeline. The file's modification time is not read here.
 - Limitations: the indicator list is a fixed, generic vocabulary and will miss anything it does not name; `init.d` scripts, systemd units (see `linux_systemd`), cron (see `linux_cron`), `.bash_history` (see shell history) and `authorized_keys` (see SSH) are handled by their own parsers.
 
+### cloud-init (`linux_cloud_init`)
+- What: how a cloud instance was set up at first boot and what cloud-init did: users and SSH keys, commands run at boot (`bootcmd`) and at the end of the first boot (`runcmd`), files written, packages and repositories. Whoever can change user-data (the cloud console, the metadata service) can use it to get in, and scripts in `/var/lib/cloud/scripts/per-boot` run on every boot.
+- Sources: `/var/log/cloud-init.log` (debug log: each line with its module, level and stage; `event_action` `command` for commands run, `file_write`, `user_add`, `module`, `datasource`, `stage_start`/`stage_finish`; tracebacks are kept with their line), `/var/log/cloud-init-output.log` (console output of each stage), user-data and vendor-data as stored per instance (`/var/lib/cloud/instances/<id>/user-data.txt`, `vendor-data*.txt`) and in the NoCloud seed (`/var/lib/cloud/seed/*/`), the scripts cloud-init runs (`instances/<id>/scripts/*`, `scripts/per-{boot,instance,once}/*`), `/etc/cloud/cloud.cfg` and `cloud.cfg.d/*.cfg`, and instance state (`data/instance-id`, `status.json`, `result.json`, `instances/<id>/datasource`). The processed copies (`*.txt.i`) and `obj.pkl` (a Python pickle, never loaded) are skipped.
+- User-data is decoded the way cloud-init does, by its first line: cloud-config YAML (one row per `runcmd`/`bootcmd` command, user, SSH key, written file, package and repository, other keys as settings), shell scripts and boothooks (one row per line), `#include` URL lists, `#cloud-config-archive`, Jinja templates, MIME multipart (base64 parts included) and gzip. `write_files` contents encoded as `b64` or `gz+b64` are decoded for the flags.
+- Flags, not verdicts: commands, script lines and written files get the generic indicators of `linux_persistence` (`download_and_run`, `reverse_shell`, `obfuscation`, `world_writable_path`, `hidden_path`...), plus `passwordless_sudo` for a user given `NOPASSWD` and `password_ssh_login` for `ssh_pwauth: true`. A flagged row is `medium`; log lines take the severity of their level.
+- Secrets: plain-text and hashed passwords in user-data (`passwd`, `chpasswd`, `password`) are not copied; the row only says a password was set and for whom.
+- Times: cloud-init writes its log in UTC (checked on 26.2 with a non-UTC host). Each run starts with `Cloud-init v. X running '<stage>' at <time with zone>`, and the difference between that time and the line's own time is applied to the run, so a version that logs local time is corrected too. A copy with no such line is read as UTC and marked `format_utc`. Console output lines take the time of the stage line before them. User-data, scripts and configuration are undated.
+- Limitations: `instance-data.json` lives in `/run` (memory) and is usually not in a disk collection; the user-data cloud-init fetched over `#include` is not downloaded.
+
 ### fail2ban (`linux_fail2ban`)
 - Sources: `/var/log/fail2ban.log`, including rotated and compressed copies.
 - Why it matters: fail2ban bans an address after repeated failures against a service, so its log is a ready-made record of who attacked the host, which service (the *jail*, e.g. `sshd`) they hit, and when they were banned and released.
@@ -336,10 +345,16 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 - Fields: `principal`, `host_spec`, `run_as`, `command_spec`, `options`, `source_file`
 
 ### Linux Packages (`linux_packages`)
-- Sources: `/var/log/dpkg.log`, `/var/log/yum.log`, `/var/log/dnf.log`
-- Events: package install/upgrade/remove actions
-- Fields: `timestamp`, `package_manager`, `action`, `package`, `version`
-- Limitations: package manager detection is format-based, not exhaustive
+- What: what was installed, upgraded or removed, when, and, where the format records it, by whom and with which command. Each format was checked against files written by the real tool.
+- History logs (rotated and gzip/bzip2/xz copies included):
+  - dpkg `/var/log/dpkg.log` (one action per line) and apt `/var/log/apt/history.log` (one row per package of each transaction, with `command` = the `Commandline`, `username`/`uid` = the `Requested-By` sudo user, and `package_reason` `automatic` for dependencies; a transaction that failed keeps its `Error`). `/var/log/apt/term.log`: the dpkg output of each run, dated by its `Log started` line.
+  - yum `/var/log/yum.log`; dnf 4 `/var/log/dnf.rpm.log` (package actions) and `/var/log/dnf.log` (its `Command:` lines only; the rest is repository and solver chatter); dnf 5 `/var/log/dnf5.log` (launch command lines and RPM install/uninstall callbacks).
+  - pacman `/var/log/pacman.log` (actions, `Running '...'` command lines, scriptlet output); zypper `/var/log/zypp/history` (installs, removals, patches, command lines with the user, repositories added or removed; `#` lines with rpm output are left out).
+- Transaction databases (SQLite, read from a private copy with its `-wal`/`-journal`, never written): dnf 4 `/var/lib/dnf/history.sqlite`, dnf 5 `.../libdnf5/transaction_history.sqlite` and yum `/var/lib/yum/history/history-*.sqlite`. One row per package of each transaction with its exact time, command line, repository, reason and outcome, and the UID that ran it (resolved to a name with the evidence's `/etc/passwd`; an unset audit login UID is left empty).
+- Installed-package inventories: `/var/lib/dpkg/status` (one row per package, not per line; no install time), the RPM database `rpmdb.sqlite` (`/var/lib/rpm` or `/usr/lib/sysimage/rpm`, install time of every RPM from its header, including imported `gpg-pubkey` keys), pacman's local database `/var/lib/pacman/local/*/desc` (install date and whether it came in as a dependency), and apk `/lib/apk/db/installed`, `/etc/apk/world` (packages asked for by name) and `/etc/apk/repositories`.
+- Fields: `timestamp`, `package_manager`, `action`, `package`, `version`, `previous_version`, `package_status`, `package_arch`, `package_repository`, `repository_url`, `package_reason`, `package_vendor`, `transaction_id`, `command`, `username`, `uid`.
+- Times: dpkg, apt, zypper and pacman before 5.2 write the host's local time with no zone (`assumed_utc`, then converted with the host's timezone when the evidence has one); yum.log writes no year either (`assumed_year_utc`). dnf, dnf5 and modern pacman logs carry a UTC offset and the databases epoch seconds, so those times are exact.
+- Limitations: the Berkeley DB (`Packages`) and NDB RPM databases of older RHEL and SUSE are not read (the transaction histories still are); dpkg and apk record no install time per package.
 
 ### Linux Network Config (`linux_network`)
 - Sources: `/etc/hosts`, `/etc/resolv.conf`, `/etc/network/interfaces`, netplan
@@ -378,6 +393,6 @@ Linux artifacts appear in:
 - Multi-line audit events are parsed per-line in v1.
 - Systemd timer expressions are not fully parsed.
 - ZSH history without extended timestamps has no time context.
-- Package manager detection is format-based, not exhaustive.
+- Package databases: Berkeley DB and NDB RPM databases are not read (see `linux_packages`).
 
 Unsupported artifacts can still appear in inventory so analysts know they were present but not parsed.

@@ -77,8 +77,12 @@ def _owner(source_path: str) -> str | None:
     return None
 
 
-def _indicators(text: str) -> list[str]:
+def suspicious_indicators(text: str) -> list[str]:
+    """Generic indicator names found in a command or script line (also used by cloud_init)."""
     return [name for name, pattern in _INDICATORS if pattern.search(text)]
+
+
+_indicators = suspicious_indicators
 
 
 def _row(kind: str, source_path: str, line_number: int, raw: str, text: str, owner: str | None, extra: dict[str, Any]) -> dict[str, Any]:

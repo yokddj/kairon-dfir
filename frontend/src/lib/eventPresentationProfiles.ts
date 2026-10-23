@@ -226,6 +226,7 @@ const TIME_QUALITY_LABELS: Record<string, string> = {
   host_timezone: "Local time, converted with the host's timezone",
   inferred_year: "Year inferred (from boot records or the file date); read as UTC",
   inferred_year_host_timezone: "Year inferred (from boot records or the file date); local time converted with the host's timezone",
+  format_utc: "Read as UTC (the format writes UTC; this copy has no line to confirm it)",
   missing: "No time in the log",
 };
 
@@ -818,7 +819,7 @@ function simpleLinuxProfile(id: string, label: string, columns: PresentationColu
   };
 }
 
-/** dpkg/apt/yum/dnf history and the installed-package database. */
+/** Package manager history (dpkg, apt, yum, dnf, pacman, zypper) and installed-package databases. */
 const linuxPackagesProfile = simpleLinuxProfile(
   "linux_packages",
   "Packages",
@@ -829,6 +830,11 @@ const linuxPackagesProfile = simpleLinuxProfile(
     { key: "package_previous_version", label: "Previous Version", paths: ["linux.package_previous_version", "raw.previous_version"], defaultVisible: false },
     { key: "package_status", label: "Status", paths: ["linux.package_status", "raw.package_status"] },
     { key: "package_manager", label: "Manager", paths: ["linux.package_manager", "raw.package_manager"] },
+    { key: "package_user", label: "User", paths: ["linux.username", "raw.username"] },
+    { key: "package_command", label: "Command", paths: ["linux.command", "raw.command"] },
+    { key: "package_reason", label: "Reason", paths: ["linux.package_reason", "raw.package_reason"], defaultVisible: false },
+    { key: "package_repository", label: "Repository", paths: ["linux.package_repository", "raw.package_repository"], defaultVisible: false },
+    { key: "package_arch", label: "Arch", paths: ["linux.package_arch", "raw.package_arch"], defaultVisible: false },
   ],
   "Package",
   [
@@ -838,6 +844,51 @@ const linuxPackagesProfile = simpleLinuxProfile(
     { label: "Previous version", paths: ["linux.package_previous_version", "raw.previous_version"] },
     { label: "Status", paths: ["linux.package_status", "raw.package_status"] },
     { label: "Package manager", paths: ["linux.package_manager", "raw.package_manager"] },
+    { label: "Architecture", paths: ["linux.package_arch", "raw.package_arch"] },
+    { label: "Reason", paths: ["linux.package_reason", "raw.package_reason"] },
+    { label: "Repository", paths: ["linux.package_repository", "raw.package_repository"] },
+    { label: "Repository URL", paths: ["linux.repository_url", "raw.repository_url"] },
+    { label: "Vendor", paths: ["linux.package_vendor", "raw.package_vendor"] },
+    { label: "User", paths: ["linux.username", "raw.username"] },
+    { label: "UID", paths: ["linux.uid", "raw.uid"] },
+    { label: "Command", paths: ["linux.command", "raw.command"] },
+    { label: "Transaction", paths: ["linux.transaction_id", "raw.transaction_id"] },
+  ],
+  true,
+);
+
+/** cloud-init: logs, user-data / vendor-data, boot scripts, configuration and instance state. */
+const linuxCloudInitProfile = simpleLinuxProfile(
+  "linux_cloud_init",
+  "cloud-init",
+  [
+    { key: "cloud_init_kind", label: "Source", paths: ["linux.artifact_type"] },
+    { key: "cloud_init_action", label: "Action", paths: ["linux.event_action"] },
+    { key: "cloud_init_stage", label: "Stage", paths: ["linux.cloud_init_stage"], defaultVisible: false },
+    { key: "cloud_init_user", label: "User", paths: ["linux.username"] },
+    { key: "cloud_init_item", label: "Command / Entry", paths: ["linux.command", "linux.file_path", "message", "event.message"] },
+    { key: "cloud_init_indicators", label: "Flags", paths: ["linux.suspicious_indicators"] },
+    { key: "cloud_init_instance", label: "Instance", paths: ["linux.instance_id"], defaultVisible: false },
+  ],
+  "cloud-init",
+  [
+    { label: "Source", paths: ["linux.artifact_type"] },
+    { label: "Action", paths: ["linux.event_action"] },
+    { label: "Stage", paths: ["linux.cloud_init_stage"] },
+    { label: "Module", paths: ["linux.component", "linux.cloud_init_module"] },
+    { label: "Config key", paths: ["linux.config_key"] },
+    { label: "User-data part", paths: ["linux.user_data_part"] },
+    { label: "User", paths: ["linux.username"] },
+    { label: "Sudo", paths: ["linux.user_sudo"] },
+    { label: "SSH key", paths: ["linux.ssh_key_comment"] },
+    { label: "Command", paths: ["linux.command"] },
+    { label: "File", paths: ["linux.file_path"] },
+    { label: "URL", paths: ["linux.repository_url"] },
+    { label: "Package", paths: ["linux.package"] },
+    { label: "Datasource", paths: ["linux.datasource"] },
+    { label: "Instance", paths: ["linux.instance_id"] },
+    { label: "cloud-init version", paths: ["linux.cloud_init_version"] },
+    { label: "Flags for review", paths: ["linux.suspicious_indicators"] },
   ],
   true,
 );
@@ -1028,7 +1079,7 @@ const hostsFileProfile = simpleLinuxProfile(
 );
 
 // Tables whose columns already show everything the line says: the message is offered, not shown.
-const MESSAGE_ALREADY_IN_COLUMNS = new Set(["linux_web_access", "linux_packages", "linux_shell_history", "linux_identity", "linux_cron", "linux_ssh", "linux_sudoers", "linux_lastlog", "linux_host_facts", "linux_network", "hosts_file"]);
+const MESSAGE_ALREADY_IN_COLUMNS = new Set(["linux_web_access", "linux_packages", "linux_cloud_init", "linux_shell_history", "linux_identity", "linux_cron", "linux_ssh", "linux_sudoers", "linux_lastlog", "linux_host_facts", "linux_network", "hosts_file"]);
 
 const CONTAINER_KINDS: Record<string, string> = {
   container_config: "Container",
@@ -1256,6 +1307,9 @@ export function presentationProfileForItems(items: Record<string, unknown>[]): P
       break;
     case "linux_packages":
       profile = linuxPackagesProfile;
+      break;
+    case "linux_cloud_init":
+      profile = linuxCloudInitProfile;
       break;
     case "linux_shell_history":
       profile = linuxShellHistoryProfile;

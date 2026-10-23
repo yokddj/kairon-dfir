@@ -28,7 +28,7 @@ GENERIC = ("linux_generic_log", "generic_log", "linux_generic_raw")
         "var/log/mongodb/mongod.log",
         "var/log/redis/redis-server.log.2.gz",
         "var/log/glusterfs/glusterd.log.2.gz",
-        "var/log/cloud-init-output.log",
+        "var/log/unattended-upgrades/unattended-upgrades.log",
         "var/log/dmesg.0",
         "var/log/notes.txt",
         "var/log/app/run.log-20240101",
