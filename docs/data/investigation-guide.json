@@ -733,7 +733,7 @@
         },
         {
           "label": "cloud-init user-data, boot scripts and configuration",
-          "query": "artifact:linux_cloud_init AND NOT linux.artifact_type:cloud_init_log AND NOT linux.artifact_type:cloud_init_output"
+          "query": "artifact:linux_cloud_init AND NOT event.type:cloud_init_log AND NOT event.type:cloud_init_output"
         }
       ],
       "views": [
