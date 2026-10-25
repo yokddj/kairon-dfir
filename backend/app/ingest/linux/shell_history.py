@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _ZSH_EXTENDED_RE = re.compile(r"^:\s*(\d+):\d+;(.*)$")
+# bash writes "#<epoch seconds>" before each command when HISTTIMEFORMAT is set; bash itself reads a
+# comment line starting with a digit as the next command's time.
+_BASH_TIMESTAMP_RE = re.compile(r"^#(\d{1,12})$")
 
 _MONTH_MAP = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -100,6 +103,13 @@ def parse_bsd_shell_audit_log(content: str, *, source_path: str = "") -> list[di
     return results
 
 
+def _epoch_iso(value: str) -> str | None:
+    try:
+        return datetime.fromtimestamp(int(value), tz=timezone.utc).isoformat()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
 def _infer_username(source_path: str) -> str | None:
     path_str = str(source_path).replace("\\", "/")
     match = re.search(r"/home/([^/]+)/", path_str)
@@ -151,6 +161,10 @@ def parse_shell_history(
                     continue
                 command = stripped
         else:
+            bash_match = _BASH_TIMESTAMP_RE.match(stripped)
+            if bash_match:
+                current_timestamp = _epoch_iso(bash_match.group(1))
+                continue
             command = stripped
 
         if not command:
@@ -158,6 +172,10 @@ def parse_shell_history(
 
         truncated = command[:4000] if len(command) > 4000 else command
         raw_excerpt = truncated[:2000]
+        timestamp = current_timestamp
+        if shell_type == "bash":
+            # A bash time belongs to the one command after it.
+            current_timestamp = None
 
         results.append({
             "artifact_family": "linux_shell_history",
@@ -167,7 +185,7 @@ def parse_shell_history(
             "username": inferred_user,
             "shell_type": shell_type,
             "command": truncated,
-            "timestamp": current_timestamp,
+            "timestamp": timestamp,
             "message": truncated[:2000],
             "raw_excerpt": raw_excerpt,
         })

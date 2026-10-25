@@ -28,6 +28,7 @@ SUPPORTED_ARTIFACTS: dict[str, dict[str, str]] = {
     "apache": {"label": "Web server logs (Apache, nginx)", "family": "linux_apache"},
     "exim": {"label": "Exim logs", "family": "linux_exim"},
     "shell_history": {"label": "shell history", "family": "linux_shell_history"},
+    "app_history": {"label": "database client and REPL histories", "family": "linux_app_history"},
     "cron": {"label": "cron", "family": "linux_cron"},
     "systemd": {"label": "systemd", "family": "linux_systemd"},
     "ssh": {"label": "ssh", "family": "linux_ssh"},
@@ -103,6 +104,8 @@ def _artifact_key(family: str, artifact_type: str, path: str) -> str:
         return "persistence"
     if family == "linux_cloud_init":
         return "cloud_init"
+    if family == "linux_app_history":
+        return "app_history"
     if family == "linux_audit":
         return "audit_log"
     if family == "linux_apache":

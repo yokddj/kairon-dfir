@@ -797,7 +797,7 @@
       "category": "Execution",
       "icon": "terminal",
       "question": "What commands were typed?",
-      "why": "Shell history is often the most direct record of what an intruder did.",
+      "why": "Shell history is often the most direct record of what an intruder did; database client and REPL histories show what was typed inside mysql, psql or Python.",
       "searches": [
         {
           "label": "Downloads with wget",
@@ -806,6 +806,10 @@
         {
           "label": "curl, netcat, base64",
           "query": "artifact:linux_shell_history AND (command:*curl* OR command:*nc* OR command:*base64*)"
+        },
+        {
+          "label": "Typed into database clients and REPLs",
+          "query": "artifact:linux_app_history"
         }
       ],
       "views": [
@@ -815,6 +819,11 @@
           "artifact_type": "linux_shell_history"
         },
         {
+          "label": "Application History",
+          "target": "artifacts",
+          "artifact_type": "linux_app_history"
+        },
+        {
           "label": "Command History",
           "target": "command-history"
         }
@@ -822,7 +831,11 @@
       "sources": [
         {
           "name": ".bash_history / .zsh_history",
-          "detail": "commands per user, usually without times"
+          "detail": "commands per user, usually without times (bash records them when HISTTIMEFORMAT is set)"
+        },
+        {
+          "name": ".mysql_history / .mariadb_history / .psql_history / .sqlite_history / .python_history / .node_repl_history",
+          "detail": "what was typed into each client, in order, never with times"
         },
         {
           "name": "auditd",

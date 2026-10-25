@@ -911,6 +911,25 @@ const linuxShellHistoryProfile = simpleLinuxProfile(
   true,
 );
 
+/** ~/.mysql_history, ~/.psql_history, ~/.python_history and similar: what was typed into a client, in order (no times). */
+const linuxAppHistoryProfile = simpleLinuxProfile(
+  "linux_app_history",
+  "Application history",
+  [
+    { key: "order", label: "#", paths: ["linux.history_index"] },
+    { key: "user", label: "User", paths: ["linux.username"] },
+    { key: "client", label: "Client", paths: ["linux.app_client"] },
+    { key: "command", label: "Entry", paths: ["linux.command"] },
+  ],
+  "Entry",
+  [
+    { label: "Order", paths: ["linux.history_index"] },
+    { label: "User", paths: ["linux.username"] },
+    { label: "Client", paths: ["linux.app_client"] },
+    { label: "Entry", paths: ["linux.command"] },
+  ],
+);
+
 /** /etc/passwd, /etc/group, /etc/shadow (password status only; hashes are never stored). */
 const linuxIdentityProfile = simpleLinuxProfile(
   "linux_identity",
@@ -1079,7 +1098,7 @@ const hostsFileProfile = simpleLinuxProfile(
 );
 
 // Tables whose columns already show everything the line says: the message is offered, not shown.
-const MESSAGE_ALREADY_IN_COLUMNS = new Set(["linux_web_access", "linux_packages", "linux_cloud_init", "linux_shell_history", "linux_identity", "linux_cron", "linux_ssh", "linux_sudoers", "linux_lastlog", "linux_host_facts", "linux_network", "hosts_file"]);
+const MESSAGE_ALREADY_IN_COLUMNS = new Set(["linux_web_access", "linux_packages", "linux_cloud_init", "linux_shell_history", "linux_app_history", "linux_identity", "linux_cron", "linux_ssh", "linux_sudoers", "linux_lastlog", "linux_host_facts", "linux_network", "hosts_file"]);
 
 const CONTAINER_KINDS: Record<string, string> = {
   container_config: "Container",
@@ -1313,6 +1332,9 @@ export function presentationProfileForItems(items: Record<string, unknown>[]): P
       break;
     case "linux_shell_history":
       profile = linuxShellHistoryProfile;
+      break;
+    case "linux_app_history":
+      profile = linuxAppHistoryProfile;
       break;
     case "linux_identity":
       profile = linuxIdentityProfile;

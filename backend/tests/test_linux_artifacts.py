@@ -746,6 +746,18 @@ class TestShellHistoryParser:
             assert result["shell_type"] == "bash"
             assert result["artifact_type"] == "bash_history"
 
+    def test_bash_history_timestamps_from_histtimeformat(self):
+        """Written by bash 5.2 (Debian 12) with HISTTIMEFORMAT set: a "#<epoch>" line before each command."""
+        from app.ingest.linux.shell_history import parse_shell_history
+        content = "#1792919391\nexport HISTTIMEFORMAT='%F %T '\n#1792919392\nwhoami\nid -u\n# a comment\n"
+        results = parse_shell_history(content, source_path="/root/.bash_history")
+        assert [(r["command"], r["timestamp"]) for r in results] == [
+            ("export HISTTIMEFORMAT='%F %T '", "2026-10-25T09:09:51+00:00"),
+            ("whoami", "2026-10-25T09:09:52+00:00"),
+            ("id -u", None),
+            ("# a comment", None),
+        ]
+
     def test_zsh_history_extended_format(self, zsh_history_content):
         from app.ingest.linux.shell_history import parse_shell_history
         results = parse_shell_history(

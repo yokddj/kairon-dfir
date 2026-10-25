@@ -428,3 +428,90 @@ def test_a_linux_package_row_is_never_normalized_as_a_browser_record(source_path
     doc = normalize_row("case-1", "ev-1", "art-1", row, meta)
     assert doc["linux"]["artifact_family"] == "linux_packages" and doc["linux"]["package"] == "nano"
     assert doc["event"]["category"] != "web"
+
+
+# ------------------------------------------------------------------ Berkeley DB and NDB RPM databases
+# Layouts as written by rpm 4.11 (CentOS 7, Berkeley DB 5.3 hash) and rpm 4.14 (openSUSE Leap 15.6,
+# NDB); the readers were checked against those distributions' own databases, matching rpm -qa.
+
+def _bdb_packages(blobs, *, order="<", page_size=4096):
+    """A Berkeley DB hash file: metadata page, one hash page of key/off-page pairs, overflow chains."""
+    pages = [bytearray(page_size)]
+    struct.pack_into(order + "III", pages[0], 12, 0x061561, 9, page_size)
+    hash_page = bytearray(page_size)
+    pages.append(hash_page)
+    items, offsets, end = [], [], page_size
+    for number, blob in enumerate(blobs, start=1):
+        first = len(pages)
+        payload_size = page_size - 26
+        chunks = [blob[i:i + payload_size] for i in range(0, len(blob), payload_size)]
+        for index, chunk in enumerate(chunks):
+            page = bytearray(page_size)
+            following = first + index + 1 if index + 1 < len(chunks) else 0
+            struct.pack_into(order + "I", page, 16, following)
+            struct.pack_into(order + "H", page, 22, len(chunk))
+            page[25] = 7
+            page[26:26 + len(chunk)] = chunk
+            pages.append(page)
+        key = bytes([1]) + struct.pack(order + "I", number)
+        value = bytes([3, 0, 0, 0]) + struct.pack(order + "II", first, len(blob))
+        for item in (key, value):
+            end -= len(item)
+            hash_page[end:end + len(item)] = item
+            offsets.append(end)
+    struct.pack_into(order + "H", hash_page, 20, len(offsets))
+    hash_page[25] = 13
+    for index, offset in enumerate(offsets):
+        struct.pack_into(order + "H", hash_page, 26 + index * 2, offset)
+    return b"".join(pages)
+
+
+def _ndb_packages(blobs):
+    header = bytearray(4096)
+    header[0:16] = b"RpmP" + struct.pack("<III", 0, 1, 1)
+    body = bytearray()
+    for number, blob in enumerate(blobs, start=1):
+        block = (4096 + len(body)) // 16
+        record = b"BlbS" + struct.pack("<III", number, 0, len(blob)) + blob
+        record += b"\x00" * (-len(record) % 16)
+        struct.pack_into("<4sIII", header, 16 + number * 16, b"Slot", number, block, len(record) // 16)
+        body += record
+    return bytes(header + body)
+
+
+@pytest.mark.parametrize(
+    ("path", "artifact_type"),
+    [("var/lib/rpm/Packages", "rpmdb"), ("var/lib/rpm/Packages.db", "rpmdb"), ("usr/lib/sysimage/rpm/Packages.db", "rpmdb")],
+)
+def test_file_rpm_databases_are_routed(path, artifact_type):
+    assert looks_like_linux_artifact(f"volume-1/{path}") == ("linux_packages", artifact_type, "linux_packages_raw")
+
+
+@pytest.mark.parametrize("order", ["<", ">"])
+def test_berkeley_db_rpm_database(tmp_path, order):
+    big = _rpm_header({1000: "kernel", 1001: "3.10.0", 1002: "1160.el7", 1008: 1600000000, 1004: "x" * 9000})
+    small = _rpm_header({1000: "bash", 1001: "4.2.46", 1002: "34.el7", 1003: 0, 1008: 1700432743, 1022: "x86_64"})
+    path = tmp_path / "Packages"
+    path.write_bytes(_bdb_packages([big, small], order=order))
+    rows = parse_linux_artifact_file(path, parser="linux_packages_raw", artifact_type="linux_packages", source_path="var/lib/rpm/Packages")
+    assert [(row["package"], row["version"], row["timestamp"], row["line_number"]) for row in rows] == [
+        ("kernel", "3.10.0-1160.el7", "2020-09-13T12:26:40+00:00", 1),
+        ("bash", "4.2.46-34.el7", "2023-11-19T22:25:43+00:00", 2),
+    ]
+    assert rows[1]["package_arch"] == "x86_64"
+
+
+def test_ndb_rpm_database(tmp_path):
+    path = tmp_path / "Packages.db"
+    path.write_bytes(_ndb_packages([_rpm_header({1000: "zypper", 1001: "1.14.77", 1002: "150600.10.1", 1008: 1700432743})]))
+    rows = parse_package_database(path, source_path="usr/lib/sysimage/rpm/Packages.db")
+    assert [(row["package"], row["version"], row["artifact_type"]) for row in rows] == [("zypper", "1.14.77-150600.10.1", "rpmdb")]
+
+
+def test_damaged_file_rpm_databases_yield_no_rows(tmp_path):
+    path = tmp_path / "Packages"
+    path.write_bytes(b"\x00" * 8192)
+    assert parse_package_database(path, source_path="var/lib/rpm/Packages") == []
+    ndb = tmp_path / "Packages.db"
+    ndb.write_bytes(b"RpmP" + b"\xff" * 5000)
+    assert parse_package_database(ndb, source_path="var/lib/rpm/Packages.db") == []

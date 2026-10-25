@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from app.ingest.linux.app_history import app_history_client
 from app.ingest.linux.cloud_init import cloud_init_kind
 from app.ingest.linux.container_logs import container_kind
 from app.ingest.linux.database_logs import database_engine
@@ -223,6 +224,10 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
     persistence_type = persistence_kind(path_str)
     if persistence_type:
         return ("linux_persistence", persistence_type, "linux_persistence_raw")
+    # Database client and REPL histories (~/.mysql_history, ~/.python_history...), by exact name.
+    app_client = app_history_client(path_str)
+    if app_client:
+        return ("linux_app_history", f"{app_client}_history", "linux_app_history_raw")
     # Before the generic-log rules, which would otherwise take cloud-init.log as an unknown log.
     cloud_init_type = cloud_init_kind(path_str)
     if cloud_init_type:
@@ -273,8 +278,8 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
     package_database = package_database_kind(path_str)
     if package_database:
         # SQLite transaction histories and the RPM database (see app.ingest.linux.packages);
-        # checked before the generic-log rules, which skip every .sqlite file.
-        return ("linux_packages", "rpmdb" if package_database == "rpm" else f"{package_database}_history", "linux_packages_raw")
+        # checked before the generic-log rules, which skip every .sqlite file and binary file.
+        return ("linux_packages", "rpmdb" if package_database.startswith("rpm") else f"{package_database}_history", "linux_packages_raw")
     if _PACMAN_LOCAL_DESC_RE.search(path_str):
         return ("linux_packages", "pacman_local", "linux_packages_raw")
     if path_str.lower().endswith("var/lib/dpkg/status-old"):
