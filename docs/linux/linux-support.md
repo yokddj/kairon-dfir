@@ -57,6 +57,7 @@ Kairon attempts to detect:
 - Syslog/messages/kern logs
 - Audit logs
 - Shell history
+- Database client and REPL histories
 - Cron files
 - systemd service/timer units
 - SSH artifacts
@@ -314,7 +315,14 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 - Sources: `.bash_history`, `.zsh_history`, and BSD shell audit logs `bash.log`/`sh.log` (syslog lines of the form `user on tty shell_command="…"`, written by some FreeBSD-based appliances), plain, rotated or gzip-compressed.
 - Events: shell commands with inferred username. In the audit logs every line is kept: a recorded command becomes a command event, and any other line (a shell starting, an error) is indexed with its message so nothing in the file is lost.
 - Fields: `username`, `shell`, `command`, `terminal`, `source_file`, `line_number`
-- ZSH extended history timestamps are extracted; `.bash_history` without timestamps has no time context. Audit-log lines have the syslog time and their year is resolved like other syslog lines.
+- ZSH extended history timestamps are extracted, and so are bash's `#<epoch>` lines (written when `HISTTIMEFORMAT` is set); a `.bash_history` without them has no time context. Audit-log lines have the syslog time and their year is resolved like other syslog lines.
+
+### Linux Application History (`linux_app_history`)
+- Sources: database client and REPL histories in home directories: `.mysql_history` (MySQL), `.mariadb_history` (MariaDB 11), `.psql_history` (PostgreSQL), `.sqlite_history` (sqlite3), `.python_history` (Python), `.node_repl_history` (Node.js).
+- Events: one per entry, in the order it was typed (`history_index`, 1 = oldest; Node.js writes newest first and is put back in order), with the user from the home directory and the client (`app_client`). Also listed in Command History, with the client as launcher.
+- Formats: libedit files (`_HiStOrY_V2_`, `\040` escapes) are decoded for any client; psql's `\x01` and Python 3.13's `\r\n` multi-line entries are one entry each. MySQL and MariaDB keep each typed line and then the whole statement, so a multi-line statement appears both ways.
+- Kept apart from shell history: an SQL statement or REPL line is not a process launch, so Sigma's Linux `process_creation` rules are not run on it.
+- Limitations: none of these clients records when an entry was typed, so the rows are undated and stay out of the Timeline. Each format was checked against files written by the real client; `redis-cli`, `mongosh` and other clients are not read yet.
 
 ### Linux Cron (`linux_cron`)
 - Sources: `/etc/crontab`, `/etc/cron.d/*`, `/var/spool/cron/*`
@@ -351,10 +359,10 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
   - yum `/var/log/yum.log`; dnf 4 `/var/log/dnf.rpm.log` (package actions) and `/var/log/dnf.log` (its `Command:` lines only; the rest is repository and solver chatter); dnf 5 `/var/log/dnf5.log` (launch command lines and RPM install/uninstall callbacks).
   - pacman `/var/log/pacman.log` (actions, `Running '...'` command lines, scriptlet output); zypper `/var/log/zypp/history` (installs, removals, patches, command lines with the user, repositories added or removed; `#` lines with rpm output are left out).
 - Transaction databases (SQLite, read from a private copy with its `-wal`/`-journal`, never written): dnf 4 `/var/lib/dnf/history.sqlite`, dnf 5 `.../libdnf5/transaction_history.sqlite` and yum `/var/lib/yum/history/history-*.sqlite`. One row per package of each transaction with its exact time, command line, repository, reason and outcome, and the UID that ran it (resolved to a name with the evidence's `/etc/passwd`; an unset audit login UID is left empty).
-- Installed-package inventories: `/var/lib/dpkg/status` (one row per package, not per line; no install time), the RPM database `rpmdb.sqlite` (`/var/lib/rpm` or `/usr/lib/sysimage/rpm`, install time of every RPM from its header, including imported `gpg-pubkey` keys), pacman's local database `/var/lib/pacman/local/*/desc` (install date and whether it came in as a dependency), and apk `/lib/apk/db/installed`, `/etc/apk/world` (packages asked for by name) and `/etc/apk/repositories`.
+- Installed-package inventories: `/var/lib/dpkg/status` (one row per package, not per line; no install time), the RPM database in its three formats (`/var/lib/rpm` or `/usr/lib/sysimage/rpm`: `rpmdb.sqlite` on RHEL 9+ and Fedora 33+, the Berkeley DB `Packages` of RHEL/CentOS 7-8, Amazon Linux 2 and older Fedora/SUSE, and SUSE 15's NDB `Packages.db`; install time of every RPM from its header, including imported `gpg-pubkey` keys; checked against `rpm -qa` on CentOS 7, Amazon Linux 2 and openSUSE Leap 15.6), pacman's local database `/var/lib/pacman/local/*/desc` (install date and whether it came in as a dependency), and apk `/lib/apk/db/installed`, `/etc/apk/world` (packages asked for by name) and `/etc/apk/repositories`.
 - Fields: `timestamp`, `package_manager`, `action`, `package`, `version`, `previous_version`, `package_status`, `package_arch`, `package_repository`, `repository_url`, `package_reason`, `package_vendor`, `transaction_id`, `command`, `username`, `uid`.
 - Times: dpkg, apt, zypper and pacman before 5.2 write the host's local time with no zone (`assumed_utc`, then converted with the host's timezone when the evidence has one); yum.log writes no year either (`assumed_year_utc`). dnf, dnf5 and modern pacman logs carry a UTC offset and the databases epoch seconds, so those times are exact.
-- Limitations: the Berkeley DB (`Packages`) and NDB RPM databases of older RHEL and SUSE are not read (the transaction histories still are); dpkg and apk record no install time per package.
+- Limitations: only the packages present in the RPM database are read (records of removed packages left in free Berkeley DB pages are not recovered); dpkg and apk record no install time per package.
 
 ### Linux Network Config (`linux_network`)
 - Sources: `/etc/hosts`, `/etc/resolv.conf`, `/etc/network/interfaces`, netplan
@@ -393,6 +401,5 @@ Linux artifacts appear in:
 - Multi-line audit events are parsed per-line in v1.
 - Systemd timer expressions are not fully parsed.
 - ZSH history without extended timestamps has no time context.
-- Package databases: Berkeley DB and NDB RPM databases are not read (see `linux_packages`).
 
 Unsupported artifacts can still appear in inventory so analysts know they were present but not parsed.

@@ -3795,6 +3795,9 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["package_reason"] = row.get("package_reason") or ""
     linux_data["package_vendor"] = row.get("package_vendor") or ""
     linux_data["transaction_id"] = row.get("transaction_id", None)
+    # Client and REPL histories (see app.ingest.linux.app_history).
+    linux_data["app_client"] = row.get("app_client") or ""
+    linux_data["history_index"] = row.get("history_index", None)
     # cloud-init (see app.ingest.linux.cloud_init).
     linux_data["file_path"] = row.get("file_path") or ""
     linux_data["cloud_init_stage"] = row.get("cloud_init_stage") or ""
@@ -3970,6 +3973,11 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         if linux_data.get("http_status") is not None:
             doc["event"]["outcome"] = "failure" if int(linux_data["http_status"]) >= 400 else "success"
         doc["title"] = linux_data.get("message") or f"{(linux_data.get('web_server') or 'web server').capitalize()} log event"
+    elif family == "linux_app_history":
+        client = linux_data.get("app_client") or "client"
+        doc["event"]["type"] = linux_data.get("artifact_type") or "app_history"
+        doc["event"]["action"] = "history_entry"
+        doc["title"] = f"{client}: {str(linux_data.get('command') or '')[:160]}"
     elif family == "linux_cloud_init":
         kind = linux_data.get("artifact_type") or "cloud_init"
         doc["event"]["type"] = kind

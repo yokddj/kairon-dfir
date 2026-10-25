@@ -47,6 +47,7 @@ LINUX_PARSER_TARGETS: dict[str, LinuxParserTarget] = {
     "linux_exim_raw": LinuxParserTarget("linux_exim_raw", "exim", "parse_exim"),
     "linux_shell_raw": LinuxParserTarget("linux_shell_raw", "shell_history", "parse_shell_history"),
     "linux_shell_raw_bsd_audit": LinuxParserTarget("linux_shell_raw_bsd_audit", "shell_history", "parse_bsd_shell_audit_log"),
+    "linux_app_history_raw": LinuxParserTarget("linux_app_history_raw", "app_history", "parse_app_history"),
     "linux_cron_raw": LinuxParserTarget("linux_cron_raw", "cron", "parse_cron"),
     "linux_systemd_raw": LinuxParserTarget("linux_systemd_raw", "systemd", "parse_systemd"),
     "linux_ssh_raw": LinuxParserTarget("linux_ssh_raw", "ssh_artifacts", "parse_ssh_artifacts"),
@@ -129,7 +130,7 @@ def _parse_linux_artifact_file(path: Path, *, parser: str | None, artifact_type:
             if package_database_kind(str(source_path or path.name)):
                 passwd_content = _read_linux_passwd_for_artifact(path, source_path)
                 return parse_package_database(path, source_path=source_path, passwd_content=passwd_content)
-        if target.parser in {"linux_generic_raw", "linux_container_raw", "linux_database_raw", "linux_vpn_raw", "linux_packages_raw", "linux_cloud_init_raw"}:
+        if target.parser in {"linux_generic_raw", "linux_container_raw", "linux_database_raw", "linux_vpn_raw", "linux_packages_raw", "linux_cloud_init_raw", "linux_app_history_raw"}:
             # Capped, magic-byte-sniffed read (gzip/bzip2/xz): an unrecognised log can be
             # arbitrarily large or a compression bomb, unlike the fixed-name artifacts.
             from app.ingest.linux.generic_log import read_log_text

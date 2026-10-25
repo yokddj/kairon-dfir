@@ -1361,6 +1361,7 @@ def _finalize_artifact_status(*, parser_name: str | None, record_count: int, raw
         "linux_container_raw",
         "linux_database_raw",
         "linux_vpn_raw",
+        "linux_app_history_raw",
         "linux_audit_raw",
         "linux_apache_raw",
         "linux_exim_raw",
@@ -1839,6 +1840,13 @@ PARSER_CAPABILITIES: dict[str, dict] = {
         "shared_state": False,
     },
     "linux_database_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "linux_app_history_raw": {
         "parallel_safe": True,
         "resource_class": "cpu_io",
         "max_parallelism": 4,

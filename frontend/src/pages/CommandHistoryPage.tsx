@@ -58,7 +58,7 @@ function commandRowSourceEventId(item: CommandHistoryItem): string {
 }
 
 function processGraphUrl(caseId: string, item: CommandHistoryItem): string {
-  if (item.source_type === "linux_shell_history") return item.linked_search_url;
+  if (item.source_type === "linux_shell_history" || item.source_type === "linux_app_history") return item.linked_search_url;
   if (item.source_category === "Memory" || item.source_type === "memory") {
     const params = new URLSearchParams();
     params.set("tab", "graph");

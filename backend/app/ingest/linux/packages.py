@@ -17,8 +17,11 @@ Text logs (``parse_packages``):
   ``/etc/apk/repositories``.
 * pacman's local database: ``/var/lib/pacman/local/<package>/desc`` (install date and reason).
 
-SQLite databases (``parse_package_database``): the yum, dnf 4 and dnf 5 transaction histories (with
-the UID that ran each transaction) and the RPM database ``rpmdb.sqlite`` (install time of every RPM).
+Databases (``parse_package_database``): the yum, dnf 4 and dnf 5 transaction histories (SQLite, with
+the UID that ran each transaction) and the RPM database (install time of every RPM) in its three
+formats: ``rpmdb.sqlite`` (RHEL 9+, Fedora 33+), the Berkeley DB hash file ``/var/lib/rpm/Packages``
+(RHEL/CentOS 7-8, Amazon Linux 2, older Fedora and SUSE) and the NDB file ``Packages.db`` (SUSE
+15).
 
 dpkg, apt, zypper and old pacman logs write the host's local time with no zone; those rows are marked
 ``assumed_utc`` and converted with the host's zone by app.ingest.linux.local_time. yum.log writes no
@@ -765,6 +768,8 @@ _DATABASE_RE = re.compile(
     r"|(?P<dnf5>libdnf5/transaction_history\.sqlite)"
     r"|(?P<yum>var/lib/yum/history/history-[\d-]+\.sqlite)"
     r"|(?P<rpm>(?:var/lib/rpm|usr/lib/sysimage/rpm)/rpmdb\.sqlite)"
+    r"|(?P<rpm_bdb>(?:var/lib/rpm|usr/lib/sysimage/rpm)/Packages)"
+    r"|(?P<rpm_ndb>(?:var/lib/rpm|usr/lib/sysimage/rpm)/Packages\.db)"
     r")$",
     re.IGNORECASE,
 )
@@ -937,23 +942,136 @@ def parse_rpm_header(blob: bytes) -> dict[int, Any]:
     return values
 
 
+def _rpm_package_row(blob: bytes, *, artifact_type: str, source_path: str, line_number: int) -> dict | None:
+    header = parse_rpm_header(blob)
+    name = header.get(_RPMTAG_NAME)
+    if not name:
+        return None
+    version = f"{header.get(_RPMTAG_VERSION, '')}-{header.get(_RPMTAG_RELEASE, '')}".strip("-")
+    if header.get(_RPMTAG_EPOCH):
+        version = f"{header[_RPMTAG_EPOCH]}:{version}"
+    return _row(
+        artifact_type, "rpm", source_path,
+        line_number=line_number, timestamp=_epoch_time(header.get(_RPMTAG_INSTALLTIME)), action="installed",
+        package=name, version=version or None, package_arch=header.get(_RPMTAG_ARCH),
+        package_vendor=header.get(_RPMTAG_VENDOR),
+        message=f"{name} {version} installed" + (f": {header[_RPMTAG_SUMMARY]}" if header.get(_RPMTAG_SUMMARY) else ""),
+    )
+
+
 def _rpmdb(connection: sqlite3.Connection, *, source_path: str, names: dict[int, str]) -> list[dict]:
     results = []
     for row in connection.execute("SELECT hnum, blob FROM Packages ORDER BY hnum"):
-        header = parse_rpm_header(bytes(row["blob"]))
-        name = header.get(_RPMTAG_NAME)
-        if not name:
+        package = _rpm_package_row(bytes(row["blob"]), artifact_type="rpmdb", source_path=source_path, line_number=row["hnum"])
+        if package:
+            results.append(package)
+    return results
+
+
+# Berkeley DB hash file (/var/lib/rpm/Packages): page 0 is the metadata page, whose magic also gives
+# the byte order the host wrote it in. Every hash page holds key/value pairs; an RPM header is too big
+# to sit on the page, so its value is an off-page reference to a chain of overflow pages.
+_BDB_HASH_MAGIC = 0x061561
+_BDB_PAGE_HEADER = 26
+_BDB_HASH_PAGES = {2, 13}  # P_HASH_UNSORTED, P_HASH
+_BDB_OVERFLOW_PAGE = 7
+_BDB_OFFPAGE_ITEM = 3
+_RPM_MAX_HEADER = 64 * 1024 * 1024
+
+
+def _bdb_package_blobs(data: bytes) -> list[tuple[int, bytes]]:
+    if len(data) < 512:
+        return []
+    for order in ("<", ">"):
+        if struct.unpack_from(order + "I", data, 12)[0] == _BDB_HASH_MAGIC:
+            break
+    else:
+        return []
+    page_size = struct.unpack_from(order + "I", data, 20)[0]
+    if page_size < 512 or page_size > 65536 or page_size & (page_size - 1):
+        return []
+    page_count = len(data) // page_size
+    blobs: list[tuple[int, bytes]] = []
+    for page_number in range(1, page_count):
+        page = page_number * page_size
+        if data[page + 25] not in _BDB_HASH_PAGES:
             continue
-        version = f"{header.get(_RPMTAG_VERSION, '')}-{header.get(_RPMTAG_RELEASE, '')}".strip("-")
-        if header.get(_RPMTAG_EPOCH):
-            version = f"{header[_RPMTAG_EPOCH]}:{version}"
-        results.append(_row(
-            "rpmdb", "rpm", source_path,
-            line_number=row["hnum"], timestamp=_epoch_time(header.get(_RPMTAG_INSTALLTIME)), action="installed",
-            package=name, version=version or None, package_arch=header.get(_RPMTAG_ARCH),
-            package_vendor=header.get(_RPMTAG_VENDOR),
-            message=f"{name} {version} installed" + (f": {header[_RPMTAG_SUMMARY]}" if header.get(_RPMTAG_SUMMARY) else ""),
-        ))
+        entries = struct.unpack_from(order + "H", data, page + 20)[0]
+        # Items alternate key, value; the key of a Packages entry is the package's header number.
+        for index in range(0, entries - 1, 2):
+            key_offset, value_offset = struct.unpack_from(order + "HH", data, page + _BDB_PAGE_HEADER + index * 2)
+            if value_offset + 12 > page_size or data[page + value_offset] != _BDB_OFFPAGE_ITEM:
+                continue
+            next_page, length = struct.unpack_from(order + "II", data, page + value_offset + 4)
+            if length > _RPM_MAX_HEADER:
+                continue
+            blob = _bdb_overflow(data, order, page_size, page_count, next_page, length)
+            if blob is None:
+                continue
+            key = data[page + key_offset + 1:page + key_offset + 5] if key_offset + 5 <= page_size else b""
+            number = struct.unpack(order + "I", key)[0] if len(key) == 4 else len(blobs) + 1
+            blobs.append((number, blob))
+    return blobs
+
+
+def _bdb_overflow(data: bytes, order: str, page_size: int, page_count: int, page_number: int, length: int) -> bytes | None:
+    parts: list[bytes] = []
+    remaining = length
+    seen: set[int] = set()
+    while remaining > 0:
+        if not 0 < page_number < page_count or page_number in seen:
+            return None
+        seen.add(page_number)
+        page = page_number * page_size
+        if data[page + 25] != _BDB_OVERFLOW_PAGE:
+            return None
+        used = struct.unpack_from(order + "H", data, page + 22)[0]
+        if used > page_size - _BDB_PAGE_HEADER:
+            return None
+        parts.append(data[page + _BDB_PAGE_HEADER:page + _BDB_PAGE_HEADER + min(used, remaining)])
+        remaining -= used
+        page_number = struct.unpack_from(order + "I", data, page + 16)[0]
+    return b"".join(parts)
+
+
+# NDB (SUSE's Packages.db, little-endian): a header page whose slots point at 16-byte blocks, each
+# package a "BlbS" blob of one RPM header.
+_NDB_MAGIC = b"RpmP"
+_NDB_SLOT_MAGIC = b"Slot"
+_NDB_BLOB_MAGIC = b"BlbS"
+_NDB_BLOCK = 16
+_NDB_SLOTS_PER_PAGE = 4096 // 16
+
+
+def _ndb_package_blobs(data: bytes) -> list[tuple[int, bytes]]:
+    if len(data) < 4096 or data[:4] != _NDB_MAGIC:
+        return []
+    slot_pages = struct.unpack_from("<I", data, 12)[0]
+    slot_end = min(len(data), slot_pages * _NDB_SLOTS_PER_PAGE * 16)
+    blobs: list[tuple[int, bytes]] = []
+    # The header takes the first two slot positions.
+    for slot in range(32, slot_end - 15, 16):
+        magic, package_index, block_offset, block_count = struct.unpack_from("<4sIII", data, slot)
+        if magic != _NDB_SLOT_MAGIC or not package_index:
+            continue
+        start = block_offset * _NDB_BLOCK
+        if start + 16 > len(data) or data[start:start + 4] != _NDB_BLOB_MAGIC:
+            continue
+        blob_index, _checksum, blob_length = struct.unpack_from("<III", data, start + 4)
+        if blob_index != package_index or blob_length > min(_RPM_MAX_HEADER, block_count * _NDB_BLOCK):
+            continue
+        blobs.append((package_index, data[start + 16:start + 16 + blob_length]))
+    return blobs
+
+
+def _rpm_file_database(path: Path, *, kind: str, source_path: str) -> list[dict]:
+    data = path.read_bytes()
+    blobs = _bdb_package_blobs(data) if kind == "rpm_bdb" else _ndb_package_blobs(data)
+    results = []
+    for number, blob in sorted(blobs, key=lambda item: item[0]):
+        package = _rpm_package_row(blob, artifact_type="rpmdb", source_path=source_path, line_number=number)
+        if package:
+            results.append(package)
     return results
 
 
@@ -969,6 +1087,8 @@ def parse_package_database(path: Path, *, source_path: str = "", passwd_content:
     kind = package_database_kind(source_path or path.name) or package_database_kind(str(path))
     if kind is None:
         return []
+    if kind in {"rpm_bdb", "rpm_ndb"}:
+        return _rpm_file_database(path, kind=kind, source_path=source_path or str(PurePosixPath(path.name)))
     required_table, reader = _DATABASE_READERS[kind]
     with tempfile.TemporaryDirectory(prefix="kairon-pkgdb-") as workdir:
         connection = _open_copy(path, Path(workdir))

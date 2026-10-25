@@ -98,7 +98,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "domain": "execution",
         "title": "Command History",
         "route": "/cases/:caseId/l/execution/command-history",
-        "artifact_families": ["linux_shell_history"],
+        "artifact_families": ["linux_shell_history", "linux_app_history"],
         "nav": {"parent": "linux/execution", "order": 10},
         "overview": {"priority": 20, "featured": True, "quick_action": "Open Command History"},
         "search": {"priority": 20, "group": "Execution", "tags": ["commands", "shell"], "action_tags": ["command_history"], "default_filters": {"platform": "linux", "artifact_type": ["linux_shell_history"]}, "preferred_sort": "timestamp_desc", "filters": [], "presets": [{"title": "Linux shell commands", "state": {"platform": "linux", "artifact_type": ["linux_shell_history"]}}]},

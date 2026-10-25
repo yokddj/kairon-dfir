@@ -621,10 +621,29 @@
     "timeline_supported": true,
     "host_aware": true,
     "multi_host_supported": true,
-    "limitations": ["Bash history has no timestamps", "ZSH history without extended timestamps has no time context"],
+    "limitations": ["Bash history has times only when HISTTIMEFORMAT was set", "ZSH history without extended timestamps has no time context"],
     "test_coverage": "partial",
     "docs_url": "docs/linux/linux-support.md",
-    "notes": "Parses .bash_history and .zsh_history from user home directories. ZSH extended timestamps are extracted."
+    "notes": "Parses .bash_history and .zsh_history from user home directories. Bash HISTTIMEFORMAT and ZSH extended timestamps are extracted."
+  },
+  {
+    "family": "linux_app_history",
+    "display_name": "Linux Application History",
+    "status": "partial",
+    "input_formats": ["TXT"],
+    "recognized_filenames": [".mysql_history", ".mariadb_history", ".psql_history", ".sqlite_history", ".python_history", ".node_repl_history"],
+    "source_tools": ["manual ZIP/TAR collections", "Velociraptor"],
+    "evidence_types": ["linux_triage", "parsed_folder", "disk_image"],
+    "normalized_fields": ["username", "app_client", "command", "history_index", "source_file", "line_number"],
+    "views": ["Artifact Explorer", "Command History", "Search"],
+    "searchable": true,
+    "timeline_supported": false,
+    "host_aware": true,
+    "multi_host_supported": true,
+    "limitations": ["The clients record no times", "The user is inferred from the home directory"],
+    "test_coverage": "partial",
+    "docs_url": "docs/linux/linux-support.md",
+    "notes": "What was typed into database clients (mysql, mariadb, psql, sqlite3) and REPLs (Python, Node.js), in typing order; libedit, readline, psql and Python 3.13 multi-line formats decoded."
   },
   {
     "family": "linux_cron",
@@ -728,7 +747,9 @@
     "input_formats": [
       "LOG",
       "TXT",
-      "SQLITE"
+      "SQLITE",
+      "BERKELEY DB",
+      "NDB"
     ],
     "recognized_filenames": [
       "dpkg.log",
@@ -743,6 +764,8 @@
       "libdnf5/transaction_history.sqlite",
       "yum/history/history-*.sqlite",
       "rpmdb.sqlite",
+      "rpm/Packages",
+      "rpm/Packages.db",
       "pacman.log",
       "pacman/local/*/desc",
       "zypp/history",
@@ -784,7 +807,6 @@
     "host_aware": true,
     "multi_host_supported": true,
     "limitations": [
-      "Berkeley DB / NDB RPM databases are not read",
       "dpkg and apk keep no per-package install time"
     ],
     "test_coverage": "partial",

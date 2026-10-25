@@ -33,6 +33,7 @@ SOURCE_PRIORITY = {
     "service": 65,
     "prefetch": 70,
     "linux_shell_history": 80,
+    "linux_app_history": 85,
     "other": 90,
 }
 
@@ -237,6 +238,7 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> tuple[list[
         {"exists": {"field": "process.command_line"}},
         {"term": {"artifact.type": "prefetch"}},
         {"term": {"artifact.type": "linux_shell_history"}},
+        {"term": {"artifact.type": "linux_app_history"}},
     ]
     q = str(params.get("q") or "").strip()
     # When q is set, it MUST narrow the fetch itself, not just ride along as
@@ -322,7 +324,7 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
     artifact_type = str(_obj(event.get("artifact")).get("type") or "").lower()
     if artifact_type == "registry_event" or event_id in {12, 13, 14, 4657}:
         return []
-    if artifact_type == "linux_shell_history":
+    if artifact_type in {"linux_shell_history", "linux_app_history"}:
         return _linux_shell_history_command(case_id, event)
     process = _obj(event.get("process"))
     parent = _obj(process.get("parent")) or _obj(_obj(event.get("parent")).get("process"))
@@ -581,10 +583,14 @@ def _linux_shell_history_command(case_id: str, event: dict[str, Any]) -> list[di
     command = _clean_command_value(_first(linux.get("command"), _obj(event.get("event")).get("message"), event.get("message")))
     if not command:
         return []
-    source_type = "linux_shell_history"
+    # Shell histories, and the database client and REPL histories (launcher: the client).
+    source_type = "linux_app_history" if str(artifact.get("type") or "").lower() == "linux_app_history" else "linux_shell_history"
     event_doc_id = str(event.get("id") or event.get("search_doc_id") or event.get("opensearch_id") or event.get("event_id") or "")
     shell_artifact = str(linux.get("artifact_type") or artifact.get("name") or "").lower()
-    launcher = "zsh" if "zsh" in shell_artifact else "bash" if "bash" in shell_artifact else "shell"
+    if source_type == "linux_app_history":
+        launcher = str(linux.get("app_client") or "client")
+    else:
+        launcher = "zsh" if "zsh" in shell_artifact else "bash" if "bash" in shell_artifact else "shell"
     timestamp = event.get("@timestamp")
     risk_score, risk_reasons = _risk(command, {}, {})
     item = {
@@ -601,14 +607,14 @@ def _linux_shell_history_command(case_id: str, event: dict[str, Any]) -> list[di
         "shell": launcher,
         "launcher": launcher,
         "launcher_path": "",
-        "shell_family": "linux_shell_history",
+        "shell_family": source_type,
         "classification_confidence": "medium" if command else "low",
         "parent_shell": "",
         "parent_context": "",
         "source_type": source_type,
         "source_category": "Disk",
         "source_plugin_or_parser": str(artifact.get("parser") or source_type),
-        "artifact_type": str(artifact.get("type") or "linux_shell_history"),
+        "artifact_type": str(artifact.get("type") or source_type),
         "source_event_id": event_doc_id,
         "windows_event_id": "",
         "source_file": _first(event.get("source_file"), linux.get("source_file")),
@@ -619,7 +625,7 @@ def _linux_shell_history_command(case_id: str, event: dict[str, Any]) -> list[di
         "risk_score": risk_score,
         "risk_reasons": risk_reasons,
         "confidence": "medium" if timestamp else "low",
-        "dedupe_key": f"{case_id}|linux_shell_history|{event_doc_id}",
+        "dedupe_key": f"{case_id}|{source_type}|{event_doc_id}",
         "raw_payload": _first(linux.get("message"), _obj(event.get("event")).get("message"), event.get("raw_summary"), command),
         "registry_command": None,
         "supporting_events": [_supporting_event(event, source_type)],
@@ -652,8 +658,8 @@ def _source_type(event: dict[str, Any], event_id: int | None) -> str:
     if artifact_type == "service":
         # A service's configured command line (ImagePath), not a run of it.
         return "service"
-    if artifact_type == "linux_shell_history":
-        return "linux_shell_history"
+    if artifact_type in {"linux_shell_history", "linux_app_history"}:
+        return artifact_type
     return "other"
 
 

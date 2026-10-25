@@ -67,6 +67,7 @@ const ARTIFACT_REGISTRY: UiArtifactDefinition[] = [
   { id: "linux_apache", label: "Web Server Logs", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_exim", label: "Exim Logs", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_shell_history", label: "Shell History", platforms: ["linux"], view: "execution", platformShortcut: true },
+  { id: "linux_app_history", label: "Application History", platforms: ["linux"], view: "execution", platformShortcut: true },
   { id: "linux_ssh", label: "SSH", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_network", label: "Network Config", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_cron", label: "Cron", platforms: ["linux"], view: "persistence", platformShortcut: true },
