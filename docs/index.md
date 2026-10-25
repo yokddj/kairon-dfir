@@ -14,7 +14,7 @@ This documentation describes the real state of the platform. Partial capabilitie
 
 ## Status and Maps
 
-- [roadmap.md](roadmap.md): roadmap by Core Platform / Core DFIR Capability / Preview classification — source of truth for maturity.
+- [roadmap.md](roadmap.md): roadmap by Core Platform / Core DFIR Capability classification — source of truth for maturity.
 - [project_status.md](project_status.md): project maturity summary.
 - [feature_map.md](feature_map.md): capability map, status, routes, backends, and limitations.
 - [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md): current known limitations.
@@ -72,7 +72,7 @@ This documentation describes the real state of the platform. Partial capabilitie
 
 ## Memory
 
-- [memory/memory_analysis.md](memory/memory_analysis.md): status, plugins, and profiles of Memory Analysis (Preview).
+- [memory/memory_analysis.md](memory/memory_analysis.md): status, plugins, and profiles of Memory Analysis.
 - [memory/memory_operations.md](memory/memory_operations.md): enablement, optional worker, build, configuration, isolation, and troubleshooting.
 - [memory/memory_upload.md](memory/memory_upload.md): dedicated memory image upload — flow, limits, streaming, and maintenance CLI.
 - [memory/memory_process_model.md](memory/memory_process_model.md): canonical process entity/observation model.

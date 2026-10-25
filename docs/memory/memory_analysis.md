@@ -1,6 +1,6 @@
 # Memory Analysis
 
-Memory Analysis is a Preview Kairon capability for authorized RAM and memory evidence triage. See [roadmap.md](../roadmap.md) for its Preview classification and [architecture/optional-capability-boundary.md](../architecture/optional-capability-boundary.md) for what "optional" means technically for this capability.
+Memory Analysis is a Kairon capability for authorized RAM and memory evidence triage (Stable since 2026-10-25). See [roadmap.md](../roadmap.md) for its status and [architecture/optional-capability-boundary.md](../architecture/optional-capability-boundary.md) for what "optional" means technically for this capability.
 
 The primary upload workflow is now:
 

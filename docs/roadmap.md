@@ -1,6 +1,6 @@
 # Roadmap
 
-This roadmap is organized around the product/architecture classification produced by the Kairon architecture review: **Core Platform**, **Core DFIR Capability**, and **Core DFIR Capability — Preview**. Items are only listed as completed when the repository supports that claim (code, docs, or both); no completion is inferred beyond what's verifiable.
+This roadmap is organized around the product/architecture classification produced by the Kairon architecture review: **Core Platform** and **Core DFIR Capability** (Memory Analysis was a third class, **Core DFIR Capability — Preview**, until 2026-10-25). Items are only listed as completed when the repository supports that claim (code, docs, or both); no completion is inferred beyond what's verifiable.
 
 ## Core Platform
 
@@ -26,27 +26,19 @@ Expected, standard capabilities of a serious DFIR platform. Installed by default
 ### Linux
 
 - Completed (partial coverage): auth logs, syslog/messages, shell history, cron, systemd units, SSH artifacts, passwd/group/shadow presence, sudoers, package manager logs, network configuration, OS release/hostname/kernel/users.
-- Linux memory: analysed with Volatility 3 under the Memory Analysis preview (processes, network, open files, kernel modules, suspicious memory, bash history, page-cache files and a Linux Find Evil) once a symbol file for the exact kernel is provided (Volatility 3 ISF or Volatility 2 profile); see `docs/memory/linux_symbols.md`.
+- Linux memory: analysed with Volatility 3 under Memory Analysis (processes, network, open files, kernel modules, suspicious memory, bash history, page-cache files and a Linux Find Evil) once a symbol file for the exact kernel is provided (Volatility 3 ISF or Volatility 2 profile); see `docs/memory/linux_symbols.md`.
 - Linux's depth of coverage is not yet at parity with Windows within several supported artifact families.
+
+### Memory Analysis
+
+- **Status**: Stable (2026-10-25). Promoted from Experimental to Preview during the architecture review, and from Preview to Stable by maintainer decision: Memory is part of every Kairon deployment in use, so the Preview exit criteria written for running Kairon without it (a boundary checklist and a "Memory disabled" smoke test) were dropped rather than met.
+- **Deployment**: its own Docker Compose profiles (`memory`, `experimental`, `native-probe`, `memory-symbols`) and worker; a single top-level flag (`memory_enabled`) mounts its routers and startup hooks. Running without Memory remains possible but is not a tested configuration.
+- **Where its results go**: its own database tables, OpenSearch index and UI views, and case-wide the Timeline (Volatility's dated events and MemProcFS's timelines, the latter as events of the memory evidence in the case's events index), Search, Command History and Persistence; Findings can be created from Find Evil (per indicator or per process), process, network and suspicious-memory rows, and the case report has a Memory Analysis section (per image: system, analyses run, Find Evil triage with the processes marked suspicious or important). Detections and SIEM export do not read memory results.
+- **Not validated yet**: PSReadLine history and PowerShell 4104/4103 records recovered from memory (no available image contains them).
 
 ### Rules Engine
 
 - Completed: Detection Rules Engine v2 (Sigma + YARA operationalization), explicit analyst-triggered run model (not an always-on background scan).
-
-## Core DFIR Capability — Preview
-
-### Memory Analysis
-
-- **Status**: Preview. Deliberately promoted from Experimental Capability during the architecture review; not yet Stable.
-- **Deployment**: optional — its own Docker Compose profiles (`memory`, `experimental`, `native-probe`, `memory-symbols`) allow a deployment to run without it.
-- **Activation**: a single top-level flag (`memory_enabled`) is the sole authority for mounting Memory's routers and startup hooks; a small number of concrete backend dependency-direction violations remain, tracked in `docs/architecture/optional-capability-boundary.md`.
-- **Isolation today**: its own worker process and queue, its own database tables, its own OpenSearch index, its own UI surface (dedicated components, lazy-loaded routes). Since 2026-10 its results also reach case-wide views: the Timeline (Volatility's dated events and MemProcFS's timelines, the latter as events of the memory evidence in the case's events index), Search, Command History and Persistence; Findings can be created from Find Evil (per indicator or per process), process, network and suspicious-memory rows, and the case report has a Memory Analysis section (per image: system, analyses run, Find Evil triage with the processes marked suspicious or important). Detections and SIEM export do not read memory results.
-- **Not yet isolated**: an open, separately-investigated question about whether its ORM relationships to `Evidence` represent legitimate ownership metadata or a functional dependency.
-- **Preview → Stable exit criteria** (explicit, evaluated against evidence — not against continued investment):
-  1. Passes the Optional Capability Boundary verification checklist (`docs/architecture/optional-capability-boundary.md`, §13).
-  2. Backend boots and serves the full core investigation loop with Memory disabled, verified by an automated smoke test.
-  3. Frontend navigation/routes reflect backend-exposed capability state rather than always rendering Memory as present. **Met** (2026-10).
-  4. Volatility metadata/process-profile coverage and correctness bar agreed separately as a Memory-specific quality gate (out of scope for this architecture document).
 
 ## Authentication, roles, and multi-user (corrected)
 
@@ -59,5 +51,4 @@ Distinguishing what exists today from what is planned, since prior wording confl
 ## Reading criteria
 
 - `completed`: usable and functionally validated in the current repository.
-- `preview`: operational under an explicit optional/activation model, with defined, evidence-based promotion criteria to Stable.
 - Capabilities are not documented as closed if they exist only in design or in unvalidated branches.
