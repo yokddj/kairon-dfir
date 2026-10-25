@@ -377,7 +377,7 @@ Sigma rules with `logsource: product: linux` run against Linux events. What each
 
 ### Linux Memory Images (`linux_memory`)
 - Sources: `.raw`, `.mem`, `.lime` (and VMware `.vmem` with its `.vmsn`/`.vmss`) files detected as Linux
-- Analysed with Volatility 3 under the Memory Analysis preview: processes, network, open files, kernel modules, suspicious memory, bash history, page-cache files (with file retrieval) and a Linux Find Evil
+- Analysed with Volatility 3 under Memory Analysis: processes, network, open files, kernel modules, suspicious memory, bash history, page-cache files (with file retrieval) and a Linux Find Evil
 - Needs a symbol file for the exact kernel (Volatility 3 ISF or Volatility 2 profile); until one is provided the analysis is blocked and Kairon asks for it. See [Linux memory symbols](../memory/linux_symbols.md)
 
 ## Viewing Linux Artifacts

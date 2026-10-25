@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Origin**: Kairon architecture review (Core Platform / Core DFIR Capability classification), covering backend and frontend organization, scalability, and roadmap alignment.
-- **Applies to**: Memory Analysis (Core DFIR Capability — Preview) today; any future optional capability (including AI) from its first commit.
+- **Applies to**: Memory Analysis (Core DFIR Capability, Stable since 2026-10-25; this checklist is no longer a promotion gate for it); any future optional capability (including AI) from its first commit.
 
 ## 1. Purpose
 
@@ -29,7 +29,7 @@ Core Platform
     ↓
 Capability contracts / registries
     ↓
-Windows · Linux · Rules Engine · Memory (Preview) · future capabilities
+Windows · Linux · Rules Engine · Memory · future capabilities
 ```
 
 Capabilities may depend on the Core Platform (its registries, its database primitives, its session/config layer). The Core Platform must never depend on a specific capability. This direction is not new — it is the same rule established for Windows and Linux via the Artifact/Platform Registry, extended explicitly to optional capabilities.
