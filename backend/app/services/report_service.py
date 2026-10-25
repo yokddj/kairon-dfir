@@ -69,6 +69,7 @@ REPORT_TEMPLATES = [
             "email",
             "motw",
             "srum",
+            "memory",
             "iocs",
             "persistence",
             "network_cloud_usb",
@@ -263,6 +264,7 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
     motw_report = build_motw_report_context(db, case_id, filters)
     incident_timeline_report = _build_incident_timeline_report_context(db, case_id, filters)
     persistence_report = build_startup_persistence_report_context(db, case_id, filters)
+    memory_report = _build_memory_report_context(db, case_id, filters) if sections_enabled.get("memory", True) else []
     findings_by_id = {finding.id: finding for finding in findings}
     selected_finding_ids = list(report.selected_finding_ids or [])
     selected_key_event_ids = list(report.selected_key_event_ids or [])
@@ -411,6 +413,9 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
                 "warnings": srum_report["warnings"] or ([] if srum_report["events"] else ["No SRUM records matched current filters."]),
             }
         )
+    if memory_report:
+        # Only when the case has memory images: no empty section for disk-only cases.
+        sections.append({"id": "memory", "title": "Memory Analysis", "markdown": _render_memory_section(memory_report), "warnings": []})
     if sections_enabled.get("iocs", True):
         sections.append({"id": "iocs", "title": "IOCs", "markdown": _render_iocs(ioc_rows), "warnings": []})
     if sections_enabled.get("persistence", True):
@@ -2100,6 +2105,100 @@ def _render_scope(case: Case, context: dict[str, Any], report: CaseReport) -> st
         f"- Data sources: `{', '.join(sorted({str(item['storage_mode']) for item in context['evidences']})) or 'unknown'}`",
     ]
     return "\n".join(lines)
+
+
+_MEMORY_ANALYSIS_TITLES = {
+    "find_evil": "Find Evil",
+    "processes": "Processes",
+    "shell_history": "Shell history",
+    "modules": "Process modules",
+    "handles": "Process handles",
+    "kernel_modules": "Kernel modules",
+    "drivers": "Drivers",
+    "suspicious_regions": "Suspicious memory regions",
+    "network": "Network connections",
+    "files": "Files",
+}
+_MEMORY_STATE_LABELS = {
+    "analyzed_with_results": "completed",
+    "analyzed_empty": "completed, nothing found",
+    "partial": "partly completed",
+    "failed": "failed",
+    "latest_attempt_failed": "latest run failed",
+    "running": "running",
+    "queued": "queued",
+}
+
+
+def _build_memory_report_context(db: Session, case_id: str, filters: dict[str, Any]) -> list[dict[str, Any]]:
+    if not settings.memory_enabled:
+        return []
+    from app.services.memory.report_section import build_memory_report_context
+
+    host = str(filters.get("host") or "").strip()
+    expanded_hosts = _expanded_report_hosts(db, case_id, host) if host else set()
+    return build_memory_report_context(
+        db,
+        case_id,
+        evidence_id=str(filters.get("evidence_id") or "").strip() or None,
+        host_matches=(lambda candidate: _host_matches_report_filter(candidate, expanded_hosts)) if expanded_hosts else None,
+    )
+
+
+def _clip(value: str, limit: int) -> str:
+    return value if len(value) <= limit else f"{value[:limit - 1]}…"
+
+
+def _render_memory_section(entries: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for entry in entries:
+        parts.append(f"### {_escape_md(str(entry.get('filename') or entry['evidence_id']))}")
+        details = [["Field", "Value"], ["Host", str(entry.get("host") or "unknown")]]
+        if entry.get("system"):
+            details.append(["System", " ".join(str(part) for part in (entry["system"], f"({entry['architecture']})" if entry.get("architecture") else "") if part)])
+        if entry.get("captured_at"):
+            details.append(["Captured at (system time in the image)", str(entry["captured_at"])])
+        if entry.get("format"):
+            details.append(["Format", str(entry["format"])])
+        if entry.get("size_bytes"):
+            details.append(["Size", f"{int(entry['size_bytes']):,} bytes"])
+        details.append(["Findings linked to this image", str(entry.get("findings_count") or 0)])
+        parts.append(_markdown_table(details))
+        analyses = [item for item in entry.get("analyses") or [] if item.get("family") not in {"system_info", "raw_observations"}]
+        if analyses:
+            rows = [["Analysis", "Result", "Items"]]
+            for item in analyses:
+                rows.append([
+                    _MEMORY_ANALYSIS_TITLES.get(str(item.get("family")), item["title"]),
+                    _MEMORY_STATE_LABELS.get(str(item["state"]), str(item["state"]).replace("_", " ")),
+                    str(item.get("count") or 0),
+                ])
+            parts.append(_markdown_table(rows))
+        else:
+            parts.append("No analysis has been run on this image.")
+        find_evil = entry.get("find_evil")
+        if find_evil and find_evil.get("available"):
+            counts = find_evil.get("indicator_counts") or {}
+            parts.append(
+                f"**Find Evil**: {sum(counts.values())} indicators in {find_evil['process_count']} processes "
+                f"({counts.get('high', 0)} high, {counts.get('medium', 0)} medium, {counts.get('low', 0)} low priority). "
+                f"Triage: {len(find_evil['marked_processes'])} marked suspicious or important, {find_evil['settled_count']} reviewed or not relevant, "
+                f"{find_evil['unreviewed_count']} not reviewed. Indicators are leads for review, not verdicts."
+            )
+            if find_evil["marked_processes"]:
+                rows = [["Process", "PID", "Mark", "Top priority", "Indicators", "Types", "Note"]]
+                for process in find_evil["marked_processes"]:
+                    rows.append([
+                        str(process.get("process") or "not tied to a process"),
+                        "-" if process.get("pid") is None else str(process["pid"]),
+                        str(process["mark"]),
+                        str(process.get("top_priority") or "-"),
+                        str(process.get("indicator_count") or 0),
+                        _clip(", ".join(process.get("indicator_types") or []), 160),
+                        _clip(str(process.get("note") or "-"), 200),
+                    ])
+                parts.append(_markdown_table(rows))
+    return "\n\n".join(parts)
 
 
 def _render_evidence(context: dict[str, Any]) -> str:

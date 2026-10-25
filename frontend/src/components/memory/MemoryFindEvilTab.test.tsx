@@ -53,11 +53,11 @@ function activeResult(overrides: Partial<MemoryActiveResult> = {}): MemoryActive
   };
 }
 
-function renderTab() {
+function renderTab(onCreateFinding?: (kind: string, row: Record<string, unknown>) => void) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryFindEvilTab caseId="case-1" evidenceId="ev-1" runOptions={null} selectedRunId={null} onSelectRunId={() => {}} />
+      <MemoryFindEvilTab caseId="case-1" evidenceId="ev-1" runOptions={null} selectedRunId={null} onSelectRunId={() => {}} onCreateFinding={onCreateFinding} />
     </QueryClientProvider>,
   );
 }
@@ -199,5 +199,26 @@ describe("MemoryFindEvilTab", () => {
       await waitFor(() => expect(screen.getAllByTestId("findevil-process-row")).toHaveLength(1));
       expect(screen.getByTestId("findevil-process-row")).toHaveTextContent("WmiPrvSE.exe");
     });
+  });
+
+  it("creates a finding from an indicator and from a process", async () => {
+    getMemoryActiveResultMock.mockResolvedValue(activeResult({ analysis_state: "analyzed_with_results", total: ROWS.length, items: ROWS }));
+    getMemoryFindEvilProcessesMock.mockResolvedValue({ case_id: "case-1", evidence_id: "ev-1", active_run: { id: "run-1" }, analysis_state: "analyzed_with_results", marking_artifact_type: "memory_findevil_process", processes: [triageProcess(52, "WmiPrvSE.exe", { high: 1 })] });
+    const onCreateFinding = vi.fn();
+    renderTab(onCreateFinding);
+    fireEvent.click(await screen.findByTestId("findevil-process-create-finding"));
+    expect(onCreateFinding).toHaveBeenCalledWith("find_evil_process", expect.objectContaining({ pid: 52, process_name: "WmiPrvSE.exe" }));
+    fireEvent.click(screen.getByTestId("findevil-view-all"));
+    const buttons = await screen.findAllByTestId("findevil-create-finding");
+    fireEvent.click(buttons[1]);
+    expect(onCreateFinding).toHaveBeenLastCalledWith("find_evil_indicator", expect.objectContaining({ document_id: "d2", indicator_type: "PROC_NOLINK" }));
+  });
+
+  it("offers no finding button without a handler", async () => {
+    getMemoryActiveResultMock.mockResolvedValue(activeResult({ analysis_state: "analyzed_with_results", total: ROWS.length, items: ROWS }));
+    renderTab();
+    fireEvent.click(await screen.findByTestId("findevil-view-all"));
+    await screen.findAllByTestId("findevil-row");
+    expect(screen.queryByTestId("findevil-create-finding")).toBeNull();
   });
 });

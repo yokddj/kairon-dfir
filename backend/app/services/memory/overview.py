@@ -88,7 +88,7 @@ def _message_for_mode(*, enabled: bool, mode: str, has_results: bool) -> str:
         return "Authorized memory evidence is present, but no external memory analysis has been executed in this build."
     if mode == "memory_only":
         return "This case currently has isolated memory evidence results only."
-    return "This case has both disk events and memory evidence. Memory results remain isolated from Search, Timeline, Detections, Findings, Reports, and SIEM in this build."
+    return "This case has both disk events and memory evidence. Memory results reach the case Timeline, Search, Command History, Persistence, Findings and the report; Detections and SIEM export do not read them."
 
 
 def get_case_memory_overview(db: Session, case_id: str, *, host_id: str | None = None, host: str | None = None) -> dict:

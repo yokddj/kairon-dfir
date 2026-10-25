@@ -18,6 +18,7 @@ const SECTION_LABELS: Record<string, string> = {
   defender: "Defender",
   motw: "MOTW / Downloaded Files",
   srum: "SRUM",
+  memory: "Memory Analysis",
   iocs: "IOCs",
   persistence: "Persistence",
   network_cloud_usb: "Network / Cloud / USB",

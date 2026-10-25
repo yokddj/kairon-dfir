@@ -133,3 +133,65 @@ export function buildFindingPrefillFromArtifact(rowInput: unknown, context: Pref
     source_snapshot_json: snapshot,
   };
 }
+
+export type MemoryFindingKind = "find_evil_indicator" | "find_evil_process" | "network" | "suspicious_memory";
+
+const MEMORY_PRIORITY_SEVERITY: Record<string, FindingSeverity> = { high: "high", medium: "medium", low: "low" };
+
+function memoryProcessLabel(row: Record<string, unknown>): string {
+  const name = asString(row.process_name);
+  const pid = asString(row.pid);
+  if (!name && !pid) return "no process";
+  return `${name || "unknown process"}${pid ? ` (PID ${pid})` : ""}`;
+}
+
+/**
+ * A finding from a memory view (Find Evil, Network, Suspicious memory): the
+ * title names what was seen and in which process, the severity follows Find
+ * Evil's review priority, and the snapshot keeps the row as it was shown.
+ */
+export function buildMemoryFindingPrefill(kind: MemoryFindingKind, rowInput: unknown, context: Omit<PrefillContext, "artifactFamily" | "artifactType" | "label">): FindingPrefill {
+  const row = asRecord(rowInput);
+  const process = memoryProcessLabel(row);
+  let title: string;
+  let summary: string;
+  let label: string;
+  let severity: FindingSeverity = "medium";
+  if (kind === "find_evil_indicator") {
+    const type = asString(row.indicator_type) || "indicator";
+    title = `Memory: ${type} in ${process}`;
+    summary = [asString(row.explanation), asString(row.description) || asString(row.address)].filter(Boolean).join(" — ") || type;
+    label = "Find Evil indicator";
+    severity = MEMORY_PRIORITY_SEVERITY[asString(row.review_priority)] ?? "medium";
+  } else if (kind === "find_evil_process") {
+    const types = (Array.isArray(row.indicator_types) ? row.indicator_types : []).map((item) => asString(asRecord(item).value)).filter(Boolean);
+    title = `Memory: suspicious process ${process}`;
+    summary = `${asString(row.indicator_count) || "0"} Find Evil indicators${types.length ? `: ${types.join(", ")}` : ""}`;
+    label = "Find Evil process";
+    severity = MEMORY_PRIORITY_SEVERITY[asString(row.top_priority)] ?? "medium";
+  } else if (kind === "network") {
+    const remote = [asString(row.remote_address), asString(row.remote_port)].filter(Boolean).join(":");
+    const local = [asString(row.local_address), asString(row.local_port)].filter(Boolean).join(":");
+    title = `Memory: connection ${remote ? `to ${remote}` : `on ${local}`} from ${process}`;
+    summary = [asString(row.protocol), local && `local ${local}`, remote && `remote ${remote}`, asString(row.state)].filter(Boolean).join(" ");
+    label = "Memory network connection";
+  } else {
+    title = `Memory: suspicious memory region in ${process}`;
+    summary = [`${asString(row.start_address)}-${asString(row.end_address)}`, asString(row.protection), asString(row.tag)].filter((part) => part && part !== "-").join(" ");
+    label = "Suspicious memory region";
+  }
+  const base = buildFindingPrefillFromArtifact(
+    { ...row, summary, ip: asString(row.remote_address) || undefined, plugin: asString(row.source_plugin) || (Array.isArray(row.sources) ? row.sources.join(", ") : undefined) },
+    { ...context, artifactFamily: "memory", artifactType: kind, label },
+  );
+  return {
+    ...base,
+    title,
+    severity,
+    related_ips: kind === "network" && asString(row.remote_address) ? [asString(row.remote_address)] : [],
+    // A memory row is neither a Search event nor an ingested artifact: nothing to link by id.
+    linked_event_id: null,
+    linked_artifact_id: null,
+    event_ids: [],
+  };
+}
