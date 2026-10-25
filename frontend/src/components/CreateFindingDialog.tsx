@@ -66,6 +66,7 @@ export default function CreateFindingDialog({
         event_ids: effectiveEventIds.length ? effectiveEventIds : prefill?.event_ids ?? [],
         detection_ids: effectiveDetectionIds,
         related_hosts: prefill?.related_hosts ?? [],
+        related_ips: prefill?.related_ips ?? [],
         linked_evidence_id: prefill?.linked_evidence_id || undefined,
         linked_host_id: prefill?.linked_host_id || undefined,
         linked_artifact_id: prefill?.linked_artifact_id || undefined,

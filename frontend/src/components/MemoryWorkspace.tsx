@@ -23,7 +23,7 @@ import { MemoryRawTab } from "./memory/MemoryRawTab";
 import { MemoryFilesTab } from "./memory/MemoryFilesTab";
 import { MemoryAnalyzeAction } from "./memory/MemoryAnalyzeAction";
 import CreateFindingDialog from "./CreateFindingDialog";
-import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
+import { buildFindingPrefillFromArtifact, buildMemoryFindingPrefill, type FindingPrefill, type MemoryFindingKind } from "../lib/findingPrefill";
 
 type RunProfile = "processes_basic" | "processes_extended" | "metadata_only";
 
@@ -81,6 +81,8 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [processMode, setProcessMode] = useState<"auto" | "basic" | "extended">("auto");
   const [findingPrefill, setFindingPrefill] = useState<FindingPrefill | null>(null);
+  const createMemoryFinding = (kind: MemoryFindingKind, row: Record<string, unknown>) =>
+    setFindingPrefill(buildMemoryFindingPrefill(kind, row, { caseId, evidenceId: effectiveEvidenceId, hosts: caseContext?.hosts ?? [], sourceView: "memory", sourceRoute: window.location.pathname + window.location.search }));
 
   useEffect(() => {
     setActiveCaseId(caseId);
@@ -401,6 +403,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
             runOptions={runOptionsQuery.data ?? null}
             selectedRunId={selectedRunId}
             onSelectRunId={setSelectedRunId}
+            onCreateFinding={createMemoryFinding}
           />
         ) : null}
 
@@ -446,6 +449,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
             onJumpToTree={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
             evidenceId={effectiveEvidenceId}
             initialSubView="network"
+            onCreateFinding={createMemoryFinding}
           />
         ) : null}
         {tab === "modules" ? (
@@ -516,6 +520,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
             onJumpToTree={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
             evidenceId={effectiveEvidenceId}
             initialSubView="suspicious"
+            onCreateFinding={createMemoryFinding}
           />
         ) : null}
         {tab === "vads" ? (
@@ -545,6 +550,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
             onJumpToTree={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
             evidenceId={effectiveEvidenceId}
             initialSubView="network"
+            onCreateFinding={createMemoryFinding}
           />
         ) : null}
 

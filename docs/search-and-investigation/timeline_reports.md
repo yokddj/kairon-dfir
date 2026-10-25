@@ -85,6 +85,7 @@ Lets you select:
 - suspicious command history
 - execution story summaries
 - Defender detections/configuration events where selected
+- Memory Analysis (only when the case has memory images): per image the system and capture time, the analyses run with their item counts, and the Find Evil triage with the processes the analyst marked suspicious or important
 - canonical hosts and relevant aliases
 - deduplicated IOCs
 - notes and recommendations

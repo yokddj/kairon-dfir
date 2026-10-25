@@ -58,9 +58,9 @@ When execution is explicitly enabled by an administrator, Kairon may run Volatil
 - `empty`: no disk events and no memory evidence.
 - `disk_only`: existing disk artifact workflow only.
 - `memory_only`: memory evidence registered in the isolated memory workspace.
-- `hybrid`: disk events and memory evidence both exist, but memory results remain isolated.
+- `hybrid`: disk events and memory evidence both exist.
 
-Memory evidence and memory results do not appear in existing Search, Timeline, Artifact Views, Detections, Findings, Reports, SIEM, Command History, Persistence, or Execution Stories.
+Memory results reach the case Timeline, Search, Command History and Persistence. The analyst can create a finding from a Find Evil indicator or process, a process, a network connection or a suspicious memory region (**Create finding**): the title names what was seen and in which process, the severity follows Find Evil's review priority, and the row is kept as the finding's source snapshot. The case report has a **Memory Analysis** section, one entry per image: the system it came from and the system time when it was captured, what was analysed and how many items each analysis found, and the Find Evil triage (indicators by priority, the processes marked suspicious or important with their note, how many are still to review). Detections, SIEM export, Artifact Views and Execution Stories do not read memory results.
 
 ## Backend readiness checks
 
@@ -124,7 +124,7 @@ Each indicator has a **review priority** and a one-line explanation:
 - **Medium**: debug privilege, unexpected account, invalid page table, patched loader data, spoofed headers, odd drivers, threads and high-entropy memory.
 - **Low**: writable-executable or executable private memory and patched module pages, which browsers, JIT runtimes and Windows itself also produce. On a typical workstation most indicators are low.
 
-The list is sorted by priority and can be filtered by priority, type and PID. Like the suspicious-memory profile, these are leads for review, not verdicts: Kairon does not mark anything as malware or create findings from them.
+The list is sorted by priority and can be filtered by priority, type and PID. Like the suspicious-memory profile, these are leads for review, not verdicts: Kairon does not mark anything as malware or create findings from them on its own; the analyst can, with **Create finding** on an indicator or a process.
 
 How it runs: Kairon's checks run first (a few minutes on a 4 GB image); a source plugin that fails only removes its own checks. MemProcFS's library is then loaded in a separate process with the same containment as Volatility (own session, timeout, cancellation, output cap), with the Microsoft symbol server disabled, so it works offline. It needs 64-bit Windows 10 or later; on other images it is reported as unsupported for that build. On a 4 GB Windows 11 image it takes about a minute. MemProcFS 5.19's `vmm.so` is rebuilt in the image from the release's source with the patches in `docker/memory-worker/patches/`: on Windows 11+ images its DNS cache lookup could loop forever (an inner loop reused the outer loop's index), which kept the forensic scan at 90 % and FindEvil from finishing (seen on a Windows 11 24H2 crash dump, which now finishes in about 30 seconds). If a scan still stops making progress, a watchdog stops it after 10 minutes, it is reported as failed with that reason, and the tab shows Kairon's indicators with a note that part of Find Evil did not finish.
 
@@ -223,7 +223,7 @@ Each profile plugin executes independently. If one optional plugin fails or is u
 
 Plugin availability states are `available`, `unsupported_by_installed_volatility`, `unsupported_for_platform`, and `disabled_by_configuration`. The catalogue shows plugin counts and unavailable-plugin reasons. Missing optional plugins do not make the whole memory backend unavailable.
 
-Suspicious memory output is neutral forensic telemetry. `windows.malfind` and `windows.vadinfo` rows are described as suspicious memory regions reported by Volatility; Kairon does not automatically classify a region as malware and does not create Findings from these rows.
+Suspicious memory output is neutral forensic telemetry. `windows.malfind` and `windows.vadinfo` rows are described as suspicious memory regions reported by Volatility; Kairon does not automatically classify a region as malware and does not create Findings from these rows on its own (the analyst can, with **Create finding**).
 
 Process differences are presented neutrally. A `psscan`-only process is shown as “Not present in pslist result” and “Requires analyst review”; Kairon does not label it as malware, rootkit activity, or compromise.
 

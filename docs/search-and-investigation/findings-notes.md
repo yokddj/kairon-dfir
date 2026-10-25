@@ -44,7 +44,7 @@ Supported entry points:
 
 - Search result rows and search detail actions.
 - Artifact Explorer focused rows, including browser/downloads, PowerShell, Windows Events, Registry, Services, Scheduled Tasks, Defender, Network, Prefetch, Autoruns, and generic artifact rows.
-- Memory process rows and memory-derived artifact views where row context is available.
+- Memory: process rows, Find Evil indicators and processes, network connections and suspicious memory regions. The title names what was seen and in which process, Find Evil's review priority sets the severity, and a network finding keeps the remote address as a related IP.
 - Evidence Detail keeps `Create finding for this evidence`, which links the whole evidence item rather than a specific event or artifact row.
 
 Finding linked to evidence means the note applies to the whole uploaded collection or memory image. Finding linked to an artifact/event means it preserves the exact row or event that triggered the analyst decision.

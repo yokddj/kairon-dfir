@@ -24,6 +24,7 @@ import { HostFilter } from "../HostFilter";
 import { MemoryPaginationControls } from "./MemoryPaginationControls";
 import { FacetSelect } from "./FacetSelect";
 import { MemoryStackView } from "./MemoryStackView";
+import type { MemoryFindingKind } from "../../lib/findingPrefill";
 
 type Props = {
   caseId: string;
@@ -36,7 +37,16 @@ type Props = {
   onJumpToTree: (entityId: string) => void;
   evidenceId?: string;
   initialSubView?: SubView;
+  onCreateFinding?: (kind: MemoryFindingKind, row: Record<string, unknown>) => void;
 };
+
+function CreateFindingButton({ onClick, testId }: { onClick: () => void; testId: string }) {
+  return (
+    <button type="button" onClick={onClick} className="mt-1 whitespace-nowrap rounded-lg border border-line px-2 py-0.5 text-[11px] text-muted hover:text-accent" data-testid={testId}>
+      Create finding
+    </button>
+  );
+}
 
 type SubView =
   | "network"
@@ -291,12 +301,13 @@ function SubviewEmptyState({ testId, children }: { testId: string; children: Rea
   );
 }
 
-function NetworkTable({ items, onModal, onOpen, onGraph, onTree }: {
+function NetworkTable({ items, onModal, onOpen, onGraph, onTree, onCreateFinding }: {
   items: Array<Record<string, unknown> & { document_id: string }>;
   onModal: (id: string) => void;
   onOpen: (id: string) => void;
   onGraph: (id: string) => void;
   onTree: (id: string) => void;
+  onCreateFinding?: (row: Record<string, unknown>) => void;
 }) {
   if (!items.length) {
     return <SubviewEmptyState testId="memory-artifacts-network-empty">No network connections indexed for this run.</SubviewEmptyState>;
@@ -345,6 +356,7 @@ function NetworkTable({ items, onModal, onOpen, onGraph, onTree }: {
                   onModal={onModal}
                   testId="memory-artifacts-network-actions"
                 />
+                {onCreateFinding ? <CreateFindingButton onClick={() => onCreateFinding(row)} testId="memory-artifacts-network-create-finding" /> : null}
               </td>
             </tr>
           ))}
@@ -548,12 +560,13 @@ function DriversTable({ items, onModal, testId, type }: {
   );
 }
 
-function SuspiciousTable({ items, onModal, onOpen, onGraph, onTree }: {
+function SuspiciousTable({ items, onModal, onOpen, onGraph, onTree, onCreateFinding }: {
   items: Array<Record<string, unknown> & { document_id: string }>;
   onModal: (id: string) => void;
   onOpen: (id: string) => void;
   onGraph: (id: string) => void;
   onTree: (id: string) => void;
+  onCreateFinding?: (row: Record<string, unknown>) => void;
 }) {
   if (!items.length) {
     return <SubviewEmptyState testId="memory-artifacts-suspicious-empty">No suspicious regions indexed for this run.</SubviewEmptyState>;
@@ -606,6 +619,7 @@ function SuspiciousTable({ items, onModal, onOpen, onGraph, onTree }: {
                   onModal={onModal}
                   testId="memory-artifacts-suspicious-actions"
                 />
+                {onCreateFinding ? <CreateFindingButton onClick={() => onCreateFinding(row)} testId="memory-artifacts-suspicious-create-finding" /> : null}
               </td>
             </tr>
           ))}
@@ -690,6 +704,7 @@ export function MemoryArtifactsTab({
   onJumpToGraph,
   onJumpToTree,
   initialSubView,
+  onCreateFinding,
 }: Props) {
   // No longer switchable in-page (the redundant internal subview tab
   // bar was removed -- Drivers and Kernel Modules are now reached via
@@ -1058,6 +1073,7 @@ export function MemoryArtifactsTab({
               onOpen={jumpToEntity}
               onGraph={onJumpToGraph}
               onTree={onJumpToTree}
+              onCreateFinding={onCreateFinding ? (row) => onCreateFinding("network", row) : undefined}
             />
           ) : null}
           {subView === "modules" ? (
@@ -1101,6 +1117,7 @@ export function MemoryArtifactsTab({
               onOpen={jumpToEntity}
               onGraph={onJumpToGraph}
               onTree={onJumpToTree}
+              onCreateFinding={onCreateFinding ? (row) => onCreateFinding("suspicious_memory", row) : undefined}
             />
           ) : null}
         </div>

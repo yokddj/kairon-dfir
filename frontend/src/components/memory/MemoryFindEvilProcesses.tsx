@@ -54,6 +54,7 @@ type Props = {
   priority: string;
   indicatorType: string;
   onShowIndicators: (process: MemoryFindEvilProcess) => void;
+  onCreateFinding?: (process: MemoryFindEvilProcess) => void;
 };
 
 /**
@@ -61,7 +62,7 @@ type Props = {
  * first, marked by the analyst as reviewed, suspicious or not relevant. The
  * mark is kept per evidence and process, so it survives re-running Find Evil.
  */
-export function MemoryFindEvilProcesses({ caseId, evidenceId, priority, indicatorType, onShowIndicators }: Props) {
+export function MemoryFindEvilProcesses({ caseId, evidenceId, priority, indicatorType, onShowIndicators, onCreateFinding }: Props) {
   const queryClient = useQueryClient();
   const [showSettled, setShowSettled] = useState(false);
   const query = useQuery({
@@ -134,6 +135,16 @@ export function MemoryFindEvilProcesses({ caseId, evidenceId, priority, indicato
         </td>
         <td className="px-2 py-2 align-top">
           <span className="flex flex-wrap justify-end gap-1">
+            {onCreateFinding ? (
+              <button
+                type="button"
+                onClick={() => onCreateFinding(process)}
+                className="rounded-lg border border-line px-2 py-1 text-[11px] text-muted hover:text-accent"
+                data-testid="findevil-process-create-finding"
+              >
+                Create finding
+              </button>
+            ) : null}
             {process.marking ? (
               <button
                 type="button"

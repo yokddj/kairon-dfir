@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { type MemoryRunSelector, api } from "../../api/client";
+import type { MemoryFindingKind } from "../../lib/findingPrefill";
 import { FacetSelect } from "./FacetSelect";
 import { MemoryFindEvilProcesses } from "./MemoryFindEvilProcesses";
 import { MemoryPaginationControls } from "./MemoryPaginationControls";
@@ -11,6 +12,7 @@ type Props = {
   runOptions: MemoryRunSelector | null;
   selectedRunId: string | null;
   onSelectRunId: (next: string | null) => void;
+  onCreateFinding?: (kind: MemoryFindingKind, row: Record<string, unknown>) => void;
 };
 
 type FindEvilRow = {
@@ -74,7 +76,7 @@ function RunPicker({ runOptions, selectedRunId, onSelectRunId }: Pick<Props, "ru
   );
 }
 
-export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunId, onSelectRunId }: Props) {
+export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunId, onSelectRunId, onCreateFinding }: Props) {
   const [page, setPage] = useState(1);
   const [priority, setPriority] = useState("");
   const [indicatorType, setIndicatorType] = useState("");
@@ -223,6 +225,7 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
             evidenceId={evidenceId}
             priority={priority}
             indicatorType={indicatorType}
+            onCreateFinding={onCreateFinding ? (process) => onCreateFinding("find_evil_process", process as unknown as Record<string, unknown>) : undefined}
             onShowIndicators={(process) => {
               setView("all");
               setPidFilter(process.pid !== null ? String(process.pid) : "");
@@ -246,6 +249,7 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
                     <th className="px-2 py-1">Details</th>
                     <th className="px-2 py-1">What it means</th>
                     <th className="px-2 py-1">Source</th>
+                    {onCreateFinding ? <th className="px-2 py-1"><span className="sr-only">Actions</span></th> : null}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
@@ -270,6 +274,13 @@ export function MemoryFindEvilTab({ caseId, evidenceId, runOptions, selectedRunI
                       <td className="px-2 py-1 text-muted" data-testid="findevil-source">
                         {(row.sources?.length ? row.sources : [row.source_plugin]).map((source) => SOURCE_LABEL[String(source)] ?? reported(source)).join(" + ")}
                       </td>
+                      {onCreateFinding ? (
+                        <td className="px-2 py-1 text-right">
+                          <button type="button" onClick={() => onCreateFinding("find_evil_indicator", row as Record<string, unknown>)} className="whitespace-nowrap rounded-lg border border-line px-2 py-1 text-[11px] text-muted hover:text-accent" data-testid="findevil-create-finding">
+                            Create finding
+                          </button>
+                        </td>
+                      ) : null}
                     </tr>
                   ))}
                 </tbody>
