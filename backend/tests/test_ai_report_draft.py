@@ -21,7 +21,8 @@ from tests.test_reports import _FakeDb
 MATERIAL = {
     "case": {"name": "Sample"},
     "language": "en",
-    "findings": [{"ref": "F1", "title": "Encoded PowerShell download", "hosts": ["desktop-01"], "ips": ["203.0.113.7"]}],
+    "findings": [{"ref": "F1", "title": "Encoded PowerShell download", "hosts": ["desktop-01"], "ips": ["203.0.113.7"],
+                  "supporting_events": [{"time_utc": "2026-05-15 12:09:40", "summary": "script copied to share"}]}],
     "timeline": [{"time_utc": "2026-05-15T12:07:21Z", "host": "desktop-01", "phase": "execution", "event": "powershell.exe -enc"}],
     "coverage_notes": ["Security log cleared at 12:45:25 on desktop-01"],
 }
@@ -55,6 +56,8 @@ def test_validation_flags_invented_citations_and_facts() -> None:
     assert not any(field == "executive_summary" for field, _k, _v in found)
     assert validation["ok"] is False
     assert report_draft.validate_draft({"executive_summary": "Payload fetched from 203.0.113.7 [F1].", "limitations": "- Log cleared at 12:45:25"}, MATERIAL)["ok"] is True
+    # A finding's supporting event is citable by its time too.
+    assert report_draft.validate_draft({"attack_narrative": "The script was copied to a share [F1][12:09:40]."}, MATERIAL)["issues"] == []
 
 
 class _DraftingProvider:

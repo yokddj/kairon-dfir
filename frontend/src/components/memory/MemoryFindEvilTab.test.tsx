@@ -157,6 +157,27 @@ describe("MemoryFindEvilTab", () => {
       expect(screen.getAllByTestId("findevil-process-row")).toHaveLength(3);
     });
 
+    it("shows antivirus detections still in memory, grouped, with time, source and target", async () => {
+      getMemoryFindEvilProcessesMock.mockResolvedValue({
+        case_id: "case-1", evidence_id: "ev-1", active_run: { id: "run-1" }, analysis_state: "analyzed_with_results", marking_artifact_type: "memory_findevil_process",
+        processes: [triageProcess(null, null, { high: 3 })],
+        antivirus_detections: [
+          { threat: "HackTool:Win32/Sample.A", engine: "Windows Defender", target_kind: "cmdline", target: "C:\\Users\\Public\\tool.exe roast", first_seen: "2026-01-10T09:15:02.100Z", last_seen: "2026-01-10T09:25:40.000Z", sources: ["system scan"], records: 3 },
+        ],
+      });
+      renderTab();
+
+      const panel = await screen.findByTestId("findevil-av-detections");
+      expect(panel).toHaveTextContent("Antivirus detections still in memory (1)");
+      const row = screen.getByTestId("findevil-av-row");
+      expect(row).toHaveTextContent("2026-01-10 09:15:02 UTC");
+      expect(row).toHaveTextContent("to 2026-01-10 09:25:40 UTC");
+      expect(row).toHaveTextContent("HackTool:Win32/Sample.A");
+      expect(row).toHaveTextContent("system scan");
+      expect(row).toHaveTextContent("cmdline:");
+      expect(row).toHaveTextContent("tool.exe roast");
+    });
+
     it("marks a process with a run-independent identity", async () => {
       getMemoryFindEvilProcessesMock.mockResolvedValue({
         case_id: "case-1", evidence_id: "ev-1", active_run: { id: "run-1" }, analysis_state: "analyzed_with_results", marking_artifact_type: "memory_findevil_process",

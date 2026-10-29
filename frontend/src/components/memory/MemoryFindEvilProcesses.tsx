@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type EventMarkingStatus, type MemoryFindEvilProcess, api } from "../../api/client";
+import { type EventMarkingStatus, type MemoryAntivirusDetection, type MemoryFindEvilProcess, api } from "../../api/client";
 
 // Triage marks for a process. "Suspicious" keeps it in the list (flagged);
 // "Reviewed" and "Not relevant" move it to the collapsed section below.
@@ -100,7 +100,8 @@ export function MemoryFindEvilProcesses({ caseId, evidenceId, priority, indicato
   if (query.error instanceof Error) {
     return <p className="mt-3 rounded-2xl border border-rose-400/30 bg-rose-500/10 p-3 text-xs text-rose-200">{query.error.message}</p>;
   }
-  if (!query.data?.processes.length) return null;
+  const detections = query.data?.antivirus_detections ?? [];
+  if (!query.data?.processes.length && !detections.length) return null;
 
   const row = (process: MemoryFindEvilProcess) => {
     const types = process.indicator_types;
@@ -177,6 +178,7 @@ export function MemoryFindEvilProcesses({ caseId, evidenceId, priority, indicato
 
   return (
     <div className="mt-3 space-y-3" data-testid="findevil-processes">
+      {detections.length ? <AntivirusDetections detections={detections} /> : null}
       <p className="text-xs text-muted" data-testid="findevil-processes-summary">
         {open.length} process{open.length === 1 ? "" : "es"} to review
         {settled.length ? ` · ${settled.length} reviewed or not relevant` : ""}
@@ -211,6 +213,52 @@ export function MemoryFindEvilProcesses({ caseId, evidenceId, priority, indicato
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function utcTime(value: string): string {
+  return value.replace("T", " ").replace(/\.\d+Z$|Z$/, "") + " UTC";
+}
+
+/**
+ * Antivirus detections MemProcFS found in memory, one row per threat and
+ * target. They survive a cleared event log, so they can be the only record of
+ * what a tool did (a command line, a file copied in, a script AMSI scanned).
+ */
+function AntivirusDetections({ detections }: { detections: MemoryAntivirusDetection[] }) {
+  return (
+    <div className="rounded-2xl border border-amber-300/30 bg-amber-500/5 p-3" data-testid="findevil-av-detections">
+      <p className="text-xs font-semibold text-ink">Antivirus detections still in memory ({detections.length})</p>
+      <p className="mt-1 text-[11px] text-muted">What the antivirus detected and when, recovered from the image even if the event logs were cleared.</p>
+      <div className="mt-2 max-w-full overflow-x-auto">
+        <table className="w-full min-w-[760px] text-xs">
+          <thead className="text-left text-[10px] uppercase tracking-[0.12em] text-muted">
+            <tr>
+              <th className="px-2 py-1">Time</th>
+              <th className="px-2 py-1">Threat</th>
+              <th className="px-2 py-1">Detected by</th>
+              <th className="px-2 py-1">Target</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {detections.map((item) => (
+              <tr key={`${item.threat}-${item.target_kind}-${item.target}`} data-testid="findevil-av-row">
+                <td className="whitespace-nowrap px-2 py-1 align-top font-mono text-muted">
+                  {utcTime(item.first_seen)}
+                  {item.last_seen !== item.first_seen ? <span className="block">to {utcTime(item.last_seen)}</span> : null}
+                </td>
+                <td className="px-2 py-1 align-top font-mono text-amber-300">{item.threat}</td>
+                <td className="px-2 py-1 align-top text-muted">{item.sources.join(", ") || "—"}</td>
+                <td className="px-2 py-1 align-top">
+                  {item.target_kind ? <span className="mr-1 text-muted">{item.target_kind}:</span> : null}
+                  <span className="break-all font-mono text-ink">{item.target}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

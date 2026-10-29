@@ -79,7 +79,10 @@ def _find_evil(db: Session, *, case_id: str, evidence_id: str, run_id: str) -> d
         if process.get("marking") and process["marking"].get("status") in REPORTED_MARKS
     ]
     settled = sum(1 for process in processes if process.get("marking") and process["marking"].get("status") in SETTLED_MARKS)
+    from app.services.memory.antivirus_detections import antivirus_detections
+
     return {
+        "antivirus_detections": antivirus_detections(case_id=case_id, evidence_id=evidence_id, run_id=run_id),
         "available": True,
         "process_count": len(processes),
         "indicator_counts": priorities,

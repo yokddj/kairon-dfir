@@ -9,7 +9,7 @@ from app.models.event_marking import EventMarking
 from app.models.finding import Finding
 from app.models.memory import MemoryScanRun
 from app.services import report_service
-from app.services.memory import findevil_triage, report_section
+from app.services.memory import antivirus_detections, findevil_triage, report_section
 
 SYSTEM_INFO = {
     "os": {"family": "windows", "machine_type": "x64", "windows_build": "26100", "kernel_version": "10.0.26100"},
@@ -87,6 +87,9 @@ def memory_case(monkeypatch):
         ]
 
     monkeypatch.setattr(findevil_triage, "findevil_processes", processes)
+    monkeypatch.setattr(antivirus_detections, "antivirus_detections", lambda **_k: antivirus_detections.group_detections([
+        "AV:[Windows Defender] EVENT:[2026-06-23T14:02:11.000Z DETECTIONEVENT MPSOURCE_SYSTEM HackTool:Win32/Sample.A CmdLine:C:\\Users\\Public\\tool.exe roast /spn:svc;internalCmdLine:AQAA]",
+    ]))
     db = _Db([SimpleNamespace(metadata_json={}), SimpleNamespace(metadata_json={"system_info": SYSTEM_INFO})], [SimpleNamespace(id="f-1", status="confirmed"), SimpleNamespace(id="f-2", status="new")])
     return db, calls
 
@@ -140,6 +143,8 @@ def test_rendered_section(memory_case):
     assert "7 indicators in 4 processes (2 high, 2 medium, 3 low priority)" in markdown
     assert "| rundll32.exe | 4012 | suspicious | high | 2 | PE_INJECT | beacon to 203.0.113.7 |" in markdown
     assert "msedge.exe" not in markdown
+    assert "Antivirus detections still in memory** (1)" in markdown
+    assert "| 2026-06-23 14:02:11 | HackTool:Win32/Sample.A | system scan | cmdline: C:\\Users\\Public\\tool.exe roast /spn:svc |" in markdown
 
 
 def test_report_skips_memory_when_disabled(monkeypatch):

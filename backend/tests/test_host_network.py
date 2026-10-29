@@ -84,6 +84,9 @@ class _FakeSearch:
         self.calls.append({"index": index, "body": body})
         query_str = str(body)
         if "sysmon_network_connection" in query_str:
+            # Inbound connections are read from the destination address.
+            if "network.destination_ip" in query_str:
+                return self._responses.get("sysmon_inbound", _EMPTY_TERMS)
             return self._responses.get("sysmon", _EMPTY_TERMS)
         if "linux_syslog" in query_str:
             return self._responses.get("dhclient", _EMPTY_HITS)
@@ -220,22 +223,28 @@ class TestSysmonSource:
         assert by_ip["192.168.20.41"]["sources"][0]["source_kind"] == SOURCE_SYSMON_NETWORK_CONNECTION
         assert by_ip["10.0.8.25"]["observation_count"] == 1
 
-    def test_query_never_reads_destination_ip(self, monkeypatch):
-        # Regression: the query must be built against network.source_ip
-        # only. A field name typo that swapped in destination_ip (the
-        # remote peer) would silently attribute remote hosts to this
-        # machine -- this asserts the actual field name sent to OpenSearch.
+    def test_local_address_follows_the_connection_direction(self, monkeypatch):
+        # Sysmon EID 3 names the initiator as Source. For a connection this
+        # host made, SourceIp is its own address; for an inbound one
+        # (Initiated=false, e.g. an RDP session from another machine) SourceIp
+        # is the remote client and this host is the Destination. Reading
+        # SourceIp alone attributed the remote client's address to this host.
         db = _db()
         _case(db)
         _host(db)
-        fake = _FakeSearch({"sysmon": _sysmon_response([_sysmon_bucket("192.168.20.41", 1, "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")])})
+        fake = _FakeSearch({
+            "sysmon": _sysmon_response([_sysmon_bucket("192.168.20.41", 5, "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z")]),
+            "sysmon_inbound": _sysmon_response([_sysmon_bucket("192.168.20.41", 2, "2024-01-02T00:00:00Z", "2024-01-02T00:00:00Z")]),
+        })
         _patch_opensearch(monkeypatch, fake)
-        get_host_network_observations(db, case_id=CASE_ID, host_id=HOST_ID)
-        sysmon_calls = [call for call in fake.calls if "sysmon_network_connection" in str(call["body"])]
-        assert len(sysmon_calls) == 1
-        agg_field = sysmon_calls[0]["body"]["aggs"]["ips"]["terms"]["field"]
-        assert agg_field == "network.source_ip"
-        assert "destination_ip" not in str(sysmon_calls[0]["body"])
+        result = get_host_network_observations(db, case_id=CASE_ID, host_id=HOST_ID)
+        sysmon_calls = [call["body"] for call in fake.calls if "sysmon_network_connection" in str(call["body"])]
+        assert [body["aggs"]["ips"]["terms"]["field"] for body in sysmon_calls] == ["network.source_ip", "network.destination_ip"]
+        outbound, inbound = (body["query"]["bool"]["filter"] for body in sysmon_calls)
+        assert {"bool": {"must_not": [{"term": {"network.direction": "inbound"}}]}} in outbound
+        assert {"term": {"network.direction": "inbound"}} in inbound
+        # Both directions confirm the same local address: one entry.
+        assert [(entry["ip"], entry["observation_count"]) for entry in result["addresses"]] == [("192.168.20.41", 7)]
 
 
 class TestLinuxDhclientSource:

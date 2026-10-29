@@ -5,6 +5,8 @@ Host Information is Kairon's per-host layer for two related but distinct kinds o
 - **Host Facts** — identity and operating-system attributes of the host itself (hostname, distribution, kernel, timezone, ...).
 - **Local Accounts** — the local-account inventory of that host (who has an account, and what Kairon can observe about it).
 
+The host's own **network addresses** (from its outbound Sysmon connections and the destination of its inbound ones, DHCP leases and memory) are also shown there, and the **Lateral Movement** page uses them to name the source of each remote logon (see below).
+
 Both follow the same architecture and the same honesty rule: they never invent a value. A fact or account field Kairon has no observation for is reported as missing, not guessed, and every resolved value is shown alongside every observation that produced it (including disagreeing ones) rather than silently picking a winner.
 
 ```text
@@ -129,6 +131,15 @@ GET /api/cases/{case_id}/host-users?evidence_id=...
 ```
 
 Exactly one of `host_id` or `evidence_id` is required, with the same scope contract as `/host-facts` — results are never merged across hosts.
+
+## Lateral Movement
+
+The **Lateral Movement** page lists remote authentications between machines: Windows logons of type 3 (network: SMB, WinRM, PsExec, WMI), 8 (cleartext) and 10 (Remote Desktop) from Security events 4624/4625, and Linux remote logins (sshd and other PAM services, wtmp/btmp). One row per target host, source address, account and method, with the first and last time and how many attempts succeeded or failed, sorted by when they began. It is computed at read time from events already indexed (`GET /api/cases/{case_id}/lateral-movement`).
+
+- The source address becomes a host name only when that address was observed on a case host. An address observed on several hosts lists every candidate and is marked; Kairon does not pick one.
+- The workstation name a Windows logon reports is shown. When it names a machine other than the host holding the address, the row is flagged: renamed hosts, NAT and tools that set their own name all cause it, so it is a lead to check. Remote Desktop logons record the target's own name there, which is ignored.
+- Machine accounts (`NAME$`), anonymous and built-in accounts are marked routine and hidden by default.
+- Logons from the host's own address or loopback are not movement and are left out.
 
 ## Known gaps
 

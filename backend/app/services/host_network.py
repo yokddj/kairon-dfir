@@ -182,9 +182,21 @@ def _host_scope_filter(db: Session, host: CaseHost) -> dict:
 
 
 def _query_sysmon_network(client: OpenSearch, index: str, *, case_id: str, host_filter: dict) -> list[dict]:
+    """Sysmon EID 3 names the connection's initiator as Source: for a
+    connection this host made (Initiated=true) that is its own address, but for
+    an inbound one (Initiated=false) Source is the remote peer and this host is
+    the Destination. Reading SourceIp alone attributed every inbound client
+    (an RDP or SMB session from another machine) to this host."""
     if not index_exists(client, index) or not is_index_queryable(client, index):
         return []
-    ip_field = resolve_aggregatable_field(client, index, "network.source_ip")
+    inbound = {"term": {"network.direction": "inbound"}}
+    observations = _sysmon_local_addresses(client, index, case_id=case_id, host_filter=host_filter, field="network.source_ip", condition={"bool": {"must_not": [inbound]}})
+    observations.extend(_sysmon_local_addresses(client, index, case_id=case_id, host_filter=host_filter, field="network.destination_ip", condition=inbound))
+    return observations
+
+
+def _sysmon_local_addresses(client: OpenSearch, index: str, *, case_id: str, host_filter: dict, field: str, condition: dict) -> list[dict]:
+    ip_field = resolve_aggregatable_field(client, index, field)
     if not ip_field:
         return []
     body = {
@@ -195,6 +207,7 @@ def _query_sysmon_network(client: OpenSearch, index: str, *, case_id: str, host_
                     {"term": {"case_id": case_id}},
                     {"term": {"event.action": SOURCE_SYSMON_NETWORK_CONNECTION}},
                     {"exists": {"field": ip_field}},
+                    condition,
                     host_filter,
                 ]
             }

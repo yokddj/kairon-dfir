@@ -1156,6 +1156,46 @@ export type MemoryFindEvilProcesses = {
   analysis_state: string | null;
   marking_artifact_type: string;
   processes: MemoryFindEvilProcess[];
+  /** AV_DETECT lines parsed and grouped by threat and target (Defender events still in memory). */
+  antivirus_detections?: MemoryAntivirusDetection[];
+};
+
+export type LateralMovementEdge = {
+  target_host: string;
+  source_ip: string;
+  /** Case hosts observed holding the source address; several means ambiguous. */
+  source_hosts: string[];
+  source_workstations: string[];
+  workstation_hosts: string[];
+  workstation_mismatch: boolean;
+  source_ambiguous: boolean;
+  user: string | null;
+  domain: string | null;
+  method: string;
+  logon_type: string | null;
+  successes: number;
+  failures: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  routine_reason: string | null;
+};
+
+export type LateralMovementResponse = {
+  case_id: string;
+  edges: LateralMovementEdge[];
+  addresses: Array<{ ip: string; hosts: string[]; ambiguous: boolean }>;
+  truncated: boolean;
+};
+
+export type MemoryAntivirusDetection = {
+  threat: string;
+  engine: string | null;
+  target_kind: string | null;
+  target: string;
+  first_seen: string;
+  last_seen: string;
+  sources: string[];
+  records: number;
 };
 
 export type MemoryActiveResult = {
@@ -6216,6 +6256,7 @@ export const api = {
   getCaseCapabilities: (caseId: string) => request<CaseCapabilitiesResponse>(`/cases/${caseId}/capabilities`),
   getCaseHosts: (caseId: string) => request<CaseHostsResponse>(`/cases/${caseId}/hosts`),
   getCaseHostCoverage: (caseId: string) => request<CaseHostCoverageResponse>(`/cases/${caseId}/hosts/coverage`),
+  getLateralMovement: (caseId: string) => request<LateralMovementResponse>(`/cases/${caseId}/lateral-movement`),
   getMftExtensionAnomalies: (caseId: string, params?: { host?: string; min_files?: number }) => {
     const query = new URLSearchParams();
     if (params?.host) query.set("host", params.host);

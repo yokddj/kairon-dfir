@@ -108,7 +108,7 @@ describe("registry-driven sidebar", () => {
     await within(investigation).findByRole("link", { name: "Memory" });
     const labels = within(investigation).getAllByRole("link").map((link) => link.textContent);
     expect(labels).toEqual([
-      "Overview", "Evidence", "Host Information", "Search", "Artifact Views", "Command History", "Execution Stories",
+      "Overview", "Evidence", "Host Information", "Lateral Movement", "Search", "Artifact Views", "Command History", "Execution Stories",
       "Linux Authentication", "Source Tables", "Memory", "Timeline", "Incident Timeline", "Detections", "Findings", "Reports",
     ]);
     expect(screen.queryByText("Investigation Surfaces")).not.toBeInTheDocument();

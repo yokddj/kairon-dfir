@@ -2584,6 +2584,18 @@ def _render_memory_section(entries: list[dict[str, Any]]) -> str:
                         _clip(str(process.get("note") or "-"), 200),
                     ])
                 parts.append(_markdown_table(rows))
+            detections = find_evil.get("antivirus_detections") or []
+            if detections:
+                parts.append(tr("**Antivirus detections still in memory** ({count}): what the antivirus detected and when, recovered from the image even if the event logs were cleared.", count=len(detections)))
+                rows = [[tr("Time (UTC)"), tr("Threat"), tr("Detected by"), tr("Target")]]
+                for item in detections[:40]:
+                    rows.append([
+                        _fmt_ts(item.get("first_seen")) or "-",
+                        str(item.get("threat") or "-"),
+                        ", ".join(tr(source) for source in item.get("sources") or []) or "-",
+                        f"{item.get('target_kind') or ''}: " + _clip(str(item.get("target") or ""), 220),
+                    ])
+                parts.append(_markdown_table(rows))
     return "\n\n".join(parts)
 
 
@@ -3291,6 +3303,10 @@ def _report_ai_context(
                 "marked_processes": [
                     {"process": item.get("process"), "pid": item.get("pid"), "mark": item.get("mark"), "note": item.get("note")}
                     for item in ((entry.get("find_evil") or {}).get("marked_processes") or [])
+                ],
+                "antivirus_detections": [
+                    {"time_utc": _fmt_ts(item.get("first_seen")), "threat": item.get("threat"), "target": _sanitize_text(str(item.get("target") or ""), 300)}
+                    for item in ((entry.get("find_evil") or {}).get("antivirus_detections") or [])[:20]
                 ],
             }
             for entry in memory_report or []

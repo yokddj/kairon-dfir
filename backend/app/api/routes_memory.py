@@ -877,7 +877,11 @@ def get_memory_findevil_processes(case_id: str, evidence_id: str, db: Session = 
     active = resolve_active_memory_result(db, case_id=case_id, evidence_id=evidence_id, family="find_evil", page=1, page_size=1)
     run = active.get("active_run") or {}
     processes = findevil_processes(db, case_id=case_id, evidence_id=evidence_id, run_id=str(run["id"])) if run.get("id") else []
+    from app.services.memory.antivirus_detections import antivirus_detections
+
+    detections = antivirus_detections(case_id=case_id, evidence_id=evidence_id, run_id=str(run["id"])) if run.get("id") else []
     return {
+        "antivirus_detections": detections,
         "case_id": case_id,
         "evidence_id": evidence_id,
         "active_run": run or None,

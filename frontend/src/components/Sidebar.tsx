@@ -20,6 +20,7 @@ import {
   Table2,
   UserCog,
   Waypoints,
+  ArrowLeftRight,
 } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
@@ -43,6 +44,13 @@ const INVESTIGATION_ITEMS: NavItem[] = [
   { to: "/cases/:caseId/overview", label: "Overview", icon: Home, requiresCase: true },
   { to: "/cases/:caseId/evidence", label: "Evidence", icon: Database, requiresCase: true },
   { to: "/cases/:caseId/host-information", label: "Host Information", icon: Fingerprint, requiresCase: true },
+  {
+    to: "/cases/:caseId/lateral-movement",
+    label: "Lateral Movement",
+    icon: ArrowLeftRight,
+    requiresCase: true,
+    description: "Remote logons between machines on any platform (network and Remote Desktop logons, SSH), with the source resolved to a case host.",
+  },
   { to: "/cases/:caseId/search", label: "Search", icon: Search, requiresCase: true },
   { to: "/cases/:caseId/artifacts", label: "Artifact Views", icon: FolderSearch2, requiresCase: true },
   {
