@@ -23,7 +23,7 @@ from app.models.case import Case
 from app.models.detection_result import DetectionResult
 from app.models.evidence import Evidence
 from app.models.event_marking import EventMarking
-from app.models.finding import Finding
+from app.models.finding import Finding, FindingStatus
 from app.models.incident_timeline_draft import IncidentTimelineDraft
 from app.models.timeline_bookmark import TimelineBookmark, TimelineBookmarkCategory, TimelineBookmarkImportance
 from app.services.case_capabilities import capability_route
@@ -1122,6 +1122,13 @@ def _persist_incident_draft(
     return existing
 
 
+_INCIDENT_EXCLUDED_FINDING_STATUSES = [
+    FindingStatus.false_positive,
+    FindingStatus.archived,
+    FindingStatus.suppressed,
+]
+
+
 def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     params = dict(params or {})
     case = db.get(Case, case_id)
@@ -1187,7 +1194,9 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
         # -- exactly the ones an investigation is usually converging on.
         rows = (
             db.query(Finding)
-            .filter(Finding.case_id == case_id)
+            # A finding the analyst dismissed or archived is not part of the
+            # incident story; only the marked-event source filtered this before.
+            .filter(Finding.case_id == case_id, Finding.status.notin_(_INCIDENT_EXCLUDED_FINDING_STATUSES))
             .order_by(Finding.time_start.asc().nullslast(), Finding.created_at.asc())
             .limit(INCIDENT_TIMELINE_SOURCE_LIMIT + 1)
             .all()

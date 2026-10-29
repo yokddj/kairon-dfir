@@ -3945,6 +3945,8 @@ export type CaseReportPreviewSection = {
   title: string;
   markdown: string;
   warnings: string[];
+  /** No matching data: shown in the preview, left out of the Markdown/PDF export. */
+  empty?: boolean;
 };
 
 export type CaseReportPreview = {

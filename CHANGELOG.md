@@ -55,6 +55,8 @@
 
 ### Changed
 
+- **Case report (PDF and Markdown) redesigned for delivery**: cover page, table of contents with PDF bookmarks, numbered sections that flow instead of one page each, header and "Page X of Y" footer, tables sized to their content with severity in colour, and times as `YYYY-MM-DD HH:MM:SS` in UTC (stated once). Sections with no matching data (Defender or SRUM in a Linux case, for example) are left out of the export and named once in the appendix instead of filling empty pages; the evidence table carries type, size and SHA-256; the executive summary leads with the analyst's text, lists key findings and says how many findings still await review; detections are summarised per rule; one command seen by several sources (Sysmon, 4688, memory) is reported once with every source; filters appear as a readable table instead of a Python dict. The builder preview marks the sections that will be left out.
+
 - `dfir-backup.sh --db-only` saves the database, the configuration and the index inventory in seconds, enough before an upgrade (which changes the database, not the evidence); `--run` keeps the full backup, also saves `.env` now, and no longer aborts when a file changes while the data folder is archived. The unused `KAIRON_CSRF_SECRET` is no longer generated or required (cross-site requests are refused by origin, see Fixed).
 - Artifact Views: a column that is empty on every row of the page is hidden (the column chooser marks it and can show it again), and Linux packages, shell history, users and groups, cron, SSH, sudoers, last logins, host facts, network configuration and hosts-file entries have tables of their own fields instead of Windows task, prefetch or web layouts whose columns were all empty.
 - Artifact Views: SSH configuration and Linux network configuration have their own names instead of three entries called "Network", Linux artifact names no longer repeat "Linux", and the mixed-type table shows the artifact's name and a Message column instead of raw ids in Category and Artifact.
@@ -71,6 +73,8 @@
 - Required host selection is now shown consistently across all evidence, not only a subset of intake paths.
 
 ### Fixed
+
+- Report: detections without an event time showed the time the rule ran as if it were evidence time; that column is now left empty. The Incident Timeline section no longer includes findings the analyst archived or marked false positive, and the timeline draft no longer seeds them.
 
 - Linux and NetScaler rows are normalized by their own family before the Windows and browser name heuristics; a Linux file named like a browser or Windows artifact (zypper's `history`) could be indexed as one.
 - zypper's `/var/log/zypp/history` was taken for a Chrome `History` database and gave no rows: outside a browser profile, a file with that name must now be SQLite.
