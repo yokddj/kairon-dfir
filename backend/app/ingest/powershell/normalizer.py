@@ -252,7 +252,10 @@ def normalize_powershell_row(document: dict, row: dict, artifact_meta: dict) -> 
                 "query": first_url.split("?", 1)[1] if "?" in first_url else None,
             }
         )
-    download_target = extract_primary_download_target(analysis_blob, paths)
+    # A path in a script is not a download target by itself: without a URL
+    # only an explicit -OutFile/-Destination names one. Otherwise a script
+    # argument such as a UNC share was reported as a downloaded file.
+    download_target = extract_primary_download_target(analysis_blob, paths if urls else None)
     download_file_name = basename_windows(download_target) or (
         basename_windows(urls[0].split("?", 1)[0]) if urls else None
     )
