@@ -4267,6 +4267,9 @@ def _create_builtin_detections_for_ids(
             opensearch_id=document.get("event_id"),
             target_type="event",
             target_path=(document.get("file", {}) or {}).get("path"),
+            # The matched event's own time, as Sigma/YARA matches record it;
+            # without it the detection only carried when the rule ran.
+            matched_at=_event_timestamp(document),
             message=message,
             host_name=(document.get("host", {}) or {}).get("name") or None,
             matched_stable_event_id=stable_event_id or None,

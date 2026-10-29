@@ -74,6 +74,8 @@
 
 ### Fixed
 
+- Startup & Persistence: Defender's own maintenance tasks and services scored as suspicious (risk 55-75): its platform folder under `ProgramData\Microsoft\Windows Defender\Platform\<version>` counted as user-writable, and any mention of "Defender" counted as a settings change. That folder is now a system location (elsewhere under ProgramData stays user-writable), and only real settings words (exclusion, real-time monitoring, tamper protection, SpyNet, DisableAntiSpyware) count as a change. Tasks created with `schtasks /tn` are named after the task instead of the event action.
+- Built-in detections now record the matched event's time (as Sigma and YARA matches already did). For detections created before, the report reads the time from the matched events.
 - Report: detections without an event time showed the time the rule ran as if it were evidence time; that column is now left empty. The Incident Timeline section no longer includes findings the analyst archived or marked false positive, and the timeline draft no longer seeds them.
 
 - Linux and NetScaler rows are normalized by their own family before the Windows and browser name heuristics; a Linux file named like a browser or Windows artifact (zypper's `history`) could be indexed as one.

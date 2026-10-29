@@ -276,6 +276,7 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
     sections_enabled = {**DEFAULT_SECTIONS_ENABLED, **dict(report.sections_enabled or {})}
     findings = _filtered_findings(db, case_id, filters)
     detections, detections_total = _filtered_detections(db, case_id, filters)
+    detection_event_times = _resolve_detection_event_times(case_id, detections)
     marked_events, marked_events_total = _filtered_markings(db, case_id, filters)
     command_report = _build_command_history_report_context(db, case, case_id, filters)
     defender_report = _build_defender_report_context(db, case_id, filters)
@@ -385,7 +386,7 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
     if sections_enabled.get("findings", True):
         add("findings", "Findings", _render_findings(selected_findings), empty=not selected_findings)
     if sections_enabled.get("findings", True) and filters.get("include_detections", True):
-        add("detections", "Detections", _render_detections(detections, detections_total), empty=not detections)
+        add("detections", "Detections", _render_detections(detections, detections_total, event_times=detection_event_times), empty=not detections)
     if sections_enabled.get("timeline", True):
         timeline_notes = ["No key events were bookmarked for the report; this timeline is built from the selected findings."] if timeline_auto_selected else []
         add("timeline", "Investigation Timeline", _render_timeline(timeline_entries), empty=not timeline_entries, notes=timeline_notes)
@@ -2537,7 +2538,30 @@ def _render_findings(findings: list[Finding]) -> str:
     return "\n".join(lines).strip()
 
 
-def _render_detections(detections: list[DetectionResult], total: int | None = None) -> str:
+def _resolve_detection_event_times(case_id: str, detections: list[DetectionResult]) -> dict[str, str]:
+    """Event time of detections that did not record it (built-in detections
+    created before they stored matched_at), read from the matched events in
+    one query. Read-only; on any search failure the times stay unknown."""
+    missing = _dedupe([row.opensearch_id or row.event_id for row in detections if not row.matched_at and (row.opensearch_id or row.event_id)])
+    if not missing:
+        return {}
+    try:
+        result = search_documents(
+            get_events_index(case_id),
+            {"size": len(missing), "_source": ["@timestamp", "timestamp"], "query": {"ids": {"values": missing}}},
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+    times = {}
+    for hit in (result.get("hits") or {}).get("hits") or []:
+        source = hit.get("_source") or {}
+        value = source.get("@timestamp") or source.get("timestamp")
+        if value:
+            times[str(hit.get("_id"))] = str(value)
+    return times
+
+
+def _render_detections(detections: list[DetectionResult], total: int | None = None, *, event_times: dict[str, str] | None = None) -> str:
     if not detections:
         return "No detections matched the report filters."
     total = max(int(total or 0), len(detections))
@@ -2552,7 +2576,7 @@ def _render_detections(detections: list[DetectionResult], total: int | None = No
         name = str(detection.rule_title or detection.rule_name or "unknown")
         # matched_at is the matched event's own time. created_at is when the
         # rule ran, which is not evidence time, so it is never substituted.
-        when = _iso(detection.matched_at) or ""
+        when = _iso(detection.matched_at) or (event_times or {}).get(str(detection.opensearch_id or detection.event_id or "")) or ""
         entry = rules.setdefault(name, {"count": 0, "severity": severity, "hosts": set(), "first": when, "last": when})
         entry["count"] += 1
         if SEVERITY_ORDER.get(severity, 0) > SEVERITY_ORDER.get(entry["severity"], 0):

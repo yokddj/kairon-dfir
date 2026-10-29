@@ -176,3 +176,30 @@ def test_pdf_has_contents_page_and_page_totals(monkeypatch: pytest.MonkeyPatch) 
     assert "of " in text and "Page 2 of" in text
     assert "Microsoft Defender" in text  # named once, in the appendix list
     assert "No Defender events matched" not in text
+
+
+def test_detection_without_stored_event_time_uses_the_matched_event_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    detection = DetectionResult(
+        id="det-1", case_id="case-1", engine="builtin", rule_name="Built-in: RDP activity", severity="medium",
+        status="new", host_name="WS01", opensearch_id="evt-1", matched_at=None,
+        created_at=datetime(2026, 10, 20, 9, 54, tzinfo=UTC),
+    )
+    queries: list[dict] = []
+
+    def fake_search(_index, body):
+        queries.append(body)
+        return {"hits": {"hits": [{"_id": "evt-1", "_source": {"@timestamp": "2024-03-22T11:37:40.44+00:00"}}]}}
+
+    monkeypatch.setattr(report_service, "search_documents", fake_search)
+    times = report_service._resolve_detection_event_times("case-1", [detection])
+    markdown = report_service._render_detections([detection], 1, event_times=times)
+
+    assert queries[0]["query"] == {"ids": {"values": ["evt-1"]}}
+    assert "| 2024-03-22 11:37:40 | 2024-03-22 11:37:40 |" in markdown
+    assert "2026-10-20" not in markdown
+
+    def failing_search(_index, _body):
+        raise ConnectionError("down")
+
+    monkeypatch.setattr(report_service, "search_documents", failing_search)
+    assert report_service._resolve_detection_event_times("case-1", [detection]) == {}
