@@ -33,6 +33,7 @@ def test_av_detect_line_is_parsed_into_fields() -> None:
     assert parse_av_detect(AMSI_EVENT)["target_kind"] == "amsi"
     # Only opaque internal data: parsed, but nothing to show as a target.
     assert parse_av_detect(CMDLINE_INTERNAL)["target"] is None
+    assert parse_av_detect(CMDLINE_INTERNAL + " PropBag [length: 0, data: (null)]]")["target"] is None
     assert parse_av_detect("Some other Find Evil text") is None
     assert parse_av_detect(None) is None
 
