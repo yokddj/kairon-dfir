@@ -69,26 +69,45 @@ Lets you select:
 - Execution Story summaries
 - Defender events
 
+## Producing a Report
+
+A report is only as good as the curation behind it. The builder does not judge evidence; it lays out what the analyst has confirmed. In order:
+
+1. **Process and check the evidence.** Every evidence item should be *Completed* (or *Completed with warnings* you understand). Failed evidence and parser errors are stated in the report's *Scope → Coverage notes*.
+2. **Consolidate hosts.** Merge aliases (FQDN vs NetBIOS, renamed machines) so the report talks about one canonical host.
+3. **Triage findings.** Only *confirmed* and *resolved* findings of medium severity or higher enter the report by default. Confirm what is real, mark false positives, archive noise. The executive summary says how many findings are still awaiting review, and the builder preview warns about them too.
+4. **Mark the key events.** Bookmark the milestones (initial access, execution, persistence, lateral movement, exfiltration) with *include in report* and a short note: they become the Investigation Timeline. Mark relevant events and commands as *suspicious* or *important*.
+5. **Curate the Incident Timeline.** Generate it, accept the items that tell the story, discard the rest. Only accepted items reach the report. Regenerate it after major case changes (the report says when it is out of date).
+6. **Triage memory.** Mark Find Evil processes as suspicious, important or not relevant; marked processes are listed in the Memory Analysis section.
+7. **Write the narrative.** In the report builder fill *Executive summary* (it leads the section, above the automatic figures), *Recommendations* and *Limitations*, set the author and a title for the reader (for example "Incident response report: ransomware on WS01").
+8. **Check the preview.** Sections marked *No matching data · left out of the export* will not appear; adjust filters or sections if something expected is missing.
+9. **Export.** PDF to deliver, Markdown to edit or archive. Set the logo, brand name and colour once in the System page settings (`REPORT_BRAND_NAME`, `REPORT_BRAND_SUBTITLE`, `REPORT_BRAND_PRIMARY_COLOR`, `REPORT_INCLUDE_LOGO`, `REPORT_LOGO_PATH`).
+
 ## Exports
 
-- `Markdown`: available and remains the simplest, most editable source.
-- `PDF`: rendered server-side (ReportLab) from the same report content as Markdown.
+- `PDF`: rendered server-side (ReportLab) from the same content as Markdown. Cover page (case, author, date, timezone, report reference, handling notice), table of contents with PDF bookmarks, numbered sections, header and *Page X of Y* footer, tables sized to their content and severities in colour.
+- `Markdown`: the same sections and numbering, the simplest editable source.
+
+All times are UTC, written `YYYY-MM-DD HH:MM:SS`; the cover and the column headers say so once.
+
+Sections with no matching data (Microsoft Defender or SRUM in a Linux case, an empty IOC list...) are left out of the export and listed once in the appendix. Executive Summary, Scope, Evidence, Hosts, Findings, Recommendations and Appendix are always present, so a report with no findings says so plainly.
 
 ## Typical Report Sections
 
-- summary
-- scope
-- findings
-- Search Timeline highlights / key events
-- Incident Timeline
+- executive summary: the analyst's text, key figures, findings by severity, findings still awaiting review, key findings
+- scope: case, period, host and evidence filters, which findings were included, coverage notes (truncations, failed evidence, parser errors)
+- evidence processed: name, type, size, SHA-256, host, events, status
+- hosts: canonical hosts and relevant aliases
+- findings: one block per finding with severity, risk, confidence, status, observed period, why it matters, related entities, supporting events and next steps
+- detections: automated rule matches summarised per rule (severity, matches, hosts, event times when known), clearly labelled as unreviewed leads
+- Investigation Timeline (key events) and Incident Timeline (accepted items only)
 - process chains
-- suspicious command history
-- execution story summaries
-- Defender detections/configuration events where selected
+- suspicious command history: an overview table and one detail block per command; one execution seen by several sources is reported once with all of them
+- Defender, email, MOTW, SRUM, startup and persistence where the case has them
 - Memory Analysis (only when the case has memory images): per image the system and capture time, the analyses run with their item counts, and the Find Evil triage with the processes the analyst marked suspicious or important
-- canonical hosts and relevant aliases
 - deduplicated IOCs
-- notes and recommendations
+- recommendations and limitations
+- appendix: report parameters and the sections left out for lack of data
 
 ## Host Identity in Reports
 
@@ -102,8 +121,7 @@ The original observed name remains the useful technical reference for traceabili
 
 ## Limitations
 
-- Markdown is the validated export.
-- Not all charts or complex visualizations are embedded as images.
+- Charts and graphs (process graph, timelines) are not embedded as images.
 - Secrets and tokens are automatically redacted where the export path supports it.
 - Narrative quality depends on well-curated findings and key events.
 - The report should not replace the case's technical validation.

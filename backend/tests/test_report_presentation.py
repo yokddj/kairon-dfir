@@ -1,0 +1,178 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pytest
+
+from app.models.case import Case
+from app.models.case_report import CaseReport
+from app.models.detection_result import DetectionResult
+from app.models.finding import FindingSeverity, FindingStatus
+from app.services import report_service
+from tests.test_reports import _FakeDb, _finding
+
+
+def _context(name: str = "Sample") -> dict:
+    return {
+        "case": {"id": "case-1", "name": name},
+        "hosts": [{"host": "desktop-01", "events_count": 15, "findings_count": 1, "high_risk_count": 1}],
+        "evidences": [{"id": "ev-1", "name": "Collection.zip", "status": "completed_with_warnings", "storage_mode": "uploaded", "is_external": False, "events_indexed": 15, "parser_errors": 0, "detected_host": "desktop-01"}],
+        "summary": {"events_indexed": 15, "findings_total": 1, "findings_high": 1, "parser_errors": 0, "warnings": ["multi_host_case"]},
+    }
+
+
+def _report(**overrides) -> CaseReport:
+    values = {
+        "id": "report-1",
+        "case_id": "case-1",
+        "title": "Sample report",
+        "template": "standard_investigation",
+        "sections_enabled": report_service.DEFAULT_SECTIONS_ENABLED,
+        "analyst_notes": report_service.DEFAULT_ANALYST_NOTES,
+        "filters": report_service.DEFAULT_FILTERS,
+        "selected_finding_ids": [],
+        "selected_key_event_ids": [],
+        "selected_process_chain_ids": [],
+    }
+    values.update(overrides)
+    return CaseReport(**values)
+
+
+def _quiet_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(report_service, "_build_case_context", lambda *_a, **_k: _context())
+    monkeypatch.setattr(report_service, "get_command_history", lambda *_a, **_k: {"total": 0, "items": []})
+    monkeypatch.setattr(report_service, "fetch_event_by_id", lambda *_a, **_k: {})
+
+
+def test_export_leaves_out_empty_optional_sections_and_lists_them_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    _quiet_sources(monkeypatch)
+    db = _FakeDb(case=Case(id="case-1", name="Sample", status="open", timezone="UTC"), reports=[_report()])
+
+    preview = report_service.build_case_report_preview(db, "case-1", "report-1")
+    content, _filename, _media = report_service.export_case_report(db, "case-1", "report-1", format="markdown")
+
+    defender = next(section for section in preview["sections"] if section["id"] == "defender")
+    assert defender["empty"] is True and defender["warnings"] == []
+    assert "## " in content and "Microsoft Defender\n" not in content.split("### Sections without matching data")[0]
+    assert "No Defender events matched" not in content
+    assert "left out of the exported report: " in content and "Microsoft Defender" in content
+    # Core sections stay even when empty: the reader must see "no findings".
+    assert "No findings selected for this report." in content
+    assert "## 1. Executive Summary" in content
+    # Internal context codes are not reader-facing coverage notes.
+    assert "multi_host_case" not in content
+
+
+def test_executive_summary_counts_findings_still_awaiting_review(monkeypatch: pytest.MonkeyPatch) -> None:
+    _quiet_sources(monkeypatch)
+    confirmed = _finding("finding-1", title="Confirmed execution", severity=FindingSeverity.high, status=FindingStatus.confirmed)
+    pending = _finding("finding-2", title="Unreviewed lead", severity=FindingSeverity.high, status=FindingStatus.new)
+    dismissed = _finding("finding-3", title="Dismissed lead", severity=FindingSeverity.high, status=FindingStatus.false_positive)
+    db = _FakeDb(
+        case=Case(id="case-1", name="Sample", status="open", timezone="UTC"),
+        findings=[confirmed, pending, dismissed],
+        reports=[_report(selected_finding_ids=["finding-1"])],
+    )
+
+    preview = report_service.build_case_report_preview(db, "case-1", "report-1")
+    summary = preview["sections"][0]["markdown"]
+
+    assert preview["stats"]["findings_pending_review"] == 1
+    assert "**1 finding** is reported (1 high)." in summary
+    assert "1 further finding is still awaiting analyst review" in summary
+    assert "Confirmed execution" in summary and "Unreviewed lead" not in summary
+
+
+def test_detection_summary_never_presents_rule_run_time_as_event_time() -> None:
+    detection = DetectionResult(
+        id="det-1",
+        case_id="case-1",
+        engine="builtin",
+        rule_name="Built-in: High-risk event",
+        severity="high",
+        status="new",
+        host_name="desktop-01",
+        matched_at=None,
+        created_at=datetime(2026, 10, 20, 9, 54, tzinfo=UTC),
+    )
+
+    markdown = report_service._render_detections([detection], 1)
+
+    assert "2026-10-20" not in markdown
+    assert "First event" not in markdown  # column dropped: no event time is known
+    assert "| Built-in: High-risk event | high | 1 | desktop-01 |" in markdown
+    assert "have not been reviewed by an analyst" in markdown
+
+
+def test_command_seen_by_several_sources_is_reported_once() -> None:
+    base = {
+        "case_id": "case-1",
+        "host": "WS01",
+        "user": "CORP\\admin",
+        "command": "/c C:\\Users\\public\\psexec.exe \\\\WS02 -accepteula",
+        "risk_score": 60,
+        "risk_reasons": ["PsExec activity"],
+        "shell_family": "remote_exec",
+        "launcher": "cmd.exe",
+    }
+    from_memory = {**base, "id": "cmd-mem", "timestamp": "2024-03-22T12:17:30+00:00", "source_type": "memory", "process": {"name": "cmd.exe", "pid": 13492}}
+    from_sysmon = {
+        **base,
+        "id": "cmd-sysmon",
+        "timestamp": "2024-03-22T12:17:30.075607+00:00",
+        "process": {"name": "cmd.exe", "pid": 13492},
+        "parent_process": {"name": "powershell.exe", "pid": 12720},
+        "supporting_events": [{"event_id": "evt-1", "source_type": "sysmon_1"}],
+    }
+
+    markdown = report_service._render_command_history_section([from_memory, from_sysmon], [])
+
+    assert "1 distinct command (2 records" in markdown
+    assert markdown.count("##### ") == 1
+    assert "Process chain: powershell.exe (PID 12720) → cmd.exe (PID 13492)" in markdown
+    assert "Seen in: Memory, Sysmon 1" in markdown
+    # Code spans are literal: underscores must not be backslash-escaped.
+    assert "`remote_exec`" in markdown
+
+
+def test_incident_timeline_section_drops_items_of_dismissed_findings(monkeypatch: pytest.MonkeyPatch) -> None:
+    kept = _finding("finding-1", title="Kept", severity=FindingSeverity.high, status=FindingStatus.confirmed)
+    archived = _finding("finding-2", title="Archived", severity=FindingSeverity.high, status=FindingStatus.archived)
+    db = _FakeDb(case=Case(id="case-1", name="Sample", status="open", timezone="UTC"), findings=[kept, archived])
+    monkeypatch.setattr(
+        report_service,
+        "build_incident_timeline_draft",
+        lambda *_a, **_k: {"items": [{"title": "Kept", "finding_id": "finding-1"}, {"title": "Archived", "finding_id": "finding-2"}, {"title": "Marked event"}], "warnings": []},
+    )
+
+    context = report_service._build_incident_timeline_report_context(db, "case-1", dict(report_service.DEFAULT_FILTERS))
+
+    assert [item["title"] for item in context["items"]] == ["Kept", "Marked event"]
+
+
+def test_presentation_helpers() -> None:
+    assert report_service._fmt_ts("2024-03-22T11:26:39.331771+00:00") == "2024-03-22 11:26:39"
+    assert report_service._fmt_ts(datetime(2024, 3, 22, 13, 0, tzinfo=UTC)) == "2024-03-22 13:00:00"
+    assert report_service._fmt_ts("not a time") == "not a time"
+    assert report_service._human_bytes(4_255_346_688) == "4.0 GB"
+    assert report_service._human_bytes(512) == "512 bytes"
+    assert report_service._drop_empty_columns([["A", "B", "C"], ["x", "-", "0"], ["y", "", "0"]], zero_is_empty={"C"}) == [["A"], ["x"], ["y"]]
+    collapsed = report_service._collapse_duplicate_table_rows("| H | T |\n| --- | --- |\n| ws01 | a |\n| ws01 | a |\n| ws01 | b |")
+    assert collapsed.splitlines()[2:] == ["| ws01 (×2) | a |", "| ws01 | b |"]
+    humanized = report_service._humanize_table_columns("| Type | Path |\n| --- | --- |\n| scheduled_task | C:\\my_dir |", {"Type", "Path"})
+    assert humanized.splitlines()[2] == "| Scheduled task | C:\\my_dir |"
+    assert report_service._pdf_inline("a\\_b `x_y` **bold\\_text**") == "a_b <font name='Courier' size='7.8'>x_y</font> <b>bold_text</b>"
+
+
+def test_pdf_has_contents_page_and_page_totals(monkeypatch: pytest.MonkeyPatch) -> None:
+    _quiet_sources(monkeypatch)
+    db = _FakeDb(case=Case(id="case-1", name="Sample", status="open", timezone="UTC"), reports=[_report()])
+
+    content, _filename, _media = report_service.export_case_report(db, "case-1", "report-1", format="pdf")
+    text = content.decode("latin-1", errors="ignore")
+
+    assert "Contents" in text
+    assert "DIGITAL FORENSIC INVESTIGATION REPORT" in text
+    assert "of " in text and "Page 2 of" in text
+    assert "Microsoft Defender" in text  # named once, in the appendix list
+    assert "No Defender events matched" not in text

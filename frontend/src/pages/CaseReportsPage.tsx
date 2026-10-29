@@ -690,10 +690,18 @@ export default function CaseReportsPage() {
                     Filters applied: {Object.entries(previewQuery.data.filters_applied).map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(",") : String(value)}`).join(" · ")}
                   </div>
                 ) : null}
+                {(previewQuery.data?.stats?.findings_pending_review ?? 0) > 0 ? (
+                  <p data-testid="report-findings-pending" className="mt-3 rounded-2xl border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">
+                    {previewQuery.data?.stats.findings_pending_review} finding(s) matching these filters are still awaiting review and are not in the report. Confirm or dismiss them in Findings first.
+                  </p>
+                ) : null}
                 <div className="mt-4 space-y-4" data-testid="report-preview">
                   {previewQuery.data?.sections.map((section) => (
-                    <article key={section.id} className="rounded-2xl border border-line bg-abyss/60 p-4">
-                      <h3 className="text-lg font-semibold">{section.title}</h3>
+                    <article key={section.id} data-empty={section.empty ? "true" : undefined} className={`rounded-2xl border border-line bg-abyss/60 p-4 ${section.empty ? "opacity-60" : ""}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h3 className="text-lg font-semibold">{section.title}</h3>
+                        {section.empty ? <span className="rounded-full border border-line px-2.5 py-0.5 text-[11px] text-muted">No matching data · left out of the export</span> : null}
+                      </div>
                       {section.warnings.length ? <p className="mt-2 text-xs text-amber-200">{section.warnings.join(" · ")}</p> : null}
                       <pre className="mt-3 whitespace-pre-wrap break-words text-sm text-muted">{section.markdown}</pre>
                     </article>
