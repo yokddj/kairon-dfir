@@ -51,7 +51,8 @@ def parse_av_detect(description: str | None) -> dict[str, Any] | None:
         return None
     targets = [
         (item.group("kind"), item.group("value").strip().rstrip(";").strip())
-        for item in _TARGET.finditer(match.group("rest"))
+        # The PropBag dump after the resources is not a resource.
+        for item in _TARGET.finditer(re.split(r"\s+PropBag\b", match.group("rest"))[0])
     ]
     visible = [(kind, value) for kind, value in targets if value and not kind.lower().startswith("internal")]
     target_kind, target = visible[0] if visible else (None, None)
