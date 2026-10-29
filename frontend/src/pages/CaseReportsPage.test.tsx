@@ -170,6 +170,13 @@ describe("CaseReportsPage", () => {
     await waitFor(() => expect(createCaseReportDraftMock).toHaveBeenCalled());
   });
 
+  it("saves the report language", async () => {
+    renderPage();
+    const language = await screen.findByRole("combobox", { name: "Report language" });
+    await userEvent.selectOptions(language, "es");
+    await waitFor(() => expect(updateCaseReportMock).toHaveBeenCalledWith("case-1", "report-1", { language: "es" }));
+  });
+
   it("section checkboxes and notes update draft", async () => {
     renderPage();
     const appendixCheckbox = await screen.findByRole("checkbox", { name: /Appendix/i });

@@ -340,3 +340,33 @@ def test_timeline_merges_accepted_incident_items_without_duplicates() -> None:
     assert merged[0]["host"] == "WS01" and merged[0]["phase"] == "initial_access"
     markdown = report_service._render_timeline(merged)
     assert "| 2024-03-22 11:26:39 | WS01 | Initial access | Key event | first code | critical |" in markdown
+
+
+def test_spanish_report_translates_kairon_text_but_not_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    _quiet_sources(monkeypatch)
+    finding = _finding("finding-1", title="Suspicious PowerShell", severity=FindingSeverity.high, status=FindingStatus.confirmed)
+    report = _report(selected_finding_ids=["finding-1"], metadata_json={"language": "es"})
+    db = _FakeDb(case=Case(id="case-1", name="Sample", status="open", timezone="UTC"), findings=[finding], reports=[report])
+
+    content, _filename, _media = report_service.export_case_report(db, "case-1", "report-1", format="markdown")
+
+    assert "## 1. Resumen ejecutivo" in content
+    assert "## 5. Hallazgos" in content
+    assert "Se informa de **1 hallazgo** (1 alta)." in content
+    assert "| Severidad | Riesgo | Confianza | Estado | Observado (UTC) |" in content
+    # Evidence values and finding titles stay as written.
+    assert "Suspicious PowerShell" in content and "C:\\Users\\dfir\\Downloads\\payload.exe" in content
+    pdf, _f, _m = report_service.export_case_report(db, "case-1", "report-1", format="pdf")
+    assert "INFORME DE INVESTIGACI" in pdf.decode("latin-1", errors="ignore")
+    # The language does not leak into the next (English) report.
+    english, _f, _m = report_service.export_case_report(_FakeDb(case=Case(id="case-1", name="Sample", status="open", timezone="UTC"), reports=[_report()]), "case-1", "report-1", format="markdown")
+    assert "## 1. Executive Summary" in english
+
+
+def test_language_is_saved_on_the_report() -> None:
+    from app.models.case_report import CaseReportStatus
+
+    db = _FakeDb(case=Case(id="case-1", name="Sample", status="open", timezone="UTC"), reports=[_report(status=CaseReportStatus.draft)])
+    updated = report_service.update_case_report(db, "case-1", "report-1", {"language": "ES"})
+    assert updated["language"] == "es"
+    assert report_service.update_case_report(db, "case-1", "report-1", {"language": "fr"})["language"] == "en"
