@@ -63,6 +63,7 @@ from app.services.problematic_artifacts import build_problematic_artifacts_repor
 from app.services.search_service import search_events_v2
 from app.services.motw import build_motw_report_context, render_motw_markdown
 from app.services.startup_persistence import build_startup_persistence_report_context, render_startup_persistence_markdown
+from app.services.report_i18n import current_language, normalize_language, report_language, tr
 from app.services.mitre_tactics import TACTIC_ORDER, tactic_for, tagged_techniques, technique_label
 from app.services.timeline_service import _finding_incident_phase, build_incident_timeline_draft, export_incident_timeline_markdown
 
@@ -226,6 +227,7 @@ def create_case_report_draft(db: Session, case_id: str, payload: dict[str, Any])
         selected_process_chain_ids=_dedupe(selected_process_chain_ids),
         include_raw_appendix=bool(payload.get("include_raw_appendix", False)),
         include_debug_metadata=bool(payload.get("include_debug_metadata", False)),
+        metadata_json={"language": normalize_language(payload.get("language"))},
     )
     db.add(report)
     db.commit()
@@ -267,6 +269,8 @@ def update_case_report(db: Session, case_id: str, report_id: str, payload: dict[
         report.include_raw_appendix = bool(payload.get("include_raw_appendix"))
     if "include_debug_metadata" in payload:
         report.include_debug_metadata = bool(payload.get("include_debug_metadata"))
+    if "language" in payload:
+        report.metadata_json = {**dict(report.metadata_json or {}), "language": normalize_language(payload.get("language"))}
     db.add(report)
     db.commit()
     db.refresh(report)
@@ -275,6 +279,15 @@ def update_case_report(db: Session, case_id: str, report_id: str, payload: dict[
 
 def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict[str, Any]:
     report = _get_report_or_404(db, case_id, report_id)
+    with report_language(_report_language(report)):
+        return _build_case_report_preview(db, case_id, report_id, report)
+
+
+def _report_language(report: CaseReport) -> str:
+    return normalize_language((report.metadata_json or {}).get("language"))
+
+
+def _build_case_report_preview(db: Session, case_id: str, report_id: str, report: CaseReport) -> dict[str, Any]:
     case = _get_case_or_404(db, case_id)
     context = _build_case_context(db, case_id)
     filters = {**_default_report_filters_for_case(case), **dict(report.filters or {})}
@@ -394,7 +407,7 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
     def add(section_id: str, title: str, markdown: str, *, empty: bool = False, notes: list[str] | None = None) -> None:
         # An empty section's body already says there is nothing to show, so it
         # carries no warning: repeating "no data" in a warning box is noise.
-        sections.append({"id": section_id, "title": title, "markdown": markdown, "warnings": [] if empty else list(notes or []), "empty": empty})
+        sections.append({"id": section_id, "title": tr(title), "markdown": markdown, "warnings": [] if empty else list(notes or []), "empty": empty})
 
     if sections_enabled.get("executive_summary", True):
         add("executive_summary", "Executive Summary", _render_executive_summary(case, context, selected_findings, report, pending_review=pending_review))
@@ -483,6 +496,11 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
 
 def export_case_report(db: Session, case_id: str, report_id: str, *, format: str) -> tuple[str | bytes, str, str]:
     report = _get_report_or_404(db, case_id, report_id)
+    with report_language(_report_language(report)):
+        return _export_case_report(db, case_id, report_id, report, format=format)
+
+
+def _export_case_report(db: Session, case_id: str, report_id: str, report: CaseReport, *, format: str) -> tuple[str | bytes, str, str]:
     if format not in {"markdown", "pdf"}:
         raise HTTPException(status_code=400, detail="Unsupported export format")
     preview = build_case_report_preview(db, case_id, report_id)
@@ -757,7 +775,7 @@ def _render_pdf_document(report: CaseReport, case: Case, context: dict[str, Any]
     story.append(NextPageTemplate("content"))
     story.append(PageBreak())
 
-    story.append(Paragraph("Contents", styles["toc_title"]))
+    story.append(Paragraph(tr("Contents"), styles["toc_title"]))
     toc = TableOfContents()
     toc.levelStyles = [styles["toc_1"], styles["toc_2"]]
     toc.dotsMinLevel = 0
@@ -827,12 +845,12 @@ def _executive_tiles(context: dict[str, Any], preview: dict[str, Any]) -> list[l
     stats = preview.get("stats") or {}
     hosts = [host for host in context.get("hosts") or [] if _context_host_name(host) != "unknown"]
     return [
-        ["Evidence items", f"{len(context.get('evidences') or []):,}"],
-        ["Hosts", f"{len(hosts):,}"],
-        ["Events indexed", f"{int((context.get('summary') or {}).get('events_indexed') or 0):,}"],
-        ["Findings reported", f"{int(stats.get('selected_findings') or 0):,}"],
-        ["Rule matches", f"{int(stats.get('detections_matched') or 0):,}"],
-        ["Indicators", f"{int(stats.get('ioc_count') or 0):,}"],
+        [tr("Evidence items"), f"{len(context.get('evidences') or []):,}"],
+        [tr("Hosts"), f"{len(hosts):,}"],
+        [tr("Events indexed"), f"{int((context.get('summary') or {}).get('events_indexed') or 0):,}"],
+        [tr("Findings reported"), f"{int(stats.get('selected_findings') or 0):,}"],
+        [tr("Rule matches"), f"{int(stats.get('detections_matched') or 0):,}"],
+        [tr("Indicators"), f"{int(stats.get('ioc_count') or 0):,}"],
     ]
 
 
@@ -855,24 +873,23 @@ def _append_cover_page(
     if branding.get("subtitle"):
         story.append(Paragraph(_pdf_inline(branding["subtitle"]), styles["cover_subtitle"]))
     story.append(Spacer(1, 60 * mm))
-    story.append(Paragraph("DIGITAL FORENSIC INVESTIGATION REPORT", styles["cover_kicker"]))
+    story.append(Paragraph(tr("DIGITAL FORENSIC INVESTIGATION REPORT"), styles["cover_kicker"]))
     story.append(Spacer(1, 4))
     story.append(Paragraph(_pdf_inline(preview["title"]), styles["cover_title"]))
     story.append(HRFlowable(width="35%", thickness=3, color=palette["primary"], hAlign="LEFT", spaceBefore=4, spaceAfter=14))
-    story.append(Paragraph(_pdf_inline(f"Case: {case.name or case.id}"), styles["cover_case"]))
+    story.append(Paragraph(_pdf_inline(tr("Case: {case}", case=case.name or case.id)), styles["cover_case"]))
     story.append(Spacer(1, 26 * mm))
     case_rows = [
-        ["Case ID", str(case.id)],
-        ["Prepared by", report.author or "Not specified"],
-        ["Report date", f"{_fmt_ts(generated_at)} UTC"],
-        ["Timezone", f"All times in {case.timezone or 'UTC'}" if (case.timezone or "UTC") == "UTC" else f"Case timezone {case.timezone}; report times in UTC"],
-        ["Report reference", str(report.id)[:8].upper()],
+        [tr("Case ID"), str(case.id)],
+        [tr("Prepared by"), report.author or tr("Not specified")],
+        [tr("Report date"), f"{_fmt_ts(generated_at)} UTC"],
+        [tr("Timezone"), tr("All times in UTC") if (case.timezone or "UTC") == "UTC" else f"{case.timezone} → UTC"],
+        [tr("Report reference"), str(report.id)[:8].upper()],
     ]
     story.append(_build_key_value_table(case_rows, palette, styles, col_widths=(38 * mm, 136 * mm)))
     story.append(Spacer(1, 10))
     story.append(Paragraph(
-        "This report contains information from a forensic investigation. Handle it according to your "
-        "organisation's classification policy and share it only with authorised recipients.",
+        _pdf_inline(tr("This report contains information from a forensic investigation. Handle it according to your organisation's classification policy and share it only with authorised recipients.")),
         styles["cover_notice"],
     ))
 
@@ -1156,13 +1173,13 @@ def _draw_pdf_page_chrome(
     pdf_canvas.drawString(left, top, branding["brand_name"].upper())
     pdf_canvas.setFont("Helvetica", 7.5)
     pdf_canvas.setFillColor(palette["muted"])
-    pdf_canvas.drawRightString(right, top, _clip(f"Case {case_label} · Investigation report", 90))
+    pdf_canvas.drawRightString(right, top, _clip(tr("Case {case} · Investigation report", case=case_label), 90))
     pdf_canvas.setStrokeColor(palette["border"])
     pdf_canvas.setLineWidth(0.4)
     pdf_canvas.line(left, top - 2.5 * mm, right, top - 2.5 * mm)
     pdf_canvas.line(left, 12 * mm, right, 12 * mm)
-    pdf_canvas.drawString(left, 8 * mm, f"Generated {_fmt_ts(generated_at)} UTC · Confidential")
-    pdf_canvas.drawRightString(right, 8 * mm, f"Page {page_number} of {page_count}")
+    pdf_canvas.drawString(left, 8 * mm, tr("Generated {when} UTC · Confidential", when=_fmt_ts(generated_at)))
+    pdf_canvas.drawRightString(right, 8 * mm, tr("Page {page} of {pages}", page=page_number, pages=page_count))
     pdf_canvas.restoreState()
 
 
@@ -1295,6 +1312,7 @@ def _serialize_report(report: CaseReport) -> dict[str, Any]:
         "include_raw_appendix": bool(report.include_raw_appendix),
         "include_debug_metadata": bool(report.include_debug_metadata),
         "metadata_json": dict(report.metadata_json or {}),
+        "language": normalize_language((report.metadata_json or {}).get("language")),
     }
 
 
@@ -2392,29 +2410,34 @@ def _render_executive_summary(
     hosts_clause = ""
     if host_names:
         shown = ", ".join(f"**{_escape_md(name)}**" for name in host_names[:5])
-        more = f" and {len(host_names) - 5} more" if len(host_names) > 5 else ""
-        hosts_clause = f" from {len(host_names)} host{'s' if len(host_names) != 1 else ''} ({shown}{more})"
-    lines.append(
-        f"This report covers case **{_escape_md(case.name)}**. "
-        f"{_plural(len(evidences), 'evidence item')}{hosts_clause} {'was' if len(evidences) == 1 else 'were'} processed "
-        f"and {int(context['summary']['events_indexed']):,} events were indexed."
-    )
+        more = f" +{len(host_names) - 5}" if len(host_names) > 5 else ""
+        template = " from {count} host ({names})" if len(host_names) == 1 else " from {count} hosts ({names})"
+        hosts_clause = tr(template, count=len(host_names), names=f"{shown}{more}")
+    evidence_text = tr("{count} evidence item" if len(evidences) == 1 else "{count} evidence items", count=f"{len(evidences):,}")
+    lines.append(tr(
+        "This report covers case **{case}**. {evidence}{hosts} {verb} processed and {events} events were indexed.",
+        case=_escape_md(case.name), evidence=evidence_text, hosts=hosts_clause, verb="was" if len(evidences) == 1 else "were",
+        events=f"{int(context['summary']['events_indexed']):,}",
+    ))
     lines.append("")
     if findings:
         by_severity = Counter(_sev(finding) for finding in findings)
-        breakdown = ", ".join(f"{by_severity[level]} {level}" for level in ("critical", "high", "medium", "low", "info") if by_severity.get(level))
-        lines.append(f"**{_plural(len(findings), 'finding')}** {'is' if len(findings) == 1 else 'are'} reported ({breakdown}).")
+        breakdown = ", ".join(f"{by_severity[level]} {tr(level)}" for level in ("critical", "high", "medium", "low", "info") if by_severity.get(level))
+        template = "**{count} finding** is reported ({breakdown})." if len(findings) == 1 else "**{count} findings** are reported ({breakdown})."
+        lines.append(tr(template, count=len(findings), breakdown=breakdown))
     else:
-        lines.append("No findings are included in this report.")
+        lines.append(tr("No findings are included in this report."))
     if pending_review:
-        lines.append(
-            f"{_plural(pending_review, 'further finding')} {'is' if pending_review == 1 else 'are'} still awaiting analyst review "
-            "and not included; confirm or dismiss them in Findings before issuing the report."
-        )
+        lines.append(tr(
+            "{count} further finding is still awaiting analyst review and not included; confirm or dismiss it in Findings before issuing the report."
+            if pending_review == 1 else
+            "{count} further findings are still awaiting analyst review and not included; confirm or dismiss them in Findings before issuing the report.",
+            count=pending_review,
+        ))
     if findings:
-        lines.extend(["", "Key findings:"])
+        lines.extend(["", tr("Key findings:")])
         for finding in findings[:5]:
-            lines.append(f"- **{_escape_md(finding.title)}**: {_sev(finding)} severity, risk {int(finding.risk_score or 0)}")
+            lines.append(f"- **{_escape_md(finding.title)}**: " + tr("{severity} severity, risk {risk}", severity=tr(_sev(finding)), risk=int(finding.risk_score or 0)))
     return "\n".join(lines).strip()
 
 
@@ -2433,22 +2456,22 @@ def _render_scope(
     if period_from or period_to:
         period = f"{_fmt_ts(period_from) or 'beginning'} to {_fmt_ts(period_to) or 'latest'} UTC"
     else:
-        period = "All available data"
+        period = tr("All available data")
     evidence_filter = str(filters.get("evidence_id") or "").strip()
     statuses = ", ".join(str(item) for item in (filters.get("include_statuses") or [])) or "any status"
     rows = [
         ["Item", "Value"],
-        ["Case", str(case.name or "-")],
-        ["Case ID", _code(case.id)],
-        ["Period", period],
-        ["Hosts", str(filters.get("host") or "All hosts")],
-        ["Evidence", (evidence_names or {}).get(evidence_filter, evidence_filter) if evidence_filter else "All evidence"],
-        ["Timezone", str(case.timezone or "UTC")],
-        ["Findings included", f"{statuses}; minimum severity {filters.get('min_severity') or 'medium'}"],
+        [tr("Case"), str(case.name or "-")],
+        [tr("Case ID"), _code(case.id)],
+        [tr("Period"), period],
+        [tr("Hosts"), str(filters.get("host") or tr("All hosts"))],
+        [tr("Evidence"), (evidence_names or {}).get(evidence_filter, evidence_filter) if evidence_filter else tr("All evidence")],
+        [tr("Timezone"), str(case.timezone or "UTC")],
+        [tr("Findings included"), tr("{status}; minimum severity {severity}", status=statuses, severity=tr(str(filters.get("min_severity") or "medium")))],
     ]
     body = _markdown_table(rows)
     if coverage_notes:
-        body += "\n\nCoverage notes:\n" + "\n".join(f"- {_sanitize_text(note)}" for note in coverage_notes)
+        body += "\n\n" + tr("Coverage notes:") + "\n" + "\n".join(f"- {_sanitize_text(note)}" for note in coverage_notes)
     return body
 
 
@@ -2498,16 +2521,16 @@ def _render_memory_section(entries: list[dict[str, Any]]) -> str:
     parts: list[str] = []
     for entry in entries:
         parts.append(f"### {_escape_md(str(entry.get('filename') or entry['evidence_id']))}")
-        details = [["Field", "Value"], ["Host", str(entry.get("host") or "unknown")]]
+        details = [["Field", "Value"], [tr("Host"), str(entry.get("host") or "unknown")]]
         if entry.get("system"):
-            details.append(["System", " ".join(str(part) for part in (entry["system"], f"({entry['architecture']})" if entry.get("architecture") else "") if part)])
+            details.append([tr("System"), " ".join(str(part) for part in (entry["system"], f"({entry['architecture']})" if entry.get("architecture") else "") if part)])
         if entry.get("captured_at"):
-            details.append(["Captured at (system time in the image, UTC)", _fmt_ts(entry["captured_at"]) or str(entry["captured_at"])])
+            details.append([tr("Captured at (system time in the image, UTC)"), _fmt_ts(entry["captured_at"]) or str(entry["captured_at"])])
         if entry.get("format"):
-            details.append(["Format", _humanize(str(entry["format"]))])
+            details.append([tr("Format"), _humanize(str(entry["format"]))])
         if entry.get("size_bytes"):
-            details.append(["Size", _human_bytes(int(entry["size_bytes"]))])
-        details.append(["Findings linked to this image", str(entry.get("findings_count") or 0)])
+            details.append([tr("Size"), _human_bytes(int(entry["size_bytes"]))])
+        details.append([tr("Findings linked to this image"), str(entry.get("findings_count") or 0)])
         parts.append(_markdown_table(details))
         analyses = [item for item in entry.get("analyses") or [] if item.get("family") not in {"system_info", "raw_observations"}]
         if analyses:
@@ -2592,7 +2615,7 @@ def _render_hosts(context: dict[str, Any], findings: list[Finding] | None = None
             reported[related] += 1
             if _sev(finding) in {"high", "critical"}:
                 reported_high[related] += 1
-    rows = [["Host", "Role", "Events", "Findings", "High/critical", "First seen (UTC)", "Last seen (UTC)"]]
+    rows = [[tr("Host"), "Role", "Events", "Findings", "High/critical", "First seen (UTC)", "Last seen (UTC)"]]
     for host in context["hosts"]:
         events_count = host.get("events_count", host.get("event_count", 0))
         name = _context_host_name(host)
@@ -2637,30 +2660,30 @@ def _render_findings(findings: list[Finding]) -> str:
         if finding.description:
             lines.extend(["", _narrative(finding.description)])
         if finding.reasons:
-            lines.extend(["", "Why it matters:"])
+            lines.extend(["", tr("Why it matters:")])
             for reason in finding.reasons[:8]:
                 lines.append(f"- {_sanitize_text(reason)}")
         related = []
         if finding.related_hosts:
-            related.append(["Hosts", ", ".join(_sanitize_text(str(item)) for item in finding.related_hosts[:5])])
+            related.append([tr("Hosts"), ", ".join(_sanitize_text(str(item)) for item in finding.related_hosts[:5])])
         if finding.related_users:
-            related.append(["Users", ", ".join(_sanitize_text(str(item)) for item in finding.related_users[:5])])
+            related.append([tr("Users"), ", ".join(_sanitize_text(str(item)) for item in finding.related_users[:5])])
         if finding.related_files:
-            related.append(["Files", ", ".join(_code(str(item)) for item in finding.related_files[:5])])
+            related.append([tr("Files"), ", ".join(_code(str(item)) for item in finding.related_files[:5])])
         if finding.related_domains:
-            related.append(["Domains", ", ".join(_code(str(item)) for item in finding.related_domains[:5])])
+            related.append([tr("Domains"), ", ".join(_code(str(item)) for item in finding.related_domains[:5])])
         if finding.related_ips:
-            related.append(["IP addresses", ", ".join(_code(str(item)) for item in finding.related_ips[:5])])
+            related.append([tr("IP addresses"), ", ".join(_code(str(item)) for item in finding.related_ips[:5])])
         if related:
             lines.extend(["", _markdown_table([["Related", "Values"], *related])])
         if finding.timeline:
-            lines.extend(["", "Supporting events:"])
+            lines.extend(["", tr("Supporting events:")])
             for item in finding.timeline[:6]:
                 lines.append(
                     f"- {_fmt_ts(item.get('timestamp')) or 'unknown time'} · {_humanize(str(item.get('event_type') or 'event'))} · {_sanitize_text(str(item.get('summary') or ''))}"
                 )
         if finding.recommended_triage:
-            lines.extend(["", "Recommended next steps:"])
+            lines.extend(["", tr("Recommended next steps:")])
             for item in finding.recommended_triage[:6]:
                 lines.append(f"- {_sanitize_text(item)}")
         lines.append("")
@@ -2708,10 +2731,12 @@ def _render_mitre(findings: list[Finding]) -> str:
     table = [["Tactic", "Technique", "Findings"]]
     previous = None
     for (tactic, technique), refs in sorted(rows.items(), key=lambda item: (order.get(item[0][0], len(order)), item[0][1])):
-        table.append([_humanize(tactic) if tactic != previous else "", technique_label(technique), ", ".join(refs)])
+        table.append([tr(_humanize(tactic)) if tactic != previous else "", technique_label(technique), ", ".join(refs)])
         previous = tactic
     tactics = len({tactic for tactic, _ in rows})
-    return f"{_plural(len(rows), 'technique')} across {_plural(tactics, 'tactic')}, from the MITRE tags of the reported findings.\n\n" + _markdown_table(table)
+    techniques_text = _plural(len(rows), "technique") if current_language() == "en" else f"{len(rows)} técnica{'s' if len(rows) != 1 else ''}"
+    tactics_text = _plural(tactics, "tactic") if current_language() == "en" else f"{tactics} táctica{'s' if tactics != 1 else ''}"
+    return tr("{techniques} across {tactics}, from the MITRE tags of the reported findings.", techniques=techniques_text, tactics=tactics_text) + "\n\n" + _markdown_table(table)
 
 
 def _render_detections(detections: list[DetectionResult], total: int | None = None, *, event_times: dict[str, str] | None = None) -> str:
@@ -2744,9 +2769,10 @@ def _render_detections(detections: list[DetectionResult], total: int | None = No
     scope = f"{total:,} rule matches" if total == len(detections) else f"{total:,} rule matches; the {len(detections):,} most recent are summarised"
     lines = [f"{scope} ({breakdown})."]
     if unreviewed:
-        lines.append(
-            f"These are automated rule matches; {unreviewed:,} of them have not been reviewed by an analyst and should be read as leads, not conclusions."
-        )
+        lines.append(tr(
+            "These are automated rule matches; {count} of them have not been reviewed by an analyst and should be read as leads, not conclusions.",
+            count=f"{unreviewed:,}",
+        ))
     table = [["Rule", "Severity", "Matches", "Hosts", "First event (UTC)", "Last event (UTC)"]]
     ordered = sorted(rules.items(), key=lambda item: (-SEVERITY_ORDER.get(item[1]["severity"], 0), -item[1]["count"], item[0]))
     for name, entry in ordered[:20]:
@@ -2774,7 +2800,7 @@ def _render_timeline(entries: list[dict[str, Any]]) -> str:
             [
                 _fmt_ts(entry.get("timestamp")) or "unknown",
                 str(entry.get("host") or "-"),
-                _humanize(str(entry.get("phase") or "-")) if entry.get("phase") not in {None, "", "unknown"} else "-",
+                tr(_humanize(str(entry.get("phase") or "-"))) if entry.get("phase") not in {None, "", "unknown"} else "-",
                 str(entry.get("title") or ""),
                 _clip(str(entry.get("note") or entry.get("summary") or "-"), 400),
                 str(entry.get("importance") or "-"),
@@ -2836,7 +2862,7 @@ def _render_incident_timeline_section(case_id: str, items: list[dict[str, Any]])
         rows.append([
             _fmt_ts(item.get("timestamp")) or "unknown",
             str(item.get("host") or "-"),
-            _humanize(str(item.get("phase") or "unknown")),
+            tr(_humanize(str(item.get("phase") or "unknown"))),
             _clip(event, 300),
             str(item.get("provenance_badge") or _humanize(str(item.get("source") or "-"))),
         ])
@@ -2946,7 +2972,7 @@ def _render_command_history_section(commands: list[dict[str, Any]], stories: lis
             _code(_clip(str(command.get("command") or "-"), 220)),
             str(int(command.get("risk_score") or 0)),
         ])
-    lines.extend(["", _markdown_table(_drop_empty_columns(overview)), "", "#### Command details", ""])
+    lines.extend(["", _markdown_table(_drop_empty_columns(overview)), "", "#### " + tr("Command details"), ""])
     for command in merged:
         process = command.get("process") if isinstance(command.get("process"), dict) else {}
         parent = command.get("parent_process") if isinstance(command.get("parent_process"), dict) else {}
@@ -2959,21 +2985,21 @@ def _render_command_history_section(commands: list[dict[str, Any]], stories: lis
         chain = " → ".join(label for label in (_process_label(parent), _process_label(process)) if label)
         heading_process = _process_label(process) or launcher
         lines.extend([f"##### {_fmt_ts(command.get('timestamp')) or 'unknown time'} UTC · {_escape_md(str(command.get('host') or '-'))} · {_escape_md(heading_process)}", ""])
-        lines.append(f"- Command: {_code(_clip(str(command.get('command') or '-'), 600))}")
+        lines.append(f"- {tr('Command')}: {_code(_clip(str(command.get('command') or '-'), 600))}")
         if parent and chain:
-            lines.append(f"- Process chain: {_escape_md(chain)}")
+            lines.append(f"- {tr('Process chain')}: {_escape_md(chain)}")
         if command.get("script"):
-            lines.append(f"- Script: {_code(command['script'])}")
+            lines.append(f"- {tr('Script')}: {_code(command['script'])}")
         if command.get("user"):
-            lines.append(f"- User: {_code(str(command.get('user')))}")
-        lines.append(f"- Family: {_code(family)} · Launcher: {_code(launcher)}")
-        lines.append(f"- Seen in: {', '.join(_humanize(source) for source in command.get('_sources') or ['unknown'])} · risk {int(command.get('risk_score') or 0)}")
+            lines.append(f"- {tr('User')}: {_code(str(command.get('user')))}")
+        lines.append(f"- {tr('Family')}: {_code(family)} · {tr('Launcher')}: {_code(launcher)}")
+        lines.append(f"- {tr('Seen in')}: {', '.join(_humanize(source) for source in command.get('_sources') or ['unknown'])} · risk {int(command.get('risk_score') or 0)}")
         if reasons:
-            lines.append(f"- Why it is suspicious: {_escape_md(reasons)}")
+            lines.append(f"- {tr('Why it is suspicious')}: {_escape_md(reasons)}")
         if status_label:
-            lines.append(f"- Analyst marking: {_escape_md(status_label)}" + (f" ({_escape_md(notes)})" if notes else ""))
+            lines.append(f"- {tr('Analyst marking')}: {_escape_md(status_label)}" + (f" ({_escape_md(notes)})" if notes else ""))
         elif notes:
-            lines.append(f"- Analyst notes: {_escape_md(notes)}")
+            lines.append(f"- {tr('Analyst notes')}: {_escape_md(notes)}")
         story = story_by_command_id.get(str(command.get("id") or ""))
         # The lightweight story only adds the parent link; without one it would
         # print a "could not be linked" placeholder for every command.
@@ -3059,7 +3085,7 @@ def _render_iocs(rows: list[dict[str, Any]]) -> str:
         elif source.startswith("bookmark:"):
             source = f"Key event: {source.removeprefix('bookmark:')}"
         table.append([
-            _IOC_TYPE_LABELS.get(row["type"], _humanize(row["type"])),
+            tr(_IOC_TYPE_LABELS.get(row["type"], _humanize(row["type"]))),
             _code(row["value"]),
             source,
             _fmt_ts(row["first_seen"]) or "-",
@@ -3107,7 +3133,7 @@ def _render_recommendations(findings: list[Finding], report: CaseReport) -> str:
     recommendations.append("Preserve the collected evidence and investigation exports to keep the case narrative reproducible.")
     body = "\n".join(f"- {_sanitize_text(item)}" for item in _dedupe(recommendations))
     if manual:
-        return f"{manual}\n\nAdditional general recommendations:\n{body}"
+        return f"{manual}\n\n{tr('Additional general recommendations:')}\n{body}"
     return body
 
 
@@ -3134,28 +3160,28 @@ def _render_appendix(
     for key, label in (("risk_min", "Minimum risk"), ("risk_max", "Maximum risk"), ("rule_name", "Rule name contains"), ("command_query", "Command text contains")):
         if filters.get(key) not in {None, ""}:
             parameters.append([label, str(filters[key])])
-    lines = ["### Report parameters", "", _markdown_table(parameters)]
+    parameters = [parameters[0], *([tr(label), value] for label, value in parameters[1:])]
+    lines = ["### " + tr("Report parameters"), "", _markdown_table(parameters)]
     if omitted_sections:
         lines.extend([
             "",
-            "### Sections without matching data",
+            "### " + tr("Sections without matching data"),
             "",
-            "These sections were checked and had no matching data for this case and these parameters, so they are left out of the exported report: "
-            + ", ".join(omitted_sections) + ".",
+            tr("These sections were checked and had no matching data for this case and these parameters, so they are left out of the exported report: {sections}.", sections=", ".join(omitted_sections)),
         ])
     limitations = _narrative((report.analyst_notes or {}).get("limitations"))
     if limitations:
-        lines.extend(["", "### Limitations", "", limitations])
+        lines.extend(["", "### " + tr("Limitations"), "", limitations])
     if report.include_raw_appendix:
         references = [entry for entry in timeline_entries if entry.get("event_id")][:50]
         if references:
-            lines.extend(["", "### Event references", ""])
+            lines.extend(["", "### " + tr("Event references"), ""])
             rows = [["Time (UTC)", "Event", "Event ID"]]
             for entry in references:
                 rows.append([_fmt_ts(entry.get("timestamp")) or "-", str(entry.get("title") or ""), _code(str(entry.get("event_id")))])
             lines.append(_markdown_table(rows))
     if report.include_debug_metadata:
-        lines.extend(["", "### Report metadata", "", f"- Report ID: {_code(report.id)}", f"- Generated at: {_fmt_ts(datetime.now(UTC))} UTC"])
+        lines.extend(["", "### " + tr("Report metadata"), "", f"- Report ID: {_code(report.id)}", f"- Generated at: {_fmt_ts(datetime.now(UTC))} UTC"])
     return "\n".join(lines).strip()
 
 
@@ -3406,7 +3432,7 @@ def _report_filters_applied(filters: dict[str, Any], time_range: dict[str, Any])
 
 
 def _render_markdown_document(title: str, sections: list[dict[str, Any]], *, author: str | None = None) -> str:
-    byline = f"Generated {_fmt_ts(datetime.now(UTC))} UTC · all times UTC" + (f" · Prepared by {_sanitize_text(author)}" if author else "")
+    byline = tr("Generated {when} UTC · all times UTC", when=_fmt_ts(datetime.now(UTC))) + (tr(" · Prepared by {author}", author=_sanitize_text(author)) if author else "")
     lines = [f"# {_escape_md(title)}", "", f"_{byline}_", ""]
     for number, section in enumerate(sections, start=1):
         lines.append(f"## {number}. {_escape_md(section['title'])}")
@@ -3421,6 +3447,7 @@ def _render_markdown_document(title: str, sections: list[dict[str, Any]], *, aut
 
 
 def _markdown_table(rows: list[list[str]]) -> str:
+    rows = [[tr(cell) for cell in rows[0]], *rows[1:]]
     sanitized_rows = [[_sanitize_text(cell).replace("\n", " ").replace("|", "\\|") for cell in row] for row in rows]
     header = f"| {' | '.join(sanitized_rows[0])} |"
     divider = f"| {' | '.join(['---'] * len(sanitized_rows[0]))} |"

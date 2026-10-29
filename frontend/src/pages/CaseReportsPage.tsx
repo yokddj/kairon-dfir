@@ -318,6 +318,28 @@ export default function CaseReportsPage() {
                       className="w-full bg-transparent outline-none"
                     />
                   </label>
+                  <label className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm">
+                    <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Prepared by</span>
+                    <input
+                      value={currentReport.author ?? ""}
+                      placeholder="Analyst or team shown on the cover"
+                      onChange={(event) => patchReport.mutate({ author: event.target.value })}
+                      className="w-full bg-transparent outline-none"
+                    />
+                  </label>
+                  <label className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm">
+                    <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Report language</span>
+                    <select
+                      aria-label="Report language"
+                      value={currentReport.language ?? "en"}
+                      onChange={(event) => patchReport.mutate({ language: event.target.value as "en" | "es" })}
+                      className="w-full bg-transparent outline-none"
+                    >
+                      <option value="en">English</option>
+                      <option value="es">Español</option>
+                    </select>
+                    <span className="mt-1 block text-[11px] text-muted">Kairon's own text; evidence and your notes are kept as written.</span>
+                  </label>
                   <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm text-muted">
                     <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Template</p>
                     <p className="mt-2">{currentReport.template}</p>

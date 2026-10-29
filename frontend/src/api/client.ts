@@ -3941,6 +3941,8 @@ export type CaseReport = {
   include_raw_appendix: boolean;
   include_debug_metadata: boolean;
   metadata_json?: Record<string, unknown>;
+  /** Language of the text Kairon writes in the report ("en" or "es"). */
+  language?: "en" | "es";
 };
 
 export type CaseReportPreviewSection = {

@@ -90,9 +90,10 @@ A report is only as good as the curation behind it. The builder does not judge e
 4. **Mark the key events.** Bookmark the milestones (initial access, execution, persistence, lateral movement, exfiltration) with *include in report* and a short note: they become the Investigation Timeline. Mark relevant events and commands as *suspicious* or *important*.
 5. **Curate the Incident Timeline.** Generate it, accept the items that tell the story, discard the rest. Only accepted items reach the report. Regenerate it after major case changes (the report says when it is out of date).
 6. **Triage memory.** Mark Find Evil processes as suspicious, important or not relevant; marked processes are listed in the Memory Analysis section.
-7. **Write the narrative.** In the report builder fill *Executive summary* (it leads the section, above the automatic figures), *Recommendations* and *Limitations*, set the author and a title for the reader (for example "Incident response report: ransomware on WS01").
-8. **Check the preview.** Sections marked *No matching data · left out of the export* will not appear; adjust filters or sections if something expected is missing.
-9. **Export.** PDF to deliver, Markdown to edit or archive. Set the logo, brand name and colour once in the System page settings (`REPORT_BRAND_NAME`, `REPORT_BRAND_SUBTITLE`, `REPORT_BRAND_PRIMARY_COLOR`, `REPORT_INCLUDE_LOGO`, `REPORT_LOGO_PATH`).
+7. **Choose the language and author.** English or Spanish for the text Kairon writes; evidence and your notes are kept as written. "Prepared by" appears on the cover.
+8. **Write the narrative.** In the report builder fill *Executive summary* (it leads the section, above the automatic figures), *Recommendations* and *Limitations*, set the author and a title for the reader (for example "Incident response report: ransomware on WS01").
+9. **Check the preview.** Sections marked *No matching data · left out of the export* will not appear; adjust filters or sections if something expected is missing.
+10. **Export.** PDF to deliver, Markdown to edit or archive. Set the logo, brand name and colour once in the System page settings (`REPORT_BRAND_NAME`, `REPORT_BRAND_SUBTITLE`, `REPORT_BRAND_PRIMARY_COLOR`, `REPORT_INCLUDE_LOGO`, `REPORT_LOGO_PATH`).
 
 ## Exports
 
