@@ -261,3 +261,8 @@ def test_download_target_without_url_is_not_an_ioc() -> None:
     rows: list[tuple] = []
     report_service._extract_iocs_from_event({"download": {"url": None, "target_path": r"\\SRV01\files -s 1.2.3.4"}}, lambda t, v, **_k: rows.append((t, v)), "x", None)
     assert rows == []
+
+
+def test_unc_paths_and_multiline_commands_render_intact() -> None:
+    assert report_service._pdf_inline(r"encrypted \\SRV01\files") == r"encrypted \\SRV01\files"
+    assert report_service._code("line one\nline two") == "`line one line two`"

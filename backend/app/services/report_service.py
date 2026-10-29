@@ -412,7 +412,7 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
         add("defender", "Microsoft Defender", _render_defender_section(defender_report["events"]), empty=not defender_report["events"], notes=defender_report["warnings"])
     if sections_enabled.get("email", True) and filters.get("include_email", True):
         email_markdown = _humanize_table_columns(_collapse_duplicate_table_rows(render_email_artifacts_markdown(email_report["items"])), {"Type", "Client"})
-        add("email", "Email Artifacts", email_markdown, empty=not email_report["items"], notes=email_report["warnings"])
+        add("email", "Email Artifacts", email_markdown, empty=not email_report["items"], notes=_summarize_source_cap_warnings(email_report["warnings"], "Email Artifacts"))
     if sections_enabled.get("motw", True):
         add("motw", "MOTW / Downloaded Files", _humanize_table_columns(_collapse_duplicate_table_rows(render_motw_markdown(motw_report["items"])), {"Source"}), empty=not motw_report["items"], notes=motw_report["warnings"])
     if sections_enabled.get("srum", True) and filters.get("include_srum", True):
@@ -1196,7 +1196,9 @@ def _pdf_palette(primary_hex: str) -> dict[str, colors.Color]:
     }
 
 
-_MARKDOWN_ESCAPE = re.compile(r"\\([*_`|\\])")
+# Renderers escape * _ ` | for markdown, never backslashes: a doubled
+# backslash in text is a UNC path (\\server\share) and must stay as written.
+_MARKDOWN_ESCAPE = re.compile(r"\\([*_`|])")
 
 
 def _pdf_inline(value: str) -> str:
@@ -2789,7 +2791,7 @@ def _render_command_history_section(commands: list[dict[str, Any]], stories: lis
         chain = " → ".join(label for label in (_process_label(parent), _process_label(process)) if label)
         heading_process = _process_label(process) or launcher
         lines.extend([f"##### {_fmt_ts(command.get('timestamp')) or 'unknown time'} UTC · {_escape_md(str(command.get('host') or '-'))} · {_escape_md(heading_process)}", ""])
-        lines.append(f"- Command: {_code(str(command.get('command') or '-'))}")
+        lines.append(f"- Command: {_code(_clip(str(command.get('command') or '-'), 600))}")
         if parent and chain:
             lines.append(f"- Process chain: {_escape_md(chain)}")
         if command.get("user"):
@@ -3037,7 +3039,8 @@ def _fmt_ts(value: Any) -> str:
 def _code(value: Any) -> str:
     """Inline code span. Its content is literal, so it is redacted but not
     markdown-escaped (escaping inside backticks prints the backslashes)."""
-    text = _sanitize_text(str(value or "")).replace("`", "'")
+    # A code span is one line: a multi-line script would break it open.
+    text = re.sub(r"\s*[\r\n]+\s*", " ", _sanitize_text(str(value or ""))).replace("`", "'")
     return f"`{text}`" if text and text != "-" else "-"
 
 
@@ -3060,7 +3063,7 @@ def _drop_empty_columns(rows: list[list[str]], *, zero_is_empty: set[str] | None
 _SOURCE_CAP_WARNING = re.compile(r"showing first (\d+) of (\d+) source matches")
 
 
-def _summarize_source_cap_warnings(warnings: list[str]) -> list[str]:
+def _summarize_source_cap_warnings(warnings: list[str], review_in: str = "Startup & Persistence") -> list[str]:
     """Per-source "showing first N of M" caps read as noise one by one; the
     reader only needs to know the list is a sample and how big the pool was."""
     capped = [match for match in (_SOURCE_CAP_WARNING.search(str(item)) for item in warnings) if match]
@@ -3069,7 +3072,7 @@ def _summarize_source_cap_warnings(warnings: list[str]) -> list[str]:
         total = sum(int(match.group(2)) for match in capped)
         other.append(
             f"{len(capped)} sources had more matching entries than the report lists ({total:,} in total); "
-            "the highest-risk entries are shown. Review Startup & Persistence for the full list."
+            f"the highest-risk entries are shown. Review {review_in} for the full list."
         )
     return other
 
