@@ -63,7 +63,8 @@ from app.services.problematic_artifacts import build_problematic_artifacts_repor
 from app.services.search_service import search_events_v2
 from app.services.motw import build_motw_report_context, render_motw_markdown
 from app.services.startup_persistence import build_startup_persistence_report_context, render_startup_persistence_markdown
-from app.services.timeline_service import build_incident_timeline_draft, export_incident_timeline_markdown
+from app.services.mitre_tactics import TACTIC_ORDER, tactic_for, tagged_techniques, technique_label
+from app.services.timeline_service import _finding_incident_phase, build_incident_timeline_draft, export_incident_timeline_markdown
 
 
 REPORT_TEMPLATES = [
@@ -77,6 +78,7 @@ REPORT_TEMPLATES = [
             "evidence",
             "hosts",
             "findings",
+            "mitre",
             "timeline",
             "incident_timeline",
             "process_chains",
@@ -315,6 +317,13 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
             if entry["timestamp"] and str(entry["event_id"]) not in bookmarked_event_ids
         )
         timeline_entries.sort(key=lambda item: _safe_dt(item.get("timestamp")))
+    # One timeline in the report: key events, marked events and the accepted
+    # Incident Timeline items, instead of two overlapping sections.
+    merge_incident_timeline = bool(
+        sections_enabled.get("timeline", True) and sections_enabled.get("incident_timeline", True) and filters.get("include_incident_timeline", True)
+    )
+    if merge_incident_timeline:
+        timeline_entries = _merge_incident_items(timeline_entries, incident_timeline_report["items"])
     ioc_rows = _extract_iocs(case_id, selected_findings, selected_bookmarks)
     evidence_rows = _case_evidence_rows(db, case_id)
     pending_review = _count_findings_pending_review(db, case_id, filters, findings)
@@ -334,6 +343,7 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
         )
         coverage_notes.append(f"Marked events: the {len(marked_events):,} most recent of {marked_events_total:,} are included.")
     coverage_notes.extend(_COVERAGE_NOTE_TEXT[code] for code in context["summary"]["warnings"] if code in _COVERAGE_NOTE_TEXT)
+    coverage_notes.extend(_host_coverage_notes(db, case_id))
     stats = {
         "findings_matched": len(findings),
         "findings_pending_review": pending_review,
@@ -396,12 +406,17 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
         add("hosts", "Hosts", _render_hosts(context, selected_findings), empty=not context["hosts"])
     if sections_enabled.get("findings", True):
         add("findings", "Findings", _render_findings(selected_findings), empty=not selected_findings)
+    if sections_enabled.get("mitre", True):
+        mitre_markdown = _render_mitre(selected_findings)
+        add("mitre", "MITRE ATT&CK", mitre_markdown, empty=not mitre_markdown)
     if sections_enabled.get("findings", True) and filters.get("include_detections", True):
         add("detections", "Detections", _render_detections(detections, detections_total, event_times=detection_event_times), empty=not detections)
     if sections_enabled.get("timeline", True):
         timeline_notes = ["No key events were bookmarked for the report; this timeline is built from the selected findings."] if timeline_auto_selected else []
+        if merge_incident_timeline:
+            timeline_notes.extend(_incident_timeline_report_notes(incident_timeline_report["warnings"]))
         add("timeline", "Investigation Timeline", _render_timeline(timeline_entries), empty=not timeline_entries, notes=timeline_notes)
-    if sections_enabled.get("incident_timeline", True) and filters.get("include_incident_timeline", True):
+    if sections_enabled.get("incident_timeline", True) and filters.get("include_incident_timeline", True) and not merge_incident_timeline:
         incident_markdown = _render_incident_timeline_section(case_id, incident_timeline_report["items"])
         add("incident_timeline", "Incident Timeline", incident_markdown, empty=incident_markdown == "No incident timeline items were generated.", notes=_incident_timeline_report_notes(incident_timeline_report["warnings"]))
     if sections_enabled.get("process_chains", True):
@@ -1845,6 +1860,7 @@ def _build_marked_event_entries(markings: list[EventMarking]) -> list[dict[str, 
                 "category": "marked_event",
                 "importance": marking.status,
                 "title": f"{_humanize(marking.artifact_type or 'event')} marked {marking.status}" + (f" on {marking.host}" if marking.host else ""),
+                "host": marking.host,
                 "summary": marking.note or labels or "Analyst-marked event",
                 "note": marking.note or "",
                 "related_finding": marking.finding_id,
@@ -2253,6 +2269,18 @@ def _extract_iocs(case_id: str, findings: list[Finding], bookmarks: list[Timelin
             if item.get("event_id"):
                 remember("event_id", item["event_id"], source=source, timestamp=item.get("timestamp"))
 
+    # The events each finding rests on carry the hard indicators (hashes,
+    # binaries, destinations) the finding's summary fields often leave out.
+    finding_events: dict[str, Finding] = {}
+    for finding in findings:
+        event_ids = [*(finding.related_event_ids or []), *(str(item.get("event_id") or "") for item in finding.timeline or [])]
+        for event_id in event_ids:
+            if event_id and not str(event_id).startswith("memory:") and len(finding_events) < _IOC_EVENT_LIMIT:
+                finding_events.setdefault(str(event_id), finding)
+    for event_id, event in _fetch_events_by_ids(case_id, list(finding_events)).items():
+        finding = finding_events[event_id]
+        _extract_iocs_from_event(event, remember, f"finding:{finding.title}", event.get("@timestamp") or finding.time_start)
+
     for bookmark in bookmarks:
         source = f"bookmark:{bookmark.title}"
         remember("event_id", bookmark.event_id, source=source, timestamp=bookmark.timestamp, notes=bookmark.note)
@@ -2264,6 +2292,38 @@ def _extract_iocs(case_id: str, findings: list[Finding], bookmarks: list[Timelin
     return result
 
 
+_IOC_EVENT_LIMIT = 300
+_HASH_PAIR = re.compile(r"(MD5|SHA1|SHA256)=([0-9A-Fa-f]{32,64})")
+
+
+def _fetch_events_by_ids(case_id: str, event_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Events by id in one query; empty when the index cannot be reached."""
+    if not event_ids:
+        return {}
+    try:
+        result = search_documents(get_events_index(case_id), {"size": len(event_ids), "query": {"ids": {"values": event_ids}}})
+    except Exception:  # noqa: BLE001
+        return {}
+    events: dict[str, dict[str, Any]] = {}
+    for hit in (result.get("hits") or {}).get("hits") or []:
+        events[str(hit.get("_id"))] = dict(hit.get("_source") or {})
+    return events
+
+
+def _event_hashes(event: dict[str, Any]) -> list[tuple[str, str]]:
+    """(algorithm, value) pairs the event records for its file or image."""
+    pairs: list[tuple[str, str]] = []
+    process = event.get("process") if isinstance(event.get("process"), dict) else {}
+    for source in (process.get("hashes"), event.get("hash")):
+        if isinstance(source, dict):
+            pairs.extend((algorithm.upper(), str(value)) for algorithm, value in source.items() if algorithm.lower() in {"md5", "sha1", "sha256"} and value)
+    event_data = ((event.get("windows") or {}).get("event_data") or {}) if isinstance(event.get("windows"), dict) else {}
+    for key in ("Hashes", "Hash"):
+        pairs.extend((algorithm.upper(), value) for algorithm, value in _HASH_PAIR.findall(str(event_data.get(key) or "")))
+    seen: set[str] = set()
+    return [(algorithm, value.lower()) for algorithm, value in pairs if not (value.lower() in seen or seen.add(value.lower()))]
+
+
 def _extract_iocs_from_event(event: dict[str, Any], remember, source: str, timestamp: Any) -> None:
     file_data = event.get("file") or {}
     if isinstance(file_data, dict):
@@ -2273,10 +2333,18 @@ def _extract_iocs_from_event(event: dict[str, Any], remember, source: str, times
                 continue
             remember("hash" if key in {"sha1", "sha256", "md5"} else "file", value, source=source, timestamp=timestamp)
     process_data = event.get("process") or {}
+    hashed_path = ""
     if isinstance(process_data, dict):
         path = str(process_data.get("executable") or process_data.get("path") or "")
         if path and not BENIGN_SYSTEM_PATH.search(path):
             remember("file", path, source=source, timestamp=timestamp)
+            hashed_path = path
+    event_data = ((event.get("windows") or {}).get("event_data") or {}) if isinstance(event.get("windows"), dict) else {}
+    hashed_path = hashed_path or str(event_data.get("TargetFilename") or "")
+    # A hash names a binary; one of a system binary is not an indicator.
+    if hashed_path and not BENIGN_SYSTEM_PATH.search(hashed_path):
+        for algorithm, value in _event_hashes(event):
+            remember("hash", value, source=source, timestamp=timestamp, notes=f"{algorithm} of {hashed_path}")
     dns_data = event.get("dns") or {}
     if isinstance(dns_data, dict):
         if dns_data.get("domain"):
@@ -2622,6 +2690,30 @@ def _resolve_detection_event_times(case_id: str, detections: list[DetectionResul
     return times
 
 
+def _render_mitre(findings: list[Finding]) -> str:
+    """Techniques of the reported findings, filed by tactic in kill-chain order,
+    each pointing back to its findings (F1, F2... as numbered in Findings)."""
+    rows: dict[tuple[str, str], list[str]] = {}
+    for index, finding in enumerate(findings, start=1):
+        techniques = tagged_techniques([*(finding.mitre or []), *(finding.tags or [])])
+        if not techniques:
+            continue
+        phase, _confidence = _finding_incident_phase(finding, f"{finding.title} {finding.description or ''}")
+        for technique in techniques:
+            tactic = tactic_for(technique, phase) or "other"
+            rows.setdefault((tactic, technique), []).append(f"F{index}")
+    if not rows:
+        return ""
+    order = {tactic: position for position, tactic in enumerate(TACTIC_ORDER)}
+    table = [["Tactic", "Technique", "Findings"]]
+    previous = None
+    for (tactic, technique), refs in sorted(rows.items(), key=lambda item: (order.get(item[0][0], len(order)), item[0][1])):
+        table.append([_humanize(tactic) if tactic != previous else "", technique_label(technique), ", ".join(refs)])
+        previous = tactic
+    tactics = len({tactic for tactic, _ in rows})
+    return f"{_plural(len(rows), 'technique')} across {_plural(tactics, 'tactic')}, from the MITRE tags of the reported findings.\n\n" + _markdown_table(table)
+
+
 def _render_detections(detections: list[DetectionResult], total: int | None = None, *, event_times: dict[str, str] | None = None) -> str:
     if not detections:
         return "No detections matched the report filters."
@@ -2676,18 +2768,59 @@ def _render_detections(detections: list[DetectionResult], total: int | None = No
 def _render_timeline(entries: list[dict[str, Any]]) -> str:
     if not entries:
         return "No key events selected for the report."
-    rows = [["Time (UTC)", "Category", "Importance", "Event", "Details"]]
+    rows = [["Time (UTC)", "Host", "Phase", "Event", "Details", "Importance"]]
     for entry in entries:
         rows.append(
             [
                 _fmt_ts(entry.get("timestamp")) or "unknown",
-                _humanize(str(entry.get("category") or "other")),
-                str(entry.get("importance") or "medium"),
+                str(entry.get("host") or "-"),
+                _humanize(str(entry.get("phase") or "-")) if entry.get("phase") not in {None, "", "unknown"} else "-",
                 str(entry.get("title") or ""),
-                str(entry.get("note") or entry.get("summary") or "-"),
+                _clip(str(entry.get("note") or entry.get("summary") or "-"), 400),
+                str(entry.get("importance") or "-"),
             ]
         )
-    return _markdown_table(rows)
+    return _markdown_table(_drop_empty_columns(rows))
+
+
+def _merge_incident_items(entries: list[dict[str, Any]], incident_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fold the accepted Incident Timeline into the report timeline.
+
+    Rows already in the timeline (key events, marked events) take the item's
+    host and phase. Accepted items of other sources (a command, a memory
+    observation the analyst accepted) are added. Finding rows are left out:
+    every finding has its own block in Findings.
+    """
+    accepted = [item for item in incident_items if str(item.get("status") or "accepted") == "accepted"]
+    by_event = {str(item.get("event_id")): item for item in accepted if item.get("event_id")}
+    merged = []
+    seen_events: set[str] = set()
+    for entry in entries:
+        item = by_event.get(str(entry.get("event_id") or ""))
+        enriched = dict(entry)
+        if item:
+            enriched.setdefault("host", item.get("host"))
+            enriched["host"] = enriched.get("host") or item.get("host")
+            enriched["phase"] = item.get("phase")
+        merged.append(enriched)
+        if entry.get("event_id"):
+            seen_events.add(str(entry["event_id"]))
+    for item in accepted:
+        if item.get("source") in {"finding", "marked_event"} or str(item.get("event_id") or "") in seen_events:
+            continue
+        merged.append({
+            "timestamp": item.get("timestamp"),
+            "host": item.get("host"),
+            "phase": item.get("phase"),
+            "category": item.get("source") or "incident_timeline",
+            "importance": item.get("severity") or "-",
+            "title": item.get("title") or "Timeline item",
+            "summary": item.get("summary") or "",
+            "note": item.get("notes") or "",
+            "event_id": item.get("event_id"),
+        })
+    merged.sort(key=lambda item: _safe_dt(item.get("timestamp")) or "~")
+    return merged
 
 
 def _render_incident_timeline_section(case_id: str, items: list[dict[str, Any]]) -> str:
@@ -3024,6 +3157,18 @@ def _render_appendix(
     if report.include_debug_metadata:
         lines.extend(["", "### Report metadata", "", f"- Report ID: {_code(report.id)}", f"- Generated at: {_fmt_ts(datetime.now(UTC))} UTC"])
     return "\n".join(lines).strip()
+
+
+def _host_coverage_notes(db: Session, case_id: str) -> list[str]:
+    """Hosts missing a critical source their peers have (filesystem, event
+    logs, process creation or logon records): what the report cannot say about
+    them should be stated, not left for the reader to discover."""
+    try:
+        from app.services.host_coverage import build_case_host_coverage
+
+        return list(build_case_host_coverage(db, case_id).get("warnings") or [])
+    except Exception:  # noqa: BLE001 - coverage must never break the report
+        return []
 
 
 _COVERAGE_NOTE_TEXT = {

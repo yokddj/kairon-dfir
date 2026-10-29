@@ -2717,6 +2717,9 @@ export type CaseHostCoverageResponse = {
     families: Record<string, number>;
     missing_families: string[];
     missing_critical_families: string[];
+    /** Earliest record of each telemetry capability (process creation, logons...). */
+    telemetry_first_seen?: Record<string, string>;
+    log_clears?: Array<{ timestamp: string; user?: string | null; log?: string | null }>;
   }>;
   warnings: string[];
 };
