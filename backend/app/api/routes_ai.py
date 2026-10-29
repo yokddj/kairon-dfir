@@ -38,6 +38,7 @@ from app.services.ai.history import (
     start_or_resume,
 )
 from app.services.ai.providers import ProviderError, build_provider
+from app.services.ai.report_draft import ReportDraftUnavailable, ai_draft_status, draft_report_narrative
 from app.services.audit import log_audit
 from app.services.auth_dependencies import get_current_user, get_effective_case_role, get_optional_user
 
@@ -197,18 +198,28 @@ def list_ai_provider_models(
 @router.get("/api/ai/status")
 def get_ai_status(db: Session = Depends(get_db)) -> dict:
     """What the case UI needs to decide whether to offer the assistant."""
-    config = load_config(db)
-    active = config.get("active_provider")
-    if not config.get("enabled") or not active:
-        return {"enabled": False, "provider": None, "model": None, "hosting": None}
-    entry = config["providers"].get(active, {})
-    return {
-        "enabled": True,
-        "provider": active,
-        "label": PROVIDERS[active]["label"],
-        "model": entry.get("model") or PROVIDERS[active]["default_model"],
-        "hosting": PROVIDERS[active]["hosting"],
-    }
+    status = ai_draft_status(db)
+    return status if status["enabled"] else {"enabled": False, "provider": None, "model": None, "hosting": None}
+
+
+@router.post("/api/cases/{case_id}/reports/{report_id}/ai-draft")
+def draft_case_report_with_ai(
+    case_id: str,
+    report_id: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+) -> dict:
+    """Draft the report's narrative from its curated material. Nothing is saved."""
+    if db.get(Case, case_id) is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    if user is not None and get_effective_case_role(user, case_id, db) is None:
+        raise HTTPException(status_code=403, detail="Access denied to this case")
+    try:
+        return draft_report_narrative(db, case_id, report_id)
+    except ReportDraftUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 def _sse(payload: dict) -> str:

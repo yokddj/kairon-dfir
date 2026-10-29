@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 
-import { api, type CaseReport, type Finding, type TimelineBookmark } from "../api/client";
+import { api, type AiReportDraft, type AiReportDraftField, type AiReportProvenance, type CaseReport, type Finding, type TimelineBookmark } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 
 const SECTION_LABELS: Record<string, string> = {
   executive_summary: "Executive Summary",
+  narrative: "Attack Narrative",
   scope: "Scope",
   evidence: "Evidence",
   hosts: "Hosts",
@@ -56,6 +57,12 @@ export default function CaseReportsPage() {
   const [executiveNote, setExecutiveNote] = useState("");
   const [recommendationsNote, setRecommendationsNote] = useState("");
   const [limitationsNote, setLimitationsNote] = useState("");
+  const [narrativeNote, setNarrativeNote] = useState("");
+  // AI drafting: consent first, then the draft lands in the note fields for the
+  // analyst to edit; nothing is stored until "Save draft".
+  const [aiConsentOpen, setAiConsentOpen] = useState(false);
+  const [aiDraft, setAiDraft] = useState<AiReportDraft | null>(null);
+  const [notesBeforeAiDraft, setNotesBeforeAiDraft] = useState<Record<AiReportDraftField, string> | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusTone, setStatusTone] = useState<"default" | "error">("default");
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
@@ -88,6 +95,7 @@ export default function CaseReportsPage() {
     enabled: Boolean(caseId),
     staleTime: 15_000,
   });
+  const aiStatusQuery = useQuery({ queryKey: ["ai-status"], queryFn: api.getAiStatus, staleTime: 60_000 });
   const reportQuery = useQuery({
     queryKey: ["case-report", caseId, selectedReportId],
     queryFn: () => api.getCaseReport(caseId, selectedReportId),
@@ -110,7 +118,14 @@ export default function CaseReportsPage() {
     setExecutiveNote(notes.executive_summary ?? "");
     setRecommendationsNote(notes.recommendations ?? "");
     setLimitationsNote(notes.limitations ?? "");
+    setNarrativeNote(notes.attack_narrative ?? "");
   }, [reportQuery.data]);
+
+  useEffect(() => {
+    setAiDraft(null);
+    setNotesBeforeAiDraft(null);
+    setAiConsentOpen(false);
+  }, [selectedReportId]);
 
   const createDraft = useMutation({
     mutationFn: () =>
@@ -177,6 +192,42 @@ export default function CaseReportsPage() {
       setStatusMessage(error instanceof Error ? error.message : "Could not update report draft.");
     },
   });
+
+  const draftWithAi = useMutation({
+    mutationFn: () => api.draftCaseReportWithAi(caseId, selectedReportId),
+    onSuccess: (result) => {
+      setNotesBeforeAiDraft({
+        executive_summary: executiveNote,
+        attack_narrative: narrativeNote,
+        recommendations: recommendationsNote,
+        limitations: limitationsNote,
+      });
+      setExecutiveNote(result.draft.executive_summary);
+      setNarrativeNote(result.draft.attack_narrative);
+      setRecommendationsNote(result.draft.recommendations);
+      setLimitationsNote(result.draft.limitations);
+      setAiDraft(result);
+      setAiConsentOpen(false);
+      setStatusTone("default");
+      setStatusMessage("AI draft ready. Review and edit it, then Save draft to use it.");
+    },
+    onError: (error) => {
+      setAiConsentOpen(false);
+      setStatusTone("error");
+      setStatusMessage(error instanceof Error ? error.message : "The AI draft failed.");
+    },
+  });
+
+  function discardAiDraft() {
+    if (notesBeforeAiDraft) {
+      setExecutiveNote(notesBeforeAiDraft.executive_summary);
+      setNarrativeNote(notesBeforeAiDraft.attack_narrative);
+      setRecommendationsNote(notesBeforeAiDraft.recommendations);
+      setLimitationsNote(notesBeforeAiDraft.limitations);
+    }
+    setAiDraft(null);
+    setNotesBeforeAiDraft(null);
+  }
 
   const exportMarkdown = useMutation({
     mutationFn: () => api.exportCaseReport(caseId, selectedReportId, "markdown"),
@@ -547,6 +598,10 @@ export default function CaseReportsPage() {
                       <textarea value={executiveNote} onChange={(event) => setExecutiveNote(event.target.value)} rows={4} className="w-full resize-none bg-transparent outline-none" />
                     </label>
                     <label className="block rounded-2xl border border-line bg-abyss/60 p-4 text-sm">
+                      <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Attack narrative</span>
+                      <textarea value={narrativeNote} onChange={(event) => setNarrativeNote(event.target.value)} rows={5} className="w-full resize-none bg-transparent outline-none" />
+                    </label>
+                    <label className="block rounded-2xl border border-line bg-abyss/60 p-4 text-sm">
                       <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Recommendations note</span>
                       <textarea value={recommendationsNote} onChange={(event) => setRecommendationsNote(event.target.value)} rows={4} className="w-full resize-none bg-transparent outline-none" />
                     </label>
@@ -562,10 +617,12 @@ export default function CaseReportsPage() {
                             analyst_notes: {
                               ...currentReport.analyst_notes,
                               executive_summary: executiveNote,
+                              attack_narrative: narrativeNote,
                               recommendations: recommendationsNote,
                               limitations: limitationsNote,
                             },
-                          })
+                            ...(aiDraft ? { ai_provenance: aiDraft.provenance } : {}),
+                          }, { onSuccess: () => { setAiDraft(null); setNotesBeforeAiDraft(null); } })
                         }
                         className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted"
                       >
@@ -574,7 +631,44 @@ export default function CaseReportsPage() {
                       <button type="button" onClick={() => void previewQuery.refetch()} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">
                         Refresh preview
                       </button>
+                      {aiStatusQuery.data?.enabled && !aiDraft ? (
+                        <button
+                          type="button"
+                          onClick={() => setAiConsentOpen(true)}
+                          disabled={draftWithAi.isPending}
+                          className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent disabled:opacity-60"
+                        >
+                          {draftWithAi.isPending ? "Drafting..." : "Draft with AI"}
+                        </button>
+                      ) : null}
+                      {aiDraft ? (
+                        <button type="button" onClick={discardAiDraft} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">
+                          Discard AI draft
+                        </button>
+                      ) : null}
                     </div>
+                    {aiConsentOpen && aiStatusQuery.data?.enabled ? (
+                      <div role="dialog" aria-label="Draft with AI" className="rounded-2xl border border-accent/40 bg-abyss/70 p-4 text-sm text-muted">
+                        <p>
+                          The confirmed findings, timeline, IOCs and coverage notes of this report will be sent to{" "}
+                          <span className="text-ink">{aiStatusQuery.data.label ?? aiStatusQuery.data.provider}</span>
+                          {aiStatusQuery.data.model ? ` (${aiStatusQuery.data.model})` : ""} to draft the executive summary, attack narrative,
+                          recommendations and limitations. It replaces the text in those fields until you save or discard it.
+                        </p>
+                        {aiStatusQuery.data.hosting === "cloud" ? (
+                          <p className="mt-2 text-amber-300">This is a cloud provider: that case material leaves this deployment.</p>
+                        ) : null}
+                        <div className="mt-3 flex gap-3">
+                          <button type="button" onClick={() => draftWithAi.mutate()} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-accent">
+                            Send and draft
+                          </button>
+                          <button type="button" onClick={() => setAiConsentOpen(false)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2">
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                    {aiDraft ? <AiDraftReview draft={aiDraft} /> : <AiProvenanceNote provenance={currentReport.metadata_json?.ai_provenance as AiReportProvenance | undefined} />}
                   </div>
                 </div>
 
@@ -740,5 +834,50 @@ export default function CaseReportsPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+const AI_FIELD_LABELS: Record<AiReportDraftField, string> = {
+  executive_summary: "Executive summary",
+  attack_narrative: "Attack narrative",
+  recommendations: "Recommendations",
+  limitations: "Limitations",
+};
+
+const AI_ISSUE_LABELS: Record<string, string> = {
+  unknown_citation: "cites something not in the report",
+  unsupported_fact: "not found in the report material",
+  uncited_sentence: "sentence without a citation",
+};
+
+function AiDraftReview({ draft }: { draft: AiReportDraft }) {
+  const issues = draft.validation.issues;
+  return (
+    <div className="rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
+      <p>
+        Drafted with AI ({draft.provenance.provider}, {draft.provenance.model}). Check every statement against the cited findings [F1] and timeline times
+        before saving; the report will note that these sections were AI-drafted and reviewed.
+      </p>
+      {issues.length ? (
+        <ul className="mt-2 space-y-1">
+          {issues.map((issue, index) => (
+            <li key={`${issue.field}-${issue.kind}-${index}`} className={issue.kind === "uncited_sentence" ? "" : "text-amber-300"}>
+              {AI_FIELD_LABELS[issue.field] ?? issue.field}: <span className="font-mono">{issue.value}</span> — {AI_ISSUE_LABELS[issue.kind] ?? issue.kind}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2">Every citation, IP address, time and number in the draft was found in the report material.</p>
+      )}
+    </div>
+  );
+}
+
+function AiProvenanceNote({ provenance }: { provenance?: AiReportProvenance }) {
+  if (!provenance?.provider) return null;
+  return (
+    <p className="text-xs text-muted">
+      These notes were drafted with AI ({provenance.provider}, {provenance.model}) and reviewed; the report appendix says so.
+    </p>
   );
 }

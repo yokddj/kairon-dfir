@@ -62,6 +62,11 @@ _SPANISH: dict[str, str] = {
     "Network / Cloud / USB": "Red / Nube / USB",
     "Recommendations": "Recomendaciones",
     "Appendix": "Apéndice",
+    "Attack Narrative": "Narrativa del ataque",
+    "Use of AI": "Uso de IA",
+    "the analyst": "el analista",
+    "The executive summary, attack narrative, recommendations and limitations were drafted with AI ({provider}, model {model}, {when} UTC) from the curated findings and timeline of this report, then reviewed and edited by {author}.":
+        "El resumen ejecutivo, la narrativa del ataque, las recomendaciones y las limitaciones se redactaron con IA ({provider}, modelo {model}, {when} UTC) a partir de los hallazgos y la cronología curados de este informe, y después los revisó y editó {author}.",
     # Table headers
     "Action / result": "Acción / resultado", "Analysis": "Análisis", "Application": "Aplicación", "Command": "Comando",
     "Confidence": "Confianza", "Details": "Detalles", "Event": "Evento", "Event ID": "ID de evento", "Events": "Eventos",

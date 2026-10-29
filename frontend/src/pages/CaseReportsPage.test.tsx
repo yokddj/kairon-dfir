@@ -15,6 +15,8 @@ const getCaseReportPreviewMock = vi.fn();
 const listFindingsMock = vi.fn();
 const listTimelineKeyEventsMock = vi.fn();
 const exportCaseReportMock = vi.fn();
+const getAiStatusMock = vi.fn();
+const draftCaseReportWithAiMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -27,6 +29,8 @@ vi.mock("../api/client", () => ({
     listFindings: (...args: unknown[]) => listFindingsMock(...args),
     listTimelineKeyEvents: (...args: unknown[]) => listTimelineKeyEventsMock(...args),
     exportCaseReport: (...args: unknown[]) => exportCaseReportMock(...args),
+    getAiStatus: (...args: unknown[]) => getAiStatusMock(...args),
+    draftCaseReportWithAi: (...args: unknown[]) => draftCaseReportWithAiMock(...args),
   },
 }));
 
@@ -145,6 +149,7 @@ describe("CaseReportsPage", () => {
     listTimelineKeyEventsMock.mockResolvedValue([
       { id: "bookmark-1", title: "Payload executed", importance: "high", category: "execution", include_in_report: true },
     ]);
+    getAiStatusMock.mockResolvedValue({ enabled: false, provider: null, model: null, hosting: null });
     exportCaseReportMock.mockResolvedValue({ blob: new Blob(["# Report"], { type: "text/markdown" }), filename: "case-report-case-1.md" });
   });
 
@@ -196,6 +201,65 @@ describe("CaseReportsPage", () => {
         }),
       ),
     );
+  });
+
+  it("offers AI drafting only when AI is enabled", async () => {
+    renderPage();
+    await screen.findByLabelText(/Executive summary note/i);
+    await waitFor(() => expect(getAiStatusMock).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: /draft with ai/i })).not.toBeInTheDocument();
+  });
+
+  it("drafts with AI after consent, shows validation and saves with provenance", async () => {
+    getAiStatusMock.mockResolvedValue({ enabled: true, provider: "openai", label: "OpenAI", model: "gpt-x", hosting: "cloud" });
+    const provenance = { provider: "OpenAI", model: "gpt-x", hosting: "cloud", generated_at: "2026-05-18T08:00:00Z", prompt_version: "report-draft-v1" };
+    draftCaseReportWithAiMock.mockResolvedValue({
+      draft: { executive_summary: "Payload fetched [F1].", attack_narrative: "Phishing then PowerShell [F1].", recommendations: "- Isolate the host", limitations: "- No memory image" },
+      validation: { ok: false, issues: [{ field: "attack_narrative", kind: "unsupported_fact", value: "198.51.100.9" }] },
+      provenance,
+    });
+    updateCaseReportMock.mockClear();
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /draft with ai/i }));
+    const consent = screen.getByRole("dialog", { name: /draft with ai/i });
+    expect(consent).toHaveTextContent("OpenAI");
+    expect(consent).toHaveTextContent(/leaves this deployment/i);
+    expect(draftCaseReportWithAiMock).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /send and draft/i }));
+
+    await waitFor(() => expect(screen.getByLabelText(/Attack narrative/i)).toHaveValue("Phishing then PowerShell [F1]."));
+    expect(screen.getByText("198.51.100.9")).toBeInTheDocument();
+    expect(updateCaseReportMock).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: /save draft/i }));
+    await waitFor(() =>
+      expect(updateCaseReportMock).toHaveBeenCalledWith(
+        "case-1",
+        "report-1",
+        expect.objectContaining({
+          analyst_notes: expect.objectContaining({ executive_summary: "Payload fetched [F1].", attack_narrative: "Phishing then PowerShell [F1]." }),
+          ai_provenance: provenance,
+        }),
+      ),
+    );
+  });
+
+  it("discarding an AI draft restores the previous notes", async () => {
+    getAiStatusMock.mockResolvedValue({ enabled: true, provider: "ollama", label: "Ollama", model: "llama", hosting: "local" });
+    draftCaseReportWithAiMock.mockResolvedValue({
+      draft: { executive_summary: "AI text [F1].", attack_narrative: "", recommendations: "", limitations: "" },
+      validation: { ok: true, issues: [] },
+      provenance: { provider: "Ollama", model: "llama", hosting: "local", generated_at: "", prompt_version: "v1" },
+    });
+    renderPage();
+    const note = await screen.findByLabelText(/Executive summary note/i);
+    await userEvent.type(note, "Mine");
+    await userEvent.click(await screen.findByRole("button", { name: /draft with ai/i }));
+    expect(screen.getByRole("dialog", { name: /draft with ai/i })).not.toHaveTextContent(/leaves this deployment/i);
+    await userEvent.click(screen.getByRole("button", { name: /send and draft/i }));
+    await waitFor(() => expect(note).toHaveValue("AI text [F1]."));
+    await userEvent.click(screen.getByRole("button", { name: /discard ai draft/i }));
+    expect(note).toHaveValue("Mine");
   });
 
   it("updates report filters and exposes advanced report filters", async () => {
