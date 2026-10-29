@@ -3943,6 +3943,30 @@ export type CaseReport = {
   metadata_json?: Record<string, unknown>;
   /** Language of the text Kairon writes in the report ("en" or "es"). */
   language?: "en" | "es";
+  /** Sent when the analyst accepts an AI draft (null removes it); read back from metadata_json.ai_provenance. */
+  ai_provenance?: AiReportProvenance | null;
+};
+
+export type AiReportProvenance = {
+  provider: string;
+  model: string;
+  hosting: string;
+  generated_at: string;
+  prompt_version: string;
+};
+
+export type AiReportDraftField = "executive_summary" | "attack_narrative" | "recommendations" | "limitations";
+
+export type AiReportDraftIssue = {
+  field: AiReportDraftField;
+  kind: "unknown_citation" | "unsupported_fact" | "uncited_sentence";
+  value: string;
+};
+
+export type AiReportDraft = {
+  draft: Record<AiReportDraftField, string>;
+  validation: { ok: boolean; issues: AiReportDraftIssue[] };
+  provenance: AiReportProvenance;
 };
 
 export type CaseReportPreviewSection = {
@@ -8133,6 +8157,8 @@ export const api = {
   getCaseReport: (caseId: string, reportId: string) => request<CaseReport>(`/cases/${caseId}/reports/${reportId}`),
   updateCaseReport: (caseId: string, reportId: string, payload: Partial<CaseReport>) =>
     request<CaseReport>(`/cases/${caseId}/reports/${reportId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  draftCaseReportWithAi: (caseId: string, reportId: string) =>
+    request<AiReportDraft>(`/cases/${caseId}/reports/${reportId}/ai-draft`, { method: "POST" }),
   getCaseReportPreview: (caseId: string, reportId: string) => request<CaseReportPreview>(`/cases/${caseId}/reports/${reportId}/preview`),
   exportCaseReport: async (caseId: string, reportId: string, format: "markdown" | "pdf" = "markdown") => {
     const path = format === "markdown" ? `/reports/${reportId}/download?format=markdown` : `/cases/${caseId}/reports/${reportId}/export?format=${format}`;

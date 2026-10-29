@@ -75,6 +75,7 @@ REPORT_TEMPLATES = [
         "description": "Executive summary, findings, timeline, IOCs and recommendations",
         "sections": [
             "executive_summary",
+            "narrative",
             "scope",
             "evidence",
             "hosts",
@@ -110,6 +111,7 @@ DEFAULT_SECTIONS_ENABLED = {section: True for section in REPORT_TEMPLATES[0]["se
 CORE_REPORT_SECTIONS = {"executive_summary", "scope", "evidence", "hosts", "findings", "recommendations", "appendix"}
 DEFAULT_ANALYST_NOTES = {
     "executive_summary": "",
+    "attack_narrative": "",
     "recommendations": "",
     "limitations": "",
 }
@@ -271,23 +273,31 @@ def update_case_report(db: Session, case_id: str, report_id: str, payload: dict[
         report.include_debug_metadata = bool(payload.get("include_debug_metadata"))
     if "language" in payload:
         report.metadata_json = {**dict(report.metadata_json or {}), "language": normalize_language(payload.get("language"))}
+    if "ai_provenance" in payload:
+        provenance = payload.get("ai_provenance")
+        metadata = dict(report.metadata_json or {})
+        if isinstance(provenance, dict) and provenance:
+            metadata["ai_provenance"] = {key: str(provenance.get(key) or "") for key in ("provider", "model", "hosting", "generated_at", "prompt_version")}
+        else:
+            metadata.pop("ai_provenance", None)
+        report.metadata_json = metadata
     db.add(report)
     db.commit()
     db.refresh(report)
     return _serialize_report(report)
 
 
-def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict[str, Any]:
+def build_case_report_preview(db: Session, case_id: str, report_id: str, *, collect_ai_context: bool = False) -> dict[str, Any]:
     report = _get_report_or_404(db, case_id, report_id)
     with report_language(_report_language(report)):
-        return _build_case_report_preview(db, case_id, report_id, report)
+        return _build_case_report_preview(db, case_id, report_id, report, collect_ai_context=collect_ai_context)
 
 
 def _report_language(report: CaseReport) -> str:
     return normalize_language((report.metadata_json or {}).get("language"))
 
 
-def _build_case_report_preview(db: Session, case_id: str, report_id: str, report: CaseReport) -> dict[str, Any]:
+def _build_case_report_preview(db: Session, case_id: str, report_id: str, report: CaseReport, *, collect_ai_context: bool = False) -> dict[str, Any]:
     case = _get_case_or_404(db, case_id)
     context = _build_case_context(db, case_id)
     filters = {**_default_report_filters_for_case(case), **dict(report.filters or {})}
@@ -411,6 +421,9 @@ def _build_case_report_preview(db: Session, case_id: str, report_id: str, report
 
     if sections_enabled.get("executive_summary", True):
         add("executive_summary", "Executive Summary", _render_executive_summary(case, context, selected_findings, report, pending_review=pending_review))
+    if sections_enabled.get("narrative", True):
+        narrative = _narrative((report.analyst_notes or {}).get("attack_narrative"))
+        add("narrative", "Attack Narrative", narrative, empty=not narrative)
     if sections_enabled.get("scope", True):
         add("scope", "Scope", _render_scope(case, context, report, evidence_names={item["id"]: item["name"] for item in context["evidences"]}, coverage_notes=coverage_notes))
     if sections_enabled.get("evidence", True):
@@ -483,7 +496,12 @@ def _build_case_report_preview(db: Session, case_id: str, report_id: str, report
         warnings.extend(incident_timeline_report["warnings"])
     if not any([len(findings), len(detections), len(marked_events), len(bookmarks), len(command_report["commands"]), len(defender_report["events"]), len(srum_report["events"])]):
         warnings.append("No data matched the selected report filters.")
+    ai_context = (
+        _report_ai_context(case, context, report, selected_findings, timeline_entries, ioc_rows, coverage_notes, memory_report, detections, detections_total)
+        if collect_ai_context else None
+    )
     return {
+        **({"ai_context": ai_context} if ai_context is not None else {}),
         "title": report.title,
         "sections": sections,
         "warnings": warnings,
@@ -3169,6 +3187,13 @@ def _render_appendix(
             "",
             tr("These sections were checked and had no matching data for this case and these parameters, so they are left out of the exported report: {sections}.", sections=", ".join(omitted_sections)),
         ])
+    provenance = (report.metadata_json or {}).get("ai_provenance") or {}
+    if provenance:
+        lines.extend(["", "### " + tr("Use of AI"), "", tr(
+            "The executive summary, attack narrative, recommendations and limitations were drafted with AI ({provider}, model {model}, {when} UTC) from the curated findings and timeline of this report, then reviewed and edited by {author}.",
+            provider=provenance.get("provider") or "-", model=provenance.get("model") or "-",
+            when=_fmt_ts(provenance.get("generated_at")) or "-", author=report.author or tr("the analyst"),
+        )])
     limitations = _narrative((report.analyst_notes or {}).get("limitations"))
     if limitations:
         lines.extend(["", "### " + tr("Limitations"), "", limitations])
@@ -3195,6 +3220,84 @@ def _host_coverage_notes(db: Session, case_id: str) -> list[str]:
         return list(build_case_host_coverage(db, case_id).get("warnings") or [])
     except Exception:  # noqa: BLE001 - coverage must never break the report
         return []
+
+
+_AI_CONTEXT_LIMITS = {"findings": 25, "timeline": 80, "iocs": 60, "text": 1500}
+
+
+def _report_ai_context(
+    case: Case,
+    context: dict[str, Any],
+    report: CaseReport,
+    findings: list[Finding],
+    timeline_entries: list[dict[str, Any]],
+    ioc_rows: list[dict[str, Any]],
+    coverage_notes: list[str],
+    memory_report: list[dict[str, Any]],
+    detections: list[DetectionResult],
+    detections_total: int,
+) -> dict[str, Any]:
+    """The curated material a narrative may be drafted from: what the analyst
+    confirmed, bookmarked, marked and accepted -- never the raw index. Findings
+    keep the F-numbers the report gives them so citations line up."""
+    limit = _AI_CONTEXT_LIMITS["text"]
+    rule_counts = Counter(str(row.rule_title or row.rule_name or "") for row in detections)
+    return {
+        "case": str(case.name or ""),
+        "language": _report_language(report),
+        "hosts": [_context_host_name(host) for host in context.get("hosts") or []],
+        "evidence": [{"name": item.get("name"), "host": item.get("detected_host"), "status": item.get("status")} for item in context.get("evidences") or []],
+        "findings": [
+            {
+                "ref": f"F{index}",
+                "title": finding.title,
+                "severity": _sev(finding),
+                "risk": int(finding.risk_score or 0),
+                "status": str(getattr(finding.status, "value", finding.status)),
+                "observed_utc": " to ".join(value for value in (_fmt_ts(finding.time_start), _fmt_ts(finding.time_end)) if value),
+                "description": _sanitize_text(str(finding.description or ""), limit),
+                "why": [_sanitize_text(str(item)) for item in (finding.reasons or [])[:8]],
+                "mitre": list(finding.mitre or []),
+                "hosts": list(finding.related_hosts or []),
+                "users": list(finding.related_users or []),
+                "files": [_sanitize_text(str(item)) for item in (finding.related_files or [])[:8]],
+                "domains": list(finding.related_domains or []),
+                "ips": list(finding.related_ips or []),
+                "supporting_events": [
+                    {"time_utc": _fmt_ts(item.get("timestamp")), "summary": _sanitize_text(str(item.get("summary") or ""))}
+                    for item in (finding.timeline or [])[:8]
+                ],
+                "next_steps": [_sanitize_text(str(item)) for item in (finding.recommended_triage or [])[:6]],
+            }
+            for index, finding in enumerate(findings[: _AI_CONTEXT_LIMITS["findings"]], start=1)
+        ],
+        "timeline": [
+            {
+                "time_utc": _fmt_ts(entry.get("timestamp")),
+                "host": entry.get("host"),
+                "phase": entry.get("phase"),
+                "event": _sanitize_text(str(entry.get("title") or "")),
+                "details": _sanitize_text(str(entry.get("note") or entry.get("summary") or ""), 400),
+            }
+            for entry in timeline_entries[: _AI_CONTEXT_LIMITS["timeline"]]
+            if entry.get("timestamp")
+        ],
+        "iocs": [{"type": row["type"], "value": row["value"], "notes": row.get("notes") or ""} for row in ioc_rows if row["type"] != "event_id"][: _AI_CONTEXT_LIMITS["iocs"]],
+        "coverage_notes": list(coverage_notes),
+        "memory": [
+            {
+                "image": entry.get("filename"),
+                "host": entry.get("host"),
+                "marked_processes": [
+                    {"process": item.get("process"), "pid": item.get("pid"), "mark": item.get("mark"), "note": item.get("note")}
+                    for item in ((entry.get("find_evil") or {}).get("marked_processes") or [])
+                ],
+            }
+            for entry in memory_report or []
+        ],
+        "automated_detections": {"total": detections_total, "top_rules": [{"rule": name, "matches": count} for name, count in rule_counts.most_common(8)]},
+        "analyst_notes": {key: _narrative(value) for key, value in (report.analyst_notes or {}).items() if value},
+    }
 
 
 _COVERAGE_NOTE_TEXT = {

@@ -34,6 +34,15 @@ Two further features reuse the same provider configuration:
 - **Natural-language search** turns a plain-language question into a Search query
   that lands, editable, in the normal Search box. It is a single completion with
   no tool loop and nothing is saved as a conversation.
+- **Report drafting** (*Draft with AI* in the report builder) writes the
+  executive summary, attack narrative, recommendations and limitations of one
+  report. It is a single completion with no tools: the model receives only the
+  report's curated material (confirmed findings with references `F1`, `F2`..., the
+  report timeline, IOCs, coverage notes, memory triage) and must cite each fact.
+  Before the analyst sees the draft, citations that do not exist and IP
+  addresses, times and numbers absent from the material are listed. Nothing is
+  saved until the analyst saves the notes; the report appendix then records the
+  provider, model and time of the draft.
 - **Conversations** are stored per case, so a thread can be resumed or deleted.
 
 **Its output is not evidence.** A model can misread or overstate what a lookup
@@ -128,6 +137,7 @@ evidence.
 | GET | `/api/ai/status` | any authenticated user |
 | POST | `/api/cases/{case_id}/ai/chat` | users with access to the case |
 | POST | `/api/cases/{case_id}/ai/nl-search` | users with access to the case |
+| POST | `/api/cases/{case_id}/reports/{report_id}/ai-draft` | users with access to the case |
 | GET | `/api/cases/{case_id}/ai/conversations` | users with access to the case |
 | GET | `/api/cases/{case_id}/ai/conversations/{conversation_id}` | users with access to the case |
 | DELETE | `/api/cases/{case_id}/ai/conversations/{conversation_id}` | users with access to the case |
@@ -147,6 +157,7 @@ frame announces a tool lookup as it starts.
 | `backend/app/services/ai/chat.py` | System prompt, tool loop, guardrails, audit, streaming. |
 | `backend/app/services/ai/tools.py` | The read-only lookup tools and their schemas. |
 | `backend/app/services/ai/nl_query.py` | Natural-language to Search-query translation. |
+| `backend/app/services/ai/report_draft.py` | Report narrative drafting and its validation. |
 | `backend/app/services/ai/history.py` | Persisted conversations. |
 | `backend/app/api/routes_ai.py` | HTTP surface. |
 | `frontend/src/pages/AiSettingsPage.tsx` | Administrator configuration. |
