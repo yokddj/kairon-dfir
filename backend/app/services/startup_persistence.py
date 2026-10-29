@@ -19,12 +19,18 @@ USER_WRITABLE_RE = re.compile(r"\\(?:users\\[^\\]+\\(?:downloads|desktop|appdata
 STARTUP_FOLDER_RE = re.compile(r"\\start menu\\programs\\startup\\", re.IGNORECASE)
 POWERSHELL_FLAG_RE = re.compile(r"(?:-|/)(?:enc|encodedcommand|ep|executionpolicy|nop|noprofile|w|windowstyle)\b|bypass|hidden", re.IGNORECASE)
 LOLBIN_RE = re.compile(r"\b(?:rundll32|regsvr32|mshta|wmic|schtasks|powershell|pwsh|cmd|bitsadmin|certutil)\.exe\b", re.IGNORECASE)
-DEFENDER_CONFIG_RE = re.compile(r"defender|exclusion|disablerealtimemonitoring|spynetreporting|tamper|realtime", re.IGNORECASE)
+# Words of an actual Defender settings change. "defender" alone is not one: Defender's own
+# maintenance tasks and services name it without changing anything.
+DEFENDER_CONFIG_RE = re.compile(r"exclusion|disablerealtimemonitoring|disableantispyware|spynetreporting|tamper|realtime", re.IGNORECASE)
 CREATE_PERSISTENCE_RE = re.compile(r"\b(?:schtasks\s+/create|sc(?:\.exe)?\s+create|new-service|set-itemproperty|reg(?:\.exe)?\s+add|wmic\s+.*(?:consumer|filter|binding))\b", re.IGNORECASE)
+_SCHTASKS_TASK_NAME_RE = re.compile(r"\bschtasks(?:\.exe)?\b.*?/tn\s+(?:\"([^\"]+)\"|(\S+))", re.IGNORECASE)
 BENIGN_SYSTEM_RE = re.compile(r"\\(?:windows\\system32|windows\\syswow64|program files(?: \(x86\))?)\\", re.IGNORECASE)
 # Task and service commands often name system folders through environment variables; expanded
 # before scoring so "%windir%\system32\rundll32.exe" counts as the system binary it is.
 _SYSTEM_FOLDER_VARIABLES = (
+    # Defender platform updates install its binaries under ProgramData, in a folder only
+    # privileged accounts can write: a system location, not a user-writable one.
+    (re.compile(r"[a-z]:\\programdata\\microsoft\\windows defender\\platform\\[0-9][0-9.\-]*\\", re.IGNORECASE), "C:\\Program Files\\Windows Defender\\"),
     (re.compile(r"%(?:windir|systemroot)%", re.IGNORECASE), r"C:\Windows"),
     (re.compile(r"%programfiles\(x86\)%", re.IGNORECASE), r"C:\Program Files (x86)"),
     (re.compile(r"%programfiles%", re.IGNORECASE), r"C:\Program Files"),
@@ -292,6 +298,10 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
         file.get("path"),
         event_data_summary,
     )
+    task_name = _SCHTASKS_TASK_NAME_RE.search(str(command or ""))
+    if task_name and (not name or name == event.get("action")):
+        # A process-creation event names no task itself; the /tn argument does.
+        name = task_name.group(1) or task_name.group(2)
     path = _first(persistence.get("path"), registry.get("value_data"), autoruns.get("image_path"), task.get("path"), service.get("image_path"), service.get("path"), file.get("path"))
     enabled = _bool_or_none(_first(task.get("enabled"), autoruns.get("enabled"), persistence.get("enabled")))
     risk_score, risk_reasons = _score_item(item_type, text, path, name, source)

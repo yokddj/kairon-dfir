@@ -237,3 +237,30 @@ def test_report_markdown_includes_suspicious_items():
 
     assert "OneDriveUpdateTask" in markdown
     assert "scheduled_task" in markdown
+
+
+def test_defender_platform_binaries_are_a_system_location_not_a_settings_change() -> None:
+    from app.services.startup_persistence import _classify_type, _score_item
+
+    platform = r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.24020.7-0"
+    task_text = rf'"{platform}\MpCmdRun.exe" -IdleTask -TaskName WdVerification'
+    assert _classify_type("scheduled_tasks", "scheduled_task", {}, f"Windows Defender Verification {task_text}") == "scheduled_task"
+    task_score, task_reasons = _score_item("scheduled_task", task_text, "", "Windows Defender Verification", "scheduled_tasks")
+    service_score, _ = _score_item("service", rf'"{platform}\MsMpEng.exe"', "", "WinDefend", "memory")
+    assert task_score <= 20 and "user_writable_path" not in task_reasons
+    assert service_score <= 20
+    # Elsewhere under ProgramData is still user-writable.
+    lookalike, lookalike_reasons = _score_item("scheduled_task", r"C:\ProgramData\Updates\MpCmdRun.exe", "", "Windows Defender Verification", "memory")
+    assert lookalike >= 40 and "user_writable_path" in lookalike_reasons
+    # A real Defender settings change still scores high.
+    exclusion, exclusion_reasons = _score_item("defender_config", r"Set-MpPreference -ExclusionPath C:\Users\Public", "", "Windows Defender", "defender_config")
+    assert exclusion >= 40 and "defender_configuration_change" in exclusion_reasons
+
+
+def test_schtasks_command_names_the_task() -> None:
+    from app.services.startup_persistence import _SCHTASKS_TASK_NAME_RE
+
+    quoted = _SCHTASKS_TASK_NAME_RE.search(r'schtasks.exe /Create /tn "Microsoft\Office\Office Feature Updates" /XML "C:\x.xml"')
+    bare = _SCHTASKS_TASK_NAME_RE.search(r"schtasks /delete /F /TN Updater")
+    assert quoted and quoted.group(1) == r"Microsoft\Office\Office Feature Updates"
+    assert bare and bare.group(2) == "Updater"
