@@ -4219,9 +4219,36 @@ def _builtin_detection_from_document(document: dict) -> tuple[str, str, str, str
         return None if "rdp_activity" in disabled_rules else ("rdp_activity", "RDP activity", severity, "RDP-related activity detected.")
     if "lateral_movement_candidate" in tags:
         return None if "lateral_movement_candidate" in disabled_rules else ("lateral_movement_candidate", "Lateral movement candidate", severity, "Potential lateral movement activity detected.")
-    if severity in {"high", "critical"}:
+    if severity in {"high", "critical"} and _has_security_signal(document, tags):
         return None if "high_risk_event" in disabled_rules else ("high_risk_event", "High-risk event", severity, "High-risk normalized event generated a built-in detection.")
     return None
+
+
+# Tags the normalizers set when they see attacker-relevant behaviour.
+_SECURITY_SIGNAL_TAGS = frozenset({
+    "suspicious_command", "suspicious_path", "lolbin", "credential_access", "persistence", "lateral_movement_candidate",
+    "possible_exfiltration", "defender_tampering", "anti_forensics", "remote_access_tool", "double_extension", "recon",
+    "encoded_command", "download_cradle", "detection",
+})
+
+
+def _has_security_signal(document: dict, tags: set[str]) -> bool:
+    """Whether a high-severity event is high *risk*, not just high *level*.
+
+    Event logs carry an operational level (an "Error" from CloudStore or WMI
+    becomes severity high) that says nothing about an attacker. Turning every
+    such record into a "High-risk event" detection buried the real ones: on a
+    four-host case it produced most of the built-in detections, none tied to a
+    suspicion. A security reason, a risk score or a suspicion tag is required.
+    """
+    if document.get("suspicious_reasons"):
+        return True
+    try:
+        if int(document.get("risk_score") or 0) >= 70:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return bool(tags & _SECURITY_SIGNAL_TAGS)
 
 
 def _create_builtin_detections_for_ids(
