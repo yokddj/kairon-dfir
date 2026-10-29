@@ -1,12 +1,13 @@
 # Feature Map
 
-Estado de capacidades actualizado para la plataforma DFIR. Las etiquetas significan:
+Capability status for the platform. [roadmap.md](roadmap.md) is the source of truth for maturity; [artifacts/parser-coverage.md](artifacts/parser-coverage.md) has the per-parser detail. Labels:
 
-- `stable`: usable por defecto en flujo normal.
-- `advanced`: disponible con acción explícita, warning o filtro avanzado.
-- `experimental`: operativo pero sujeto a validación limitada.
-- `planned`: diseñado o pendiente.
-- `tooling_missing`: fuente detectada, pero falta backend viable en este despliegue.
+- `stable`: usable by default in the normal flow.
+- `advanced`: available through an explicit action, a warning or an advanced filter.
+- `optional`: off until an administrator enables it.
+- `experimental`: working but validated on limited evidence.
+- `planned`: designed or pending.
+- `tooling_missing`: the source is detected, but no viable backend exists in this deployment.
 
 | Area | Status | Backend / data source | Default / advanced | UI route | API / operations | Limitations | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -18,10 +19,17 @@ Estado de capacidades actualizado para la plataforma DFIR. Las etiquetas signifi
 | Incident Timeline | stable | Curated reportable incident chronology | default, high-signal sources only | `/cases/{case_id}/incident-timeline` | incident timeline endpoints | Not an all-events timeline; draft can be validation-seeded in training cases. | Improve curation workflow. |
 | Artifact Views | stable | Specialized views over indexed artifacts | default plus advanced variants | `/artifacts` | artifact/search endpoints | Not a second global search engine. | Add views only where fields justify it. |
 | Memory Analysis | Stable (Core DFIR Capability, since 2026-10-25) | PostgreSQL memory run tables and isolated memory index | capability mounted by default (`memory_enabled=true`); plugin execution disabled by default (`MEMORY_ANALYSIS_ENABLED=false`) | `/cases/{case_id}/m` | `/api/cases/{case_id}/memory`, `/api/evidences/{evidence_id}/memory/scan`, `/api/memory/backends` | Isolated metadata runner. Volatility 3 may execute a fixed set of read-only profiles (`windows.info`, `pslist`, `pstree`, `psscan`, `cmdline`, `envars`, `getsids`, `privileges`, `netscan`, `netstat`, `malfind`, `vadinfo`) when explicitly enabled; MemProcFS runs its forensic scan for Find Evil, timelines and inventories. No bundled tools. Memory results reach the case Timeline, Search, Command History, Persistence, Findings (Create finding on memory rows) and the report (Memory Analysis section); not Detections or SIEM. Use only authorized RAM evidence. | PSReadLine and PowerShell 4104/4103 from memory not yet validated on an image that has them; see `docs/roadmap.md`. |
+| Disk images | stable | `disk_images` module: RAW, EWF, VMDK, VHD/VHDX, QCOW/QCOW2, VDI, read-only | default | Evidence & Ingest, Disk Files | evidence upload/register, disk file endpoints | Encrypted volumes are detected and marked, not unlocked. | Keep OS detection current. |
+| Linux artifacts | stable | `ingest/linux/*`: logs, journal, audit, web, databases, mail, VPN, containers, packages, histories, cloud-init, persistence | default | Search, Timeline, Artifact Views, Command History, Linux Authentication | ingest parser | See [linux/linux-support.md](linux/linux-support.md) for gaps. | Reprocess old cases to benefit from new parsers. |
+| Host Information | stable | Host Facts (Linux), Local Accounts (Linux passwd/shadow/group, Windows SAM + ProfileList) | default | Host Information | host facts/users endpoints | Host Facts have no Windows or memory producer yet. | See [evidence/host-information.md](evidence/host-information.md). |
+| Source Tables | stable | Whole CSV/TSV files in per-file indices (`dfir-tables-*`) | opt-in per file or upload | `/cases/{case_id}/tables` | source-tables endpoints | Not read by Search, Timeline or detections by design. | See [search-and-investigation/source-tables.md](search-and-investigation/source-tables.md). |
+| Investigation Guide | stable | `docs/data/investigation-guide.json` | default | Docs → Investigation Guide | static content | Searches run on the active case. | Add cards as artifact coverage grows. |
+| SIEM view | stable | Saved searches and query history over the events index | default | SIEM | search endpoints | Does not read memory results. | — |
+| AI assistant | optional | Case-scoped chat with read-only lookup tools; natural-language search | off until a provider is configured | AI panel, Admin → AI settings | `/api/ai/*`, `/api/cases/{case_id}/ai/*` | Output is not evidence; results are capped. | See [operations/ai-assistant.md](operations/ai-assistant.md). |
 | Command History | stable | Derived endpoint over Sysmon/Security/PowerShell/other command sources | default | Command History | `/api/cases/{case_id}/command-history` | Prefetch is supporting context, not exact command line. | Reports integration and family/launcher refinements continue. |
 | Execution Story | stable | Process tree/story services over source event identity | default | Execution Story / Process Graph workspace | `/api/cases/{case_id}/execution-story`, focused tree endpoints | Graph links are evidence-derived and still show uncertainty. | Keep exact identity pivots guarded. |
 | Markings / Findings | stable | PostgreSQL analyst annotations and findings | default | Search, Findings, Reports | event marking and finding endpoints | Markings annotate source events; they do not mutate original evidence. | Improve report UX as needed. |
-| Reports | stable | Report service, Markdown export | default | Reports | preview/generate/export endpoints | Markdown is the validated deliverable. PDF should not be treated as primary/stable unless validated in deployment. | Continue report section coverage. |
+| Reports | stable | Report service; Markdown and PDF (ReportLab) export | default | Reports | preview/generate/export endpoints | Markdown is the editable deliverable; PDF renders the same content. Memory Analysis section only when the case has memory images. | Continue report section coverage. |
 | Sigma rules / detections | stable | Sigma engine over normalized events | explicit analyst run | Rules, Detections | rules/run/detections endpoints | Avoid full-pack noisy runs without scope. | Sigma smoke UX. |
 | YARA | advanced | YARA over preserved files | explicit scoped run | Rules | YARA rule run endpoints | Must be scoped by size/root/type. | Keep safeguards visible. |
 | EVTX | stable | EvtxECmd CSV backend | default | Search, Timeline, Artifact Views | ingest parser | Message rendering depends on available event data. | Maintain channel/event mappings. |

@@ -72,7 +72,7 @@ Lets you select:
 ## Exports
 
 - `Markdown`: available and remains the simplest, most editable source.
-- `PDF`: should not be considered stable unless validated for the specific deployment.
+- `PDF`: rendered server-side (ReportLab) from the same report content as Markdown.
 
 ## Typical Report Sections
 

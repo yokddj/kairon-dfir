@@ -5,7 +5,8 @@ Thanks for your interest in contributing. This document covers the practical bas
 ## Before you start
 
 - Read [`README.md`](README.md) for what Kairon DFIR does and how to run it locally.
-- Read [`docs/roadmap.md`](docs/roadmap.md) to understand what's Core Platform, Core DFIR Capability, and Preview/Strategic — it helps place where a change belongs.
+- Read [`docs/roadmap.md`](docs/roadmap.md) to understand what's Core Platform and Core DFIR Capability — it helps place where a change belongs.
+- Read [`docs/architecture/codebase-map.md`](docs/architecture/codebase-map.md) for where each part lives and where to start for common changes.
 - By contributing, you agree your contribution is licensed under the project's [AGPL-3.0 license](LICENSE).
 
 ## Development setup
