@@ -11,6 +11,7 @@ analyst reviews, edits and accepts the draft in the report builder.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from datetime import UTC, datetime
@@ -46,6 +47,13 @@ Reply with ONLY a JSON object with these string fields:
 
 class ReportDraftUnavailable(RuntimeError):
     """AI is not enabled or not configured."""
+
+
+def provider_error_text(exc: Exception, limit: int = 300) -> str:
+    """A provider or gateway error as readable text: proxies answer with HTML pages."""
+    text = html.unescape(re.sub(r"<[^>]+>", " ", str(exc)))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit] + ("..." if len(text) > limit else "") or "The AI provider returned an error."
 
 
 def ai_draft_status(db: Session) -> dict[str, Any]:

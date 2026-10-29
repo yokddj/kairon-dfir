@@ -93,6 +93,13 @@ def test_endpoint_drafts_from_curated_material_only(monkeypatch: pytest.MonkeyPa
     assert "English" in _DraftingProvider.seen["system"]
 
 
+def test_provider_gateway_errors_are_readable() -> None:
+    page = report_draft.ProviderError("Provider returned HTTP 403. <HTML><HEAD><TITLE>Access Denied</TITLE></HEAD><BODY>Denied &#58; " + "x" * 500 + "</BODY>")
+    text = report_draft.provider_error_text(page)
+    assert text.startswith("Provider returned HTTP 403. Access Denied Denied :") and "<" not in text
+    assert len(text) <= 303
+
+
 def test_endpoint_refuses_when_ai_is_off_or_there_is_nothing_to_draft(monkeypatch: pytest.MonkeyPatch) -> None:
     db = _configured_db(monkeypatch)
     monkeypatch.setattr(report_service, "build_case_report_preview", lambda *_a, **_k: {"ai_context": {"findings": [], "timeline": []}})
