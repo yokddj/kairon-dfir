@@ -283,3 +283,60 @@ def test_unclassified_archive_is_labelled_as_archive() -> None:
     assert report_service._archive_label("DC02.zip") == "Archive (zip)"
     assert report_service._archive_label("bundle.tar.gz") == "Archive (tar.gz)"
     assert report_service._archive_label("notes.txt") == "-"
+
+
+def test_mitre_section_files_techniques_by_tactic_in_attack_order() -> None:
+    first = _finding("f-1", title="Initial access via ISO", severity=FindingSeverity.critical, status=FindingStatus.confirmed)
+    first.mitre = ["T1566", "T1059.001"]
+    second = _finding("f-2", title="Ransomware", severity=FindingSeverity.critical, status=FindingStatus.confirmed)
+    second.mitre = ["T1486", "T1059.001"]
+    untagged = _finding("f-3", title="No tags", severity=FindingSeverity.high, status=FindingStatus.confirmed)
+    untagged.mitre, untagged.tags = [], []
+
+    markdown = report_service._render_mitre([first, second, untagged])
+
+    assert "| Initial access | T1566 Phishing | F1 |" in markdown
+    assert "| Execution | T1059.001 Command and Scripting Interpreter | F1, F2 |" in markdown
+    assert "| Impact | T1486 Data Encrypted for Impact | F2 |" in markdown
+    assert markdown.index("Initial access") < markdown.index("Execution") < markdown.index("Impact")
+    assert report_service._render_mitre([untagged]) == ""
+
+
+def test_iocs_take_hashes_of_the_binary_from_finding_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    finding = _finding("f-1", title="Lateral movement", severity=FindingSeverity.high, status=FindingStatus.confirmed, files=["x"], domains=["d.test"], ips=["203.0.113.1"])
+    finding.related_event_ids = ["evt-1"]
+    finding.timeline = []
+    event = {
+        "@timestamp": "2024-03-22T11:41:07Z",
+        "process": {"executable": "C:\\Users\\Public\\psexec.exe"},
+        "windows": {"event_data": {"Hashes": "MD5=24A648A48741B1AC809E47B9543C6F12,SHA256=078163D5C16F64CAA5A14784323FD51451B8C831C73396B967B4E35E6879937B,IMPHASH=1193BC223DAD681F22F8248608CBB592"}},
+    }
+    monkeypatch.setattr(report_service, "_fetch_events_by_ids", lambda case_id, ids: {"evt-1": event} if "evt-1" in ids else {})
+
+    rows = report_service._extract_iocs("case-1", [finding], [])
+    hashes = {row["value"]: row["notes"] for row in rows if row["type"] == "hash"}
+
+    assert hashes == {
+        "24a648a48741b1ac809e47b9543c6f12": "MD5 of C:\\Users\\Public\\psexec.exe",
+        "078163d5c16f64caa5a14784323fd51451b8c831c73396b967b4e35e6879937b": "SHA256 of C:\\Users\\Public\\psexec.exe",
+    }
+    assert not any(row["type"] == "host" for row in rows)
+
+
+def test_timeline_merges_accepted_incident_items_without_duplicates() -> None:
+    entries = [
+        {"timestamp": "2024-03-22T11:26:39Z", "title": "Key event", "note": "first code", "event_id": "evt-1", "category": "execution", "importance": "critical"},
+    ]
+    incident = [
+        {"status": "accepted", "source": "marked_event", "event_id": "evt-1", "host": "WS01", "phase": "initial_access", "title": "dup"},
+        {"status": "accepted", "source": "finding", "finding_id": "f-1", "host": "WS01", "phase": "initial_access", "title": "finding row"},
+        {"status": "accepted", "source": "command_history", "event_id": "evt-2", "host": "WS02", "phase": "lateral_movement", "title": "psexec", "timestamp": "2024-03-22T11:41:07Z"},
+        {"status": "candidate", "source": "command_history", "event_id": "evt-3", "title": "not accepted"},
+    ]
+
+    merged = report_service._merge_incident_items(entries, incident)
+
+    assert [row["title"] for row in merged] == ["Key event", "psexec"]
+    assert merged[0]["host"] == "WS01" and merged[0]["phase"] == "initial_access"
+    markdown = report_service._render_timeline(merged)
+    assert "| 2024-03-22 11:26:39 | WS01 | Initial access | Key event | first code | critical |" in markdown

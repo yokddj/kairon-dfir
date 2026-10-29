@@ -820,6 +820,19 @@ export default function HostInformationPage() {
                 Questions that depend on it cannot be answered for this host until that evidence is indexed.
               </p>
             ) : null}
+            {coverageForHost.log_clears?.length ? (
+              <p data-testid="host-log-clears" className="mt-3 text-xs text-amber-100">
+                Event logs were cleared {coverageForHost.log_clears[0].timestamp} UTC
+                {(() => {
+                  const users = Array.from(new Set(coverageForHost.log_clears.map((item) => item.user).filter(Boolean)));
+                  return users.length ? ` by ${users.join(", ")}` : "";
+                })()}
+                . Activity on this host before then is missing from those logs
+                {coverageForHost.telemetry_first_seen?.["Process creation log"]
+                  ? `; process creation records begin ${coverageForHost.telemetry_first_seen["Process creation log"].slice(0, 19).replace("T", " ")} UTC.`
+                  : "."}
+              </p>
+            ) : null}
           </div>
         ) : null}
 
