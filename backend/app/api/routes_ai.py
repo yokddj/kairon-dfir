@@ -38,7 +38,7 @@ from app.services.ai.history import (
     start_or_resume,
 )
 from app.services.ai.providers import ProviderError, build_provider
-from app.services.ai.report_draft import ReportDraftUnavailable, ai_draft_status, draft_report_narrative
+from app.services.ai.report_draft import ReportDraftUnavailable, ai_draft_status, draft_report_narrative, provider_error_text
 from app.services.audit import log_audit
 from app.services.auth_dependencies import get_current_user, get_effective_case_role, get_optional_user
 
@@ -219,7 +219,7 @@ def draft_case_report_with_ai(
     except ReportDraftUnavailable as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ProviderError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail=provider_error_text(exc)) from exc
 
 
 def _sse(payload: dict) -> str:

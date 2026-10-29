@@ -211,7 +211,7 @@ describe("CaseReportsPage", () => {
   });
 
   it("drafts with AI after consent, shows validation and saves with provenance", async () => {
-    getAiStatusMock.mockResolvedValue({ enabled: true, provider: "openai", label: "OpenAI", model: "gpt-x", hosting: "cloud" });
+    getAiStatusMock.mockResolvedValue({ enabled: true, provider: "openai_compatible", label: "OpenAI", model: "gpt-x", hosting: "custom" });
     const provenance = { provider: "OpenAI", model: "gpt-x", hosting: "cloud", generated_at: "2026-05-18T08:00:00Z", prompt_version: "report-draft-v1" };
     draftCaseReportWithAiMock.mockResolvedValue({
       draft: { executive_summary: "Payload fetched [F1].", attack_narrative: "Phishing then PowerShell [F1].", recommendations: "- Isolate the host", limitations: "- No memory image" },

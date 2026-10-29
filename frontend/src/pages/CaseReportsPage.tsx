@@ -655,8 +655,8 @@ export default function CaseReportsPage() {
                           {aiStatusQuery.data.model ? ` (${aiStatusQuery.data.model})` : ""} to draft the executive summary, attack narrative,
                           recommendations and limitations. It replaces the text in those fields until you save or discard it.
                         </p>
-                        {aiStatusQuery.data.hosting === "cloud" ? (
-                          <p className="mt-2 text-amber-300">This is a cloud provider: that case material leaves this deployment.</p>
+                        {aiStatusQuery.data.hosting !== "local" ? (
+                          <p className="mt-2 text-amber-300">This provider is not local: that case material leaves this deployment.</p>
                         ) : null}
                         <div className="mt-3 flex gap-3">
                           <button type="button" onClick={() => draftWithAi.mutate()} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-accent">
