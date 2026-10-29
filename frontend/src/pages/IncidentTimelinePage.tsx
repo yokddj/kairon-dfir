@@ -34,6 +34,7 @@ const PHASE_LABELS: Record<string, string> = {
   discovery: "Discovery",
   lateral_movement: "Lateral movement",
   collection: "Collection",
+  command_and_control: "Command and control",
   exfiltration: "Exfiltration",
   impact: "Impact",
   cleanup: "Cleanup",
@@ -253,6 +254,27 @@ export default function IncidentTimelinePage() {
       if (regenerateTimerRef.current) clearInterval(regenerateTimerRef.current);
     };
   }, []);
+
+  async function updateItemPhase(item: IncidentTimelineItem, phase: string) {
+    const timelineId = draftQuery.data?.timeline_id || draftQuery.data?.cache?.timeline_id || draftQuery.data?.cache?.draft_id;
+    if (!caseId || !timelineId) {
+      setRegenerateStatus("The timeline draft isn't ready yet -- wait for it to finish loading, then try again.");
+      return;
+    }
+    // Shown at once; saved so it survives a reload and a regeneration.
+    setPhaseOverrides((current) => ({ ...current, [item.id]: phase }));
+    try {
+      await api.updateIncidentTimelineItemStatus(caseId, timelineId, item.id, { phase });
+      await draftQuery.refetch();
+    } catch (error) {
+      setPhaseOverrides((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
+      });
+      setRegenerateStatus(error instanceof Error ? error.message : "Timeline phase update failed.");
+    }
+  }
 
   async function updateItemStatus(item: IncidentTimelineItem, status: string) {
     const timelineId = draftQuery.data?.timeline_id || draftQuery.data?.cache?.timeline_id || draftQuery.data?.cache?.draft_id;
@@ -533,7 +555,8 @@ export default function IncidentTimelinePage() {
                             <td className="py-3 pr-4">
                               <select
                                 value={item.phase}
-                                onChange={(event) => setPhaseOverrides((current) => ({ ...current, [item.id]: event.target.value }))}
+                                onChange={(event) => void updateItemPhase(item, event.target.value)}
+                                title={item.phase_confidence === "analyst" ? "Phase set by an analyst" : "Phase inferred; change it to correct it"}
                                 className="rounded-lg border border-line bg-abyss px-2 py-1 text-xs text-ink"
                               >
                                 {phaseOptions.map((phase) => (

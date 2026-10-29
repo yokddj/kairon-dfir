@@ -24,6 +24,7 @@ from app.models.detection_result import DetectionResult
 from app.models.evidence import Evidence
 from app.models.event_marking import EventMarking
 from app.models.finding import Finding, FindingStatus
+from app.services.mitre_tactics import primary_tactic
 from app.models.incident_timeline_draft import IncidentTimelineDraft
 from app.models.timeline_bookmark import TimelineBookmark, TimelineBookmarkCategory, TimelineBookmarkImportance
 from app.services.case_capabilities import capability_route
@@ -62,6 +63,7 @@ INCIDENT_PHASES = [
     "discovery",
     "lateral_movement",
     "collection",
+    "command_and_control",
     "exfiltration",
     "impact",
     "cleanup",
@@ -613,17 +615,17 @@ def _infer_incident_phase(text: str, *, fallback: str = "unknown") -> tuple[str,
     # "desktop", "downloads") do not identify a phase: they mislabel healthy
     # hosts with confidence, which is worse than leaving a row unclassified.
     lower = text.lower()
-    if any(token in lower for token in ("psexec", "psexesvc", "\\\\ws", "winrs", "wmic ")):
+    if any(token in lower for token in ("psexec", "psexesvc", "\\\\ws", "winrs", "wmic ", "ssh -", "scp ", "sshpass")):
         return "lateral_movement", "medium"
-    if any(token in lower for token in ("rubeus", "kerberoast", "dcsync", "mimikatz", "lsass", "sekurlsa")):
+    if any(token in lower for token in ("rubeus", "kerberoast", "dcsync", "mimikatz", "lsass", "sekurlsa", "/etc/shadow", "unshadow", "keychain", "dump-keychain")):
         return "credential_access", "medium"
-    if any(token in lower for token in ("whoami", "nltest", "ipconfig", "net view", "net group", "net user", "hostname")):
+    if any(token in lower for token in ("whoami", "nltest", "ipconfig", "net view", "net group", "net user", "hostname", "uname -a", "cat /etc/passwd", "ifconfig", "dscl ")):
         return "discovery", "medium"
     if any(token in lower for token in ("-ep bypass", "executionpolicy bypass", "-nop", "-w hidden", "powershell", "cmd.exe /c")):
         return "execution", "medium"
-    if any(token in lower for token in ("schtasks", "runonce", "\\startup\\", "currentversion\\run")):
+    if any(token in lower for token in ("schtasks", "runonce", "\\startup\\", "currentversion\\run", "crontab", "systemctl enable", "authorized_keys", "launchctl load", "/library/launchdaemons")):
         return "persistence", "medium"
-    if any(token in lower for token in ("disablerealtimemonitoring", "defender", "tamper", "wevtutil", "clear-eventlog")):
+    if any(token in lower for token in ("disablerealtimemonitoring", "defender", "tamper", "wevtutil", "clear-eventlog", "history -c", "unset histfile", "setenforce 0")):
         return "defense_evasion", "medium"
     if any(token in lower for token in ("filezilla", "exfil", "megasync", "rclone")):
         return "exfiltration", "medium"
@@ -633,6 +635,38 @@ def _infer_incident_phase(text: str, *, fallback: str = "unknown") -> tuple[str,
     if inferred:
         return inferred, "high"
     return "unknown", "low"
+
+
+def _linked_finding_phase(db: Session, finding_id: str | None, known: dict[str, tuple[str, str]]) -> tuple[str, str] | None:
+    """Phase of the finding a marked event is attached to (the analyst placed
+    the event in that finding's story), or None if unknown/unclassified."""
+    if not finding_id:
+        return None
+    if finding_id not in known:
+        try:
+            finding = db.get(Finding, finding_id)
+        except Exception:  # noqa: BLE001 - fakes without get()
+            finding = None
+        known[finding_id] = _finding_incident_phase(finding, f"{finding.title} {finding.description or ''}") if finding else ("unknown", "low")
+    phase, confidence = known[finding_id]
+    return (phase, confidence) if phase != "unknown" else None
+
+
+def _finding_incident_phase(finding: Finding, text: str) -> tuple[str, str]:
+    """Phase of a finding, from its most structured classification first.
+
+    A finding typed with a phase name ("lateral_movement", "persistence_*") or
+    tagged with MITRE techniques says what it is; keywords in its free text are
+    only a fallback. Trying keywords first labelled a ransomware finding
+    "execution" because its description mentions PowerShell.
+    """
+    typed = _phase_from_finding_type(str(finding.finding_type or ""))
+    if typed:
+        return typed, "high"
+    tactic = primary_tactic([*(finding.mitre or []), *(finding.tags or [])])
+    if tactic in INCIDENT_PHASES:
+        return tactic, "high"
+    return _infer_incident_phase(text)
 
 
 _COMMAND_TITLE_MAX_CHARS = 90
@@ -1068,6 +1102,52 @@ def _draft_to_payload(draft: IncidentTimelineDraft, *, hit: bool, stale: bool, r
     return payload
 
 
+def _incident_item_key(item: dict[str, Any]) -> str:
+    # The item id ends with the phase; edits must follow the item when only
+    # its phase changes (an analyst correction or a better inference).
+    return str(item.get("id") or "").rsplit(":", 1)[0]
+
+
+def _carry_over_analyst_edits(db: Session, case_id: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Re-apply what the analyst changed by hand (status, note, phase) from the
+    case's previous drafts. Regenerating rebuilt every item from the sources and
+    silently undid the analyst's curation."""
+    try:
+        drafts = (
+            db.query(IncidentTimelineDraft)
+            .filter(IncidentTimelineDraft.case_id == case_id)
+            .order_by(IncidentTimelineDraft.updated_at.asc())
+            .all()
+        )
+    except Exception:  # noqa: BLE001 - unit-test fakes and non-SQL stores
+        return items
+    edits: dict[str, dict[str, Any]] = {}
+    for draft in drafts:
+        for previous in (draft.payload or {}).get("items") or []:
+            if isinstance(previous, dict) and previous.get("analyst_edits"):
+                edits[_incident_item_key(previous)] = dict(previous["analyst_edits"])
+    if not edits:
+        return items
+    for item in items:
+        edit = edits.get(_incident_item_key(item))
+        if not edit:
+            continue
+        _apply_analyst_edit(item, edit)
+    return items
+
+
+def _apply_analyst_edit(item: dict[str, Any], edit: dict[str, Any]) -> None:
+    if edit.get("status"):
+        item["status"] = edit["status"]
+    if edit.get("note"):
+        item["notes"] = edit["note"]
+    if edit.get("phase") in INCIDENT_PHASES:
+        item["phase"] = edit["phase"]
+        item["phase_confidence"] = "analyst"
+    item["analyst_edits"] = edit
+    item["provenance_badge"] = _timeline_provenance_badge(item)
+
+
 def _persist_incident_draft(
     db: Session,
     *,
@@ -1188,6 +1268,8 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
     items: list[dict[str, Any]] = []
     generation_started = time.perf_counter()
 
+    # Phase of each finding, so the events an analyst attached to it share it.
+    finding_phases: dict[str, tuple[str, str]] = {}
     if "findings" in source_set:
         # Fetch one past the cap purely to detect truncation: this list is
         # ordered oldest-first, so a silent cap drops the most recent findings
@@ -1217,7 +1299,8 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
                     " ".join(str(item) for item in (finding.tags or [])),
                 )
             )
-            phase, confidence = _infer_incident_phase(text, fallback=str(finding.finding_type or "unknown"))
+            phase, confidence = _finding_incident_phase(finding, text)
+            finding_phases[str(finding.id)] = (phase, confidence)
             host = str((finding.related_hosts or [None])[0] or "")
             items.append(
                 _incident_item(
@@ -1276,6 +1359,9 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
                     finding_id=marking.finding_id,
                 )
             item["notes"] = marking.note or item.get("notes") or ""
+            linked_phase = _linked_finding_phase(db, marking.finding_id, finding_phases)
+            if linked_phase:
+                item["phase"], item["phase_confidence"] = linked_phase
             items.append(item)
 
     if "command_history" in source_set:
@@ -1377,6 +1463,7 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
     items = _canonicalize_incident_item_hosts(db, case_id, items)
     items = _apply_story_target_metadata(items)
     items = _dedupe_incident_items(items)
+    items = _carry_over_analyst_edits(db, case_id, items)
     if host_filter:
         items = [item for item in items if str(item.get("host") or "").strip().lower() in host_filter]
     if phase_filter:
@@ -1519,13 +1606,18 @@ def export_incident_timeline_markdown(case_id: str, payload: dict[str, Any]) -> 
 
 
 def update_incident_timeline_item_status(db: Session, case_id: str, timeline_id: str, item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    status = str(payload.get("status") or "").strip().lower()
+    phase = str(payload.get("phase") or "").strip().lower()
+    if phase and phase not in INCIDENT_PHASES:
+        raise HTTPException(status_code=400, detail="Invalid timeline item phase")
+    if status and status not in {"candidate", "accepted", "dismissed", "needs_review"}:
+        raise HTTPException(status_code=400, detail="Invalid timeline item status")
+    if not status and not phase:
+        raise HTTPException(status_code=400, detail="Nothing to update: give a status or a phase")
+    note = str(payload.get("note") or "").strip()
     draft = db.query(IncidentTimelineDraft).filter(IncidentTimelineDraft.id == timeline_id, IncidentTimelineDraft.case_id == case_id).one_or_none()
     if draft is None:
         raise HTTPException(status_code=404, detail="Incident timeline draft not found")
-    status = str(payload.get("status") or "").strip().lower()
-    if status not in {"candidate", "accepted", "dismissed", "needs_review"}:
-        raise HTTPException(status_code=400, detail="Invalid timeline item status")
-    note = str(payload.get("note") or "").strip()
     draft_payload = dict(draft.payload or {})
     items = [dict(item) for item in (draft_payload.get("items") or []) if isinstance(item, dict)]
     updated_item: dict[str, Any] | None = None
@@ -1534,10 +1626,14 @@ def update_incident_timeline_item_status(db: Session, case_id: str, timeline_id:
         if str(item.get("id") or "") != item_id:
             continue
         previous_status = str(item.get("status") or "candidate")
-        item["status"] = status
+        edit = dict(item.get("analyst_edits") or {})
+        if status:
+            edit["status"] = status
         if note:
-            item["notes"] = note
-        item["provenance_badge"] = _timeline_provenance_badge(item)
+            edit["note"] = note
+        if phase:
+            edit["phase"] = phase
+        _apply_analyst_edit(item, edit)
         updated_item = item
         break
     if updated_item is None:
@@ -1553,9 +1649,9 @@ def update_incident_timeline_item_status(db: Session, case_id: str, timeline_id:
             db,
             activity_type="incident_timeline_item_status_updated",
             title="Incident timeline item updated",
-            message=f"Timeline item status changed from {previous_status} to {status}",
+            message=f"Timeline item updated: status {previous_status} -> {status or previous_status}" + (f", phase {phase}" if phase else ""),
             case_id=case_id,
-            metadata={"timeline_id": timeline_id, "item_id": item_id, "previous_status": previous_status, "new_status": status},
+            metadata={"timeline_id": timeline_id, "item_id": item_id, "previous_status": previous_status, "new_status": status or previous_status, "phase": phase or None},
         )
     except Exception:
         pass

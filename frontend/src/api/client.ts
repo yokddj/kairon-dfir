@@ -8097,7 +8097,7 @@ export const api = {
       max_items?: number;
     },
   ) => request<IncidentTimelineDraftResponse>(`/cases/${caseId}/incident-timeline/draft`, { method: "POST", body: JSON.stringify(payload) }),
-  updateIncidentTimelineItemStatus: (caseId: string, timelineId: string, itemId: string, payload: { status: string; note?: string }) =>
+  updateIncidentTimelineItemStatus: (caseId: string, timelineId: string, itemId: string, payload: { status?: string; note?: string; phase?: string }) =>
     request<{ timeline_id: string; item: IncidentTimelineItem; curation?: IncidentTimelineDraftResponse["curation"] }>(
       `/cases/${caseId}/incident-timeline/draft/${timelineId}/items`,
       { method: "PATCH", body: JSON.stringify({ ...payload, item_id: itemId }) },

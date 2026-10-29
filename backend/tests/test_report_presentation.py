@@ -266,3 +266,20 @@ def test_download_target_without_url_is_not_an_ioc() -> None:
 def test_unc_paths_and_multiline_commands_render_intact() -> None:
     assert report_service._pdf_inline(r"encrypted \\SRV01\files") == r"encrypted \\SRV01\files"
     assert report_service._code("line one\nline two") == "`line one line two`"
+
+
+def test_defender_section_keeps_detections_and_protection_changes_only() -> None:
+    def row(event_id, threat=None):
+        return {"raw": {"windows": {"event_id": event_id}, "threat": {"name": threat} if threat else {}}}
+
+    assert report_service._is_reportable_defender_event(row(1116))
+    assert report_service._is_reportable_defender_event(row(5001))  # real-time protection disabled
+    assert report_service._is_reportable_defender_event(row(9999, threat="Trojan:Win32/Test"))
+    assert not report_service._is_reportable_defender_event(row(1151))  # health report
+    assert not report_service._is_reportable_defender_event(row(1013))  # history clean-up
+
+
+def test_unclassified_archive_is_labelled_as_archive() -> None:
+    assert report_service._archive_label("DC02.zip") == "Archive (zip)"
+    assert report_service._archive_label("bundle.tar.gz") == "Archive (tar.gz)"
+    assert report_service._archive_label("notes.txt") == "-"
