@@ -27,6 +27,7 @@ This documentation describes the real state of the platform. Partial capabilitie
 - [architecture/capability-registry.md](architecture/capability-registry.md): server-side capability registry and canonical routes.
 - [architecture/optional-capability-boundary.md](architecture/optional-capability-boundary.md): RFC/ADR — what it technically means for a capability to be optional in Kairon (Memory today, AI in the future).
 - [architecture/routing.md](architecture/routing.md): canonical routes and legacy redirects reference.
+- [architecture/codebase-map.md](architecture/codebase-map.md): where each part lives in the code, how evidence flows through it, and where to start for common changes.
 
 ## Evidence
 
@@ -87,6 +88,7 @@ This documentation describes the real state of the platform. Partial capabilitie
 
 - [search-and-investigation/search.md](search-and-investigation/search.md): Search workspace, filters, command-style phrases, and Timeline.
 - [search-and-investigation/timeline_reports.md](search-and-investigation/timeline_reports.md): timeline and reports.
+- [search-and-investigation/source-tables.md](search-and-investigation/source-tables.md): CSV/TSV files as full-column, sortable tables.
 - [search-and-investigation/process_graph.md](search-and-investigation/process_graph.md): Execution Story / Process Graph.
 - [search-and-investigation/findings-notes.md](search-and-investigation/findings-notes.md): investigative notes and findings.
 - [search-and-investigation/findings_correlation.md](search-and-investigation/findings_correlation.md): taxonomy of auto-generated correlation findings.

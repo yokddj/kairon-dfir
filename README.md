@@ -58,11 +58,11 @@ coverage and known gaps.
 
 ## Architecture
 
-Kairon DFIR is organized around a **Core Platform** (case/evidence/host substrate, artifact and platform registries, generic ingestion pipeline, Search/Timeline, Findings/Reports) that every capability builds on without shaping it, plus **Core DFIR Capabilities** (Windows, Linux, Rules Engine) and **Preview capabilities** (Memory Analysis today) that depend on the Core Platform but never the other way around.
+Kairon DFIR is organized around a **Core Platform** (case/evidence/host substrate, artifact and platform registries, generic ingestion pipeline, Search/Timeline, Findings/Reports) that every capability builds on without shaping it, plus **Core DFIR Capabilities** (Windows, Linux, Memory Analysis, Rules Engine) that depend on the Core Platform but never the other way around.
 
 The stack itself is three planes: a React/TypeScript frontend, a FastAPI/Python backend with Redis-queued workers, and PostgreSQL + OpenSearch + filesystem storage for metadata, search, and evidence.
 
-See [docs/roadmap.md](docs/roadmap.md) for capability maturity and [docs/architecture/overview.md](docs/architecture/overview.md) for the full architecture writeup.
+See [docs/roadmap.md](docs/roadmap.md) for capability maturity [docs/architecture/overview.md](docs/architecture/overview.md) for the full architecture writeup, and [docs/architecture/codebase-map.md](docs/architecture/codebase-map.md) for where each part lives in the code.
 
 ## Installation
 
