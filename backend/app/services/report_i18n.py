@@ -112,6 +112,12 @@ _SPANISH: dict[str, str] = {
     "Process chain": "Cadena de procesos", "Script": "Script", "Family": "Familia", "Launcher": "Lanzador",
     "Seen in": "Visto en", "Why it is suspicious": "Por qué es sospechoso", "Analyst marking": "Marca del analista",
     "Analyst notes": "Notas del analista",
+    "Detected by": "Detectado por", "Target": "Objetivo",
+    "real-time protection": "protección en tiempo real", "system scan": "análisis del sistema",
+    "AMSI (script scan)": "AMSI (análisis de scripts)", "download/attachment scan": "análisis de descargas/adjuntos",
+    "behaviour monitoring": "supervisión de comportamiento", "on-demand scan": "análisis bajo demanda",
+    "**Antivirus detections still in memory** ({count}): what the antivirus detected and when, recovered from the image even if the event logs were cleared.":
+        "**Detecciones antivirus que siguen en memoria** ({count}): qué detectó el antivirus y cuándo, recuperado de la imagen aunque se hayan borrado los registros de eventos.",
     # Templates
     "This report covers case **{case}**. {evidence}{hosts} {verb} processed and {events} events were indexed.":
         "Este informe cubre el caso **{case}**. Se procesaron {evidence}{hosts} y se indexaron {events} eventos.",

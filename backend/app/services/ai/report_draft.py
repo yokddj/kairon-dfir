@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from app.services.ai.config import MAX_MAX_TOKENS, PROVIDERS, AIConfigError, load_config, resolve_provider
 from app.services.ai.providers import TRUNCATED_NOTICE, ProviderError, build_provider
 
-PROMPT_VERSION = "report-draft-v1"
+PROMPT_VERSION = "report-draft-v2"
 DRAFT_FIELDS = ("executive_summary", "attack_narrative", "recommendations", "limitations")
 
 # Four sections of prose need more room than a chat answer, and reasoning models
@@ -38,7 +38,7 @@ You are given the CURATED material of one case as JSON: findings an analyst conf
 
 Rules:
 - Use ONLY facts present in the material. Do not add hosts, accounts, IP addresses, times, tools, counts or techniques that are not in it. If something is unknown, say it is not established.
-- Cite every factual sentence: [F3] for a finding, or the timeline time as [HH:MM:SS] exactly as given in time_utc (time part only). A sentence may carry several citations.
+- Cite every factual sentence: [F3] for a finding, or the time of a timeline entry or of a finding's supporting event as [HH:MM:SS] exactly as given in time_utc (time part only). A sentence may carry several citations.
 - Times are UTC. Write times as HH:MM or HH:MM:SS exactly as they appear in the material.
 - Automated detections are leads, not conclusions; do not present them as confirmed.
 - Coverage notes and limitations must be reflected honestly; do not overstate certainty.
@@ -162,7 +162,9 @@ def validate_draft(draft: dict[str, str], material: dict[str, Any]) -> dict[str,
     corpus = json.dumps(material, ensure_ascii=False, default=str)
     corpus_numbers = set(_NUMBER.findall(corpus))
     finding_refs = {str(item.get("ref")) for item in material.get("findings") or []}
-    event_times = {str(item.get("time_utc") or "")[11:19] for item in material.get("timeline") or [] if item.get("time_utc")}
+    # A time may cite a timeline entry or an event a finding lists as support.
+    cited_items = [*(material.get("timeline") or []), *(event for finding in material.get("findings") or [] for event in finding.get("supporting_events") or [])]
+    event_times = {str(item.get("time_utc") or "")[11:19] for item in cited_items if item.get("time_utc")}
     event_times |= {time[:5] for time in event_times}
     issues: list[dict[str, str]] = []
     for field, text in draft.items():
