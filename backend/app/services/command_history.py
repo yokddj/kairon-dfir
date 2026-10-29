@@ -23,6 +23,20 @@ COMMAND_SOURCE_EVENT_IDS = {1, 4688, 4103, 4104, 400, 403, 600, 4698, 4702, 4700
 POWERSHELL_COMMAND_EVENT_IDS = {4103, 4104, 400, 403, 600, 800}
 POWERSHELL_CHANNELS = ["Microsoft-Windows-PowerShell/Operational", "Windows PowerShell", "PowerShellCore/Operational"]
 COMMAND_FETCH_LIMIT = 5000
+# Upper bound of the lightweight risk scan run when the full fetch is capped.
+COMMAND_RISK_SCAN_LIMIT = 200_000
+COMMAND_RISK_SCAN_PAGE = 10_000
+# Fields the command builder never reads; they make up about 40% of an event
+# document, so leaving them out lets the capped fetch carry more events.
+_UNUSED_HEAVY_FIELDS = ["raw", "normalized_raw_payload", "powershell_event_normalized", "display_command"]
+_RISK_SCAN_FIELDS = [
+    "id", "@timestamp", "event_id", "search_text", "host.name", "event.message",
+    "process.name", "process.command_line", "process.parent_name", "parent.name",
+    "powershell.command", "powershell.command_preview", "powershell.script_block_text",
+    "task.command", "linux.command", "windows.event_id",
+    "windows.event_data.CommandLine", "windows.event_data.ScriptBlockText", "windows.event_data.ScriptBlockId",
+    "windows.event_data.HostApplication", "powershell.host_application",
+]
 SOURCE_PRIORITY = {
     "sysmon_1": 10,
     "security_4688": 20,
@@ -294,28 +308,126 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> tuple[list[
     dated_body = {
         "size": COMMAND_FETCH_LIMIT,
         "track_total_hits": True,
+        "_source": {"excludes": _UNUSED_HEAVY_FIELDS},
         "query": {"bool": {"filter": [*filters, {"exists": {"field": "@timestamp"}}], "should": should, "must": must, "minimum_should_match": 1}},
         "sort": [{"@timestamp": {"order": fetch_order}}, {"event_id": {"order": fetch_order, "missing": "_last"}}],
     }
     undated_body = {
         "size": COMMAND_FETCH_LIMIT,
         "track_total_hits": True,
+        "_source": {"excludes": _UNUSED_HEAVY_FIELDS},
         "query": {"bool": {"filter": [*filters, {"bool": {"must_not": [{"exists": {"field": "@timestamp"}}]}}], "should": should, "must": must, "minimum_should_match": 1}},
     }
-    truncated = False
-    for body in (dated_body, undated_body):
+    truncated_by_body: dict[str, bool] = {}
+    for name, body in (("dated", dated_body), ("undated", undated_body)):
         result = search_documents(index, body)
         hits = result.get("hits", {}) or {}
         rows = hits.get("hits", []) or []
         matched = hits.get("total")
         matched_value = matched.get("value") if isinstance(matched, dict) else matched
-        if isinstance(matched_value, int) and matched_value > len(rows):
-            truncated = True
+        truncated_by_body[name] = isinstance(matched_value, int) and matched_value > len(rows)
         for hit in rows:
             source = dict(hit.get("_source") or {})
             source["id"] = source.get("id") or hit.get("_id")
             events.append(source)
+    truncated = truncated_by_body["dated"] or truncated_by_body["undated"]
+    risk_floor = _risk_floor(params)
+    if truncated_by_body["dated"] and risk_floor is not None:
+        # The capped fetch keeps one end of the timeline only. When the caller
+        # wants risky commands, scan every candidate with a light projection,
+        # score it, and fetch in full the ones that can reach the threshold:
+        # on a multi-host case the risky commands are otherwise cut away with
+        # the rest, whichever host they ran on.
+        extra, complete = _risky_candidates_beyond_cap(index, dated_body, {str(event.get("id")) for event in events}, risk_floor)
+        events.extend(extra)
+        truncated = truncated_by_body["undated"] or not complete
     return events, truncated
+
+
+def _risk_floor(params: dict[str, Any]) -> int | None:
+    floors = []
+    if _truthy(params.get("only_suspicious")):
+        floors.append(50)
+    risk_min = _to_int(params.get("risk_min"), None)
+    if risk_min is not None:
+        floors.append(risk_min)
+    return max(floors) if floors else None
+
+
+def _risky_candidates_beyond_cap(index: str, dated_body: dict[str, Any], have: set[str], risk_floor: int) -> tuple[list[dict[str, Any]], bool]:
+    """Score every dated candidate on a light projection and fetch, in full,
+    the ones not yet fetched whose command text can reach risk_floor. Parts of
+    a multi-part script block travel together (the joined text is scored)."""
+    body = {
+        "size": COMMAND_RISK_SCAN_PAGE,
+        "query": dated_body["query"],
+        "_source": _RISK_SCAN_FIELDS,
+        "sort": [{"@timestamp": {"order": "asc"}}, {"_id": {"order": "asc"}}],
+    }
+    wanted: set[str] = set()
+    blocks: dict[str, list[str]] = {}
+    block_text: dict[str, list[str]] = {}
+    scanned = 0
+    complete = True
+    while True:
+        result = search_documents(index, body)
+        rows = (result.get("hits", {}) or {}).get("hits", []) or []
+        for hit in rows:
+            source = hit.get("_source") or {}
+            doc_id = str(source.get("id") or hit.get("_id"))
+            text = _risk_scan_text(source)
+            block_id = str(_obj(_obj(source.get("windows")).get("event_data")).get("ScriptBlockId") or "")
+            if block_id:
+                blocks.setdefault(block_id, []).append(doc_id)
+                block_text.setdefault(block_id, []).append(text)
+                continue
+            if doc_id not in have and _light_score(text, source) >= risk_floor:
+                wanted.add(doc_id)
+        scanned += len(rows)
+        if len(rows) < COMMAND_RISK_SCAN_PAGE:
+            break
+        if scanned >= COMMAND_RISK_SCAN_LIMIT:
+            complete = False
+            break
+        body = {**body, "search_after": rows[-1]["sort"]}
+    for block_id, doc_ids in blocks.items():
+        if _light_score(" ".join(block_text[block_id]), {}) >= risk_floor:
+            wanted.update(doc_id for doc_id in doc_ids if doc_id not in have)
+    extra: list[dict[str, Any]] = []
+    ordered = sorted(wanted)
+    for start in range(0, len(ordered), 1000):
+        chunk = ordered[start : start + 1000]
+        result = search_documents(index, {"size": len(chunk), "query": {"ids": {"values": chunk}}, "_source": {"excludes": _UNUSED_HEAVY_FIELDS}})
+        for hit in (result.get("hits", {}) or {}).get("hits", []) or []:
+            source = dict(hit.get("_source") or {})
+            source["id"] = source.get("id") or hit.get("_id")
+            extra.append(source)
+    return extra, complete
+
+
+def _risk_scan_text(source: dict[str, Any]) -> str:
+    process = _obj(source.get("process"))
+    powershell = _obj(source.get("powershell"))
+    event_data = _obj(_obj(source.get("windows")).get("event_data"))
+    parts = [
+        source.get("search_text"), _obj(source.get("event")).get("message"),
+        process.get("command_line"), powershell.get("command"), powershell.get("command_preview"), powershell.get("script_block_text"),
+        _obj(source.get("task")).get("command"), _obj(source.get("linux")).get("command"),
+        event_data.get("CommandLine"), event_data.get("ScriptBlockText"),
+        event_data.get("HostApplication"), powershell.get("host_application"),
+    ]
+    return " ".join(str(part) for part in parts if part)
+
+
+def _light_score(text: str, source: dict[str, Any]) -> int:
+    # The text is a superset of what the command builder extracts, so a
+    # command that scores high in full scores at least as high here.
+    process = _obj(source.get("process"))
+    parent = _obj(source.get("parent")) or {"name": process.get("parent_name")}
+    score, _reasons = score_command(text, process, parent)
+    if detect_registry_command(text):
+        score = max(score, 35)
+    return score
 
 
 def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -332,6 +444,7 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
     task = _obj(event.get("task"))
     windows_event_data = _obj(windows.get("event_data"))
     source_type = _source_type(event, event_id)
+    process = _script_host_process(process, windows, source_type)
     commands: list[str] = []
     if source_type in {"sysmon_1", "security_4688"}:
         commands.append(_first(process.get("command_line"), process.get("executable"), process.get("path"), process.get("name")))
@@ -399,6 +512,7 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
             "source_file": event.get("source_file"),
             "line_number": _to_int(powershell.get("line_number"), None),
             "user": user_value,
+            "script": process.get("script_path"),
             "process": {
                 "name": process.get("name"),
                 "executable": _first(process.get("executable"), process.get("path")),
@@ -661,6 +775,27 @@ def _source_type(event: dict[str, Any], event_id: int | None) -> str:
     if artifact_type in {"linux_shell_history", "linux_app_history"}:
         return artifact_type
     return "other"
+
+
+_SCRIPT_EXTENSIONS = (".ps1", ".psm1", ".psd1", ".bat", ".cmd", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".hta", ".py", ".sh")
+
+
+def _script_host_process(process: dict[str, Any], windows: dict[str, Any], source_type: str) -> dict[str, Any]:
+    """A PowerShell log event whose "process" is a script names the script, not
+    the process that ran it. Keep the script apart and name the engine the log
+    belongs to, so the command reads as "powershell.exe running x.ps1"."""
+    if source_type != "powershell_operational":
+        return process
+    candidate = str(_first(process.get("executable"), process.get("path"), process.get("name")) or "")
+    if not candidate.lower().endswith(_SCRIPT_EXTENSIONS):
+        return process
+    channel = str(windows.get("channel") or "").lower()
+    normalized = dict(process)
+    normalized["script_path"] = candidate
+    normalized["name"] = "pwsh.exe" if "powershellcore" in channel else "powershell.exe"
+    normalized["executable"] = None
+    normalized["path"] = None
+    return normalized
 
 
 def _risk(command: str, process: dict[str, Any], parent: dict[str, Any]) -> tuple[int, list[str]]:

@@ -132,6 +132,40 @@ def search_memory_artifacts(
     }
 
 
+def resolve_requested_families(requested: list[str] | str | None, excluded: list[str] | str | None = None) -> list[str] | None:
+    """Memory families a cross-source search may return.
+
+    None means no restriction. An empty list means the request names only
+    non-memory artifact types (windows_event, linux_auth, ...) or excludes
+    every family, so no memory row can match. The plain family selector below
+    falls back to every family for unknown names, which is right for the memory
+    page's own picker but turned "artifact_type=windows_event" into "all of
+    memory" in the case search.
+    """
+    def as_list(value: list[str] | str | None) -> list[str]:
+        if not value:
+            return []
+        return [str(item).strip() for item in ([value] if isinstance(value, str) else value) if str(item).strip()]
+
+    aliases: dict[str, str] = {}
+    for name, spec in FAMILY_SPECS.items():
+        aliases.setdefault(spec.document_type, name)
+    requested_items, excluded_items = as_list(requested), as_list(excluded)
+    if not requested_items and not excluded_items:
+        return None
+    if requested_items:
+        families = _dedupe_preserving([aliases.get(item, item) for item in requested_items if aliases.get(item, item) in FAMILY_SPECS])
+    else:
+        families = list(SUPPORTED_FAMILIES)
+    blocked = {aliases.get(item, item) for item in excluded_items}
+    return [family for family in families if family not in blocked]
+
+
+def _dedupe_preserving(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    return [value for value in values if not (value in seen or seen.add(value))]
+
+
 def _selected_families(raw: list[str] | None) -> list[str]:
     if not raw:
         return list(SUPPORTED_FAMILIES)

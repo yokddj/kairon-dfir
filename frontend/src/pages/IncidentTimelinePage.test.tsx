@@ -276,6 +276,16 @@ describe("IncidentTimelinePage", () => {
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("## Incident Timeline");
   });
 
+  it("saves a corrected phase instead of keeping it only in the browser", async () => {
+    renderPage();
+    expect(await screen.findByText("Remote admin movement")).toBeInTheDocument();
+    const phaseSelect = screen.getByDisplayValue("Lateral movement");
+    fireEvent.change(phaseSelect, { target: { value: "impact" } });
+    await waitFor(() =>
+      expect(updateIncidentTimelineItemStatusMock).toHaveBeenCalledWith("case-1", "timeline-1", "item-1", { phase: "impact" }),
+    );
+  });
+
   it("can accept and dismiss suggested candidates", async () => {
     getIncidentTimelineDraftMock.mockResolvedValueOnce({
       case_id: "case-1",

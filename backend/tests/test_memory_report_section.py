@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.models.event_marking import EventMarking
 from app.models.finding import Finding
 from app.models.memory import MemoryScanRun
 from app.services import report_service
@@ -34,10 +35,12 @@ class _Query:
 
 
 class _Db:
-    def __init__(self, runs, findings):
-        self.runs, self.findings = runs, findings
+    def __init__(self, runs, findings, markings=()):
+        self.runs, self.findings, self.markings = runs, findings, list(markings)
 
     def query(self, model):
+        if model is EventMarking:
+            return _Query(self.markings)
         return _Query(self.runs if model is MemoryScanRun else self.findings if model is Finding else [])
 
 
@@ -84,7 +87,7 @@ def memory_case(monkeypatch):
         ]
 
     monkeypatch.setattr(findevil_triage, "findevil_processes", processes)
-    db = _Db([SimpleNamespace(metadata_json={}), SimpleNamespace(metadata_json={"system_info": SYSTEM_INFO})], [object(), object()])
+    db = _Db([SimpleNamespace(metadata_json={}), SimpleNamespace(metadata_json={"system_info": SYSTEM_INFO})], [SimpleNamespace(id="f-1", status="confirmed"), SimpleNamespace(id="f-2", status="new")])
     return db, calls
 
 
@@ -142,3 +145,11 @@ def test_rendered_section(memory_case):
 def test_report_skips_memory_when_disabled(monkeypatch):
     monkeypatch.setattr(report_service.settings, "memory_enabled", False)
     assert report_service._build_memory_report_context(None, "case-1", {}) == []
+
+
+def test_findings_count_includes_findings_holding_a_marked_item_of_the_image() -> None:
+    findings = [SimpleNamespace(id="f-direct", status="confirmed"), SimpleNamespace(id="f-attached", status="confirmed"), SimpleNamespace(id="f-dismissed", status="false_positive")]
+    markings = [SimpleNamespace(finding_id="f-attached"), SimpleNamespace(finding_id=None)]
+    db = _Db([], findings, markings)
+    # The fake returns every finding for each query; dismissed ones never count.
+    assert report_section._findings_linked_to_image(db, "case-1", "ev-1") == 2

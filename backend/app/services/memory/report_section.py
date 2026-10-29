@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.models.event_marking import EventMarking
 from app.models.finding import Finding
 from app.models.memory import MemoryScanRun
 from app.services.memory.overview import get_evidence_landing
@@ -88,6 +89,37 @@ def _find_evil(db: Session, *, case_id: str, evidence_id: str, run_id: str) -> d
     }
 
 
+_DISMISSED_FINDING_STATUSES = {"false_positive", "archived", "suppressed"}
+
+
+def _findings_linked_to_image(db: Session, case_id: str, evidence_id: str) -> int:
+    """Findings tied to a memory image: created from it, or holding an item of
+    it the analyst marked and attached (a Find Evil process, a connection...).
+    Counting only the first kind showed 0 for images whose processes are the
+    evidence of several findings. Dismissed findings are not counted."""
+    direct = (
+        db.query(Finding)
+        .filter(Finding.case_id == case_id, or_(Finding.linked_evidence_id == evidence_id, Finding.evidence_id == evidence_id))
+        .all()
+    )
+    ids = {str(finding.id) for finding in direct if _status(finding) not in _DISMISSED_FINDING_STATUSES}
+    attached = {
+        str(marking.finding_id)
+        for marking in db.query(EventMarking).filter(EventMarking.case_id == case_id, EventMarking.evidence_id == evidence_id).all()
+        if getattr(marking, "finding_id", None)
+    }
+    if attached - ids:
+        for finding in db.query(Finding).filter(Finding.case_id == case_id, Finding.id.in_(sorted(attached - ids))).all():
+            if str(finding.id) in attached and _status(finding) not in _DISMISSED_FINDING_STATUSES:
+                ids.add(str(finding.id))
+    return len(ids)
+
+
+def _status(finding: Finding) -> str:
+    status = getattr(finding, "status", None)
+    return str(getattr(status, "value", status) or "").lower()
+
+
 def build_memory_report_context(db: Session, case_id: str, *, evidence_id: str | None = None, host_matches=None) -> list[dict[str, Any]]:
     """One entry per memory image in the case (``host_matches`` filters by host name)."""
     try:
@@ -116,11 +148,7 @@ def build_memory_report_context(db: Session, case_id: str, *, evidence_id: str |
         ]
         find_evil_family = next((family for family in item.get("families") or [] if family.get("family") == "find_evil"), None)
         find_evil_run = (find_evil_family or {}).get("active_run") or {}
-        findings = (
-            db.query(Finding)
-            .filter(Finding.case_id == case_id, or_(Finding.linked_evidence_id == item["evidence_id"], Finding.evidence_id == item["evidence_id"]))
-            .count()
-        )
+        findings = _findings_linked_to_image(db, case_id, item["evidence_id"])
         entries.append({
             "evidence_id": item["evidence_id"],
             "filename": item.get("filename"),

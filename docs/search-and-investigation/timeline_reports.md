@@ -31,6 +31,17 @@ It should not be treated as:
 Use Incident Timeline to:
 
 - group confirmed or high-confidence activity by phase, host, or time
+
+### Phases
+
+Each item gets an ATT&CK-style phase (initial access, execution, persistence, privilege escalation, defense evasion, credential access, discovery, lateral movement, collection, command and control, exfiltration, impact). The phase comes, in order, from:
+
+1. the analyst: pick a phase in the item's Phase column; it is saved and kept when the timeline is regenerated;
+2. a finding typed with a phase (`lateral_movement`, `persistence_*`, ...);
+3. the MITRE techniques tagged on the finding (the first technique is the main one; for a technique that spans several tactics, the tactic the other techniques also support wins);
+4. tradecraft keywords in the text (Windows, Linux and macOS).
+
+A marked event attached to a finding takes that finding's phase. Accepting, dismissing, notes and phase corrections all survive regeneration.
 - add analyst notes
 - link evidence back to Search and Execution Story
 - export a concise timeline into Reports

@@ -12,7 +12,7 @@ from app.models.case_host import CaseHost
 from app.models.evidence import Evidence, EvidenceType
 from app.services.command_risk import score_command
 from app.services.memory.command_history import build_command_line_history
-from app.services.memory.search import search_memory_artifacts
+from app.services.memory.search import resolve_requested_families, search_memory_artifacts
 from app.services.memory.timeline import get_memory_timeline
 from app.services.windows_accounts import service_account
 
@@ -95,20 +95,23 @@ def memory_evidences(db: Session, case_id: str, evidence_id: str | None = None) 
 def memory_search_results(db: Session, case_id: str, params: dict[str, Any]) -> dict[str, Any]:
     page = max(int(params.get("page") or 1), 1)
     page_size = min(max(int(params.get("page_size") or 100), 1), 500)
-    artifact_types = params.get("artifact_family") or params.get("memory_artifact_family") or params.get("artifact_type")
-    if isinstance(artifact_types, str):
-        artifact_types = [artifact_types]
+    families = resolve_requested_families(
+        params.get("artifact_family") or params.get("memory_artifact_family") or params.get("artifact_type"),
+        params.get("exclude_artifact_type"),
+    )
     q = params.get("q") or params.get("query")
     all_results: list[dict[str, Any]] = []
     facets: dict[str, Counter[str]] = {"source_category": Counter(), "artifact_family": Counter(), "artifact_type": Counter(), "source_plugin_or_parser": Counter(), "evidence": Counter()}
     warnings: list[str] = []
-    for evidence in memory_evidences(db, case_id, params.get("evidence_id")):
+    evidences = [] if families == [] else _memory_evidences_for_hosts(db, case_id, params)
+    exclude_terms = [word.lower() for phrase in _as_list(params.get("exclude_q")) for word in phrase.split()]
+    for evidence, host_name in evidences:
         payload = search_memory_artifacts(
             db,
             case_id=case_id,
             evidence_id=str(evidence.id),
             query=q,
-            artifact_types=artifact_types,
+            artifact_types=families,
             run_id=params.get("run_id") or params.get("memory_run_id"),
             page=1,
             page_size=page_size,
@@ -128,6 +131,9 @@ def memory_search_results(db: Session, case_id: str, params: dict[str, Any]) -> 
         warnings.extend(payload.get("warnings") or [])
         for result in payload.get("results") or []:
             row = _memory_search_row(case_id, result)
+            row["host"] = host_name
+            if exclude_terms and any(term in f"{row['title']} {row['summary']}".lower() for term in exclude_terms):
+                continue
             all_results.append(row)
             facets["source_category"][SOURCE_CATEGORY_MEMORY] += 1
             facets["artifact_family"][str(result.get("artifact_family") or "memory")] += 1
@@ -152,6 +158,50 @@ def memory_search_results(db: Session, case_id: str, params: dict[str, Any]) -> 
         "warnings": warnings,
         "query": {"q": q or "", "source_category": SOURCE_CATEGORY_MEMORY},
     }
+
+
+def _as_list(value: Any) -> list[str]:
+    if not value:
+        return []
+    return [str(item) for item in ([value] if isinstance(value, str) else value) if str(item).strip()]
+
+
+def _memory_evidences_for_hosts(db: Session, case_id: str, params: dict[str, Any]) -> list[tuple[Evidence, str | None]]:
+    """Memory evidences of the case with their host, narrowed by the host filters.
+
+    A memory image belongs to one host (detected or assigned). When a host
+    filter is active, an image whose host is unknown cannot be shown to match,
+    so it is left out rather than returned under every host.
+    """
+    from app.services.host_identity import expand_host_filter, normalize_host_alias
+
+    def expanded(names: list[str]) -> set[str]:
+        values: set[str] = set()
+        for name in names:
+            for candidate in [name, *expand_host_filter(db, case_id, name)]:
+                normalized = normalize_host_alias(candidate)
+                if normalized:
+                    values.update({normalized, normalized.split(".", 1)[0]})
+        return values
+
+    wanted_names = _as_list(params.get("host"))
+    for host_id in _as_list(params.get("host_id")):
+        host = db.get(CaseHost, host_id)
+        if host is not None and getattr(host, "canonical_name", None):
+            wanted_names.append(str(host.canonical_name))
+    wanted = expanded(wanted_names)
+    unwanted = expanded(_as_list(params.get("exclude_host")))
+    output: list[tuple[Evidence, str | None]] = []
+    for evidence in memory_evidences(db, case_id, params.get("evidence_id")):
+        host_name = _evidence_host_name(db, evidence)
+        normalized = normalize_host_alias(host_name) if host_name else None
+        keys = {normalized, normalized.split(".", 1)[0]} if normalized else set()
+        if (wanted_names or params.get("host_id")) and not keys & wanted:
+            continue
+        if keys & unwanted:
+            continue
+        output.append((evidence, host_name))
+    return output
 
 
 def memory_timeline_items(db: Session, case_id: str, params: dict[str, Any]) -> dict[str, Any]:

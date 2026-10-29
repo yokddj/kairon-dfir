@@ -233,11 +233,14 @@ def normalize_powershell_row(document: dict, row: dict, artifact_meta: dict) -> 
         file_data["name"] = basename_windows(file_path)
         file_data["extension"] = extension_windows(file_path)
     elif paths:
-        process["path"] = process.get("path") or next((path for path in paths if extension_windows(path) in {".exe", ".ps1", ".bat", ".cmd", ".vbs", ".js", ".hta"}), None)
-        if process.get("path"):
-            file_data["path"] = file_data.get("path") or process["path"]
-            file_data["name"] = file_data.get("name") or basename_windows(process["path"])
-            file_data["extension"] = file_data.get("extension") or extension_windows(process["path"])
+        # Only an executable is the process image; a script named in the
+        # command is what the process ran, kept as the event's file.
+        process["path"] = process.get("path") or next((path for path in paths if extension_windows(path) == ".exe"), None)
+        target = process.get("path") or next((path for path in paths if extension_windows(path) in {".ps1", ".bat", ".cmd", ".vbs", ".js", ".hta"}), None)
+        if target:
+            file_data["path"] = file_data.get("path") or target
+            file_data["name"] = file_data.get("name") or basename_windows(target)
+            file_data["extension"] = file_data.get("extension") or extension_windows(target)
     for field, key in (("md5", "md5"), ("sha1", "sha1"), ("sha256", "sha256"), ("hash_sha1", "sha1"), ("hash_sha256", "sha256")):
         file_data[field] = file_data.get(field) or hashes.get(key)
     if urls:

@@ -275,6 +275,32 @@ EVENT_TERMS_FILTERS = {
 # broken (it *is* applied to events -- the mixed-in rows just never had the
 # attribute to begin with).
 EVENT_ONLY_PARSER_PARAMS = ("parser", "parser_backend", "backend_variant")
+# Filters a memory artifact row can be held to. Memory rows are artifacts of an
+# image (processes, sockets, modules...), not parsed events: they have no event
+# type, severity, account, IP, hash or marking. With any other filter active a
+# memory row cannot genuinely match, so memory is left out of that search
+# instead of returned as if the filter did not exist.
+MEMORY_SEARCH_FILTER_PARAMS = frozenset({
+    "q", "exclude_q", "evidence_id", "artifact_type", "exclude_artifact_type",
+    "host", "host_id", "host_scope", "exclude_host", "process_name",
+    "time_from", "time_to", "source_category", "source",
+})
+SEARCH_CONTROL_PARAMS = frozenset({
+    "scope", "sort", "page", "page_size", "cursor", "filters",
+    "include_highlights", "include_facets", "include_filesystem_timeline",
+})
+
+
+def memory_unsupported_filters(params: dict[str, Any]) -> list[str]:
+    """Active filters that memory artifact rows cannot satisfy."""
+    return sorted(
+        key
+        for key, value in params.items()
+        if key not in MEMORY_SEARCH_FILTER_PARAMS
+        and key not in SEARCH_CONTROL_PARAMS
+        and not key.startswith("_")
+        and value not in (None, "", [], (), False, {})
+    )
 EVENT_SORTS = {
     "timestamp_desc": [{"@timestamp": {"order": "desc", "missing": "_last"}}, {"event_id": {"order": "desc", "missing": "_last"}}],
     "timestamp_asc": [{"@timestamp": {"order": "asc", "missing": "_last"}}, {"event_id": {"order": "asc", "missing": "_last"}}],
@@ -1622,7 +1648,14 @@ def search_case_v2(db: Session, case_id: str, params: dict[str, Any]) -> dict[st
     offset = _decode_cursor(params.get("cursor")) if params.get("cursor") else max(0, (int(params.get("page") or 1) - 1) * page_size)
     warnings: list[str] = []
     if wants_memory_source(params):
-        memory = memory_search_results(db, case_id, {**params, "page_size": page_size})
+        unsupported = memory_unsupported_filters(params)
+        if unsupported:
+            # Nothing in memory can match these filters; say so instead of
+            # returning memory rows that silently ignore them.
+            memory = {"total": 0, "page": int(params.get("page") or 1), "page_size": page_size, "items_count": 0, "has_next": False, "results": [], "facets": {},
+                      "warnings": [f"Memory artifacts cannot be filtered by {', '.join(unsupported)}; remove those filters to search memory."], "query": {"q": params.get("q") or ""}}
+        else:
+            memory = memory_search_results(db, case_id, {**params, "page_size": page_size})
         memory.setdefault("query_syntax", _query_syntax_metadata(params.get("_query_syntax") or {}))
         memory.setdefault("has_previous", offset > 0)
         memory.setdefault("pagination_mode", "offset")
@@ -1692,7 +1725,7 @@ def search_case_v2(db: Session, case_id: str, params: dict[str, Any]) -> dict[st
     event_rows = [add_event_source_provenance(row) for row in event_rows]
     event_rows = _filter_source_category(event_rows, params)
     disk_rows = [*event_rows, *finding_rows]
-    if not wants_non_memory_source(params) and not event_only_filter_active:
+    if not wants_non_memory_source(params) and not event_only_filter_active and not memory_unsupported_filters(params):
         memory = memory_search_results(db, case_id, {**params, "page": 1, "page_size": fetch_limit})
         memory_rows = memory.get("results") or []
         warnings.extend(memory.get("warnings") or [])

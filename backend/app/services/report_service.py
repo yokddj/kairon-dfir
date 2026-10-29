@@ -1968,11 +1968,15 @@ def _build_defender_report_context(db: Session, case_id: str, filters: dict[str,
         "risk_min": filters.get("risk_min"),
         "risk_max": filters.get("risk_max"),
         "page": 1,
-        "page_size": max_events,
+        # Fetch the widest page: health and housekeeping records are dropped
+        # below, and the report should still fill max_events with real ones.
+        "page_size": 100,
         "sort": "risk_desc",
         "include_facets": False,
     }
     total, rows, warnings, _facets = search_events_v2(case_id, params, db=db)
+    reportable = [row for row in rows if _is_reportable_defender_event(row)]
+    rows = reportable[:max_events]
     high_severity = 0
     failed_actions = 0
     for row in rows:
@@ -1989,11 +1993,32 @@ def _build_defender_report_context(db: Session, case_id: str, filters: dict[str,
         "events": rows,
         "warnings": warnings,
         "counts": {
-            "defender_events_matched": int(total),
+            # Reportable records among the 100 highest-risk Defender events.
+            "defender_events_matched": len(reportable),
             "defender_high_severity": high_severity,
             "defender_failed_actions": failed_actions,
         },
     }
+
+
+# Defender records that say something about the incident: detections and
+# remediation, and changes to the protection itself. Health reports (1150/1151),
+# history clean-up (1013) and signature updates (2000-2002) are routine.
+_DEFENDER_REPORTABLE_EVENT_IDS = {
+    "1006", "1007", "1008", "1015", "1116", "1117", "1118", "1119", "1120",
+    "5001", "5004", "5007", "5008", "5010", "5011", "5012", "5013",
+}
+
+
+def _is_reportable_defender_event(row: dict[str, Any]) -> bool:
+    raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
+    defender = raw.get("defender") if isinstance(raw.get("defender"), dict) else {}
+    threat = raw.get("threat") if isinstance(raw.get("threat"), dict) else {}
+    if threat.get("name") or defender.get("threat_name"):
+        return True
+    windows = raw.get("windows") if isinstance(raw.get("windows"), dict) else {}
+    event_id = str(defender.get("event_id") or windows.get("event_id") or "").strip()
+    return event_id in _DEFENDER_REPORTABLE_EVENT_IDS
 
 
 def _build_srum_report_context(db: Session, case_id: str, filters: dict[str, Any]) -> dict[str, Any]:
@@ -2463,7 +2488,7 @@ def _render_evidence(context: dict[str, Any], evidence_rows: dict[str, Evidence]
         rows.append(
             [
                 evidence["name"],
-                _humanize(evidence_type) if evidence_type and evidence_type != "unknown" else "-",
+                _humanize(evidence_type) if evidence_type and evidence_type != "unknown" else _archive_label(str(evidence["name"])),
                 _human_bytes(int(size_bytes)) if size_bytes else "-",
                 _code(sha256) if sha256 else "-",
                 evidence.get("detected_host") or "-",
@@ -2473,6 +2498,16 @@ def _render_evidence(context: dict[str, Any], evidence_rows: dict[str, Evidence]
             ]
         )
     return _markdown_table(_drop_empty_columns(rows, zero_is_empty={"Parser errors"}))
+
+
+def _archive_label(name: str) -> str:
+    # An archive whose content did not match one collection type (a bundle of
+    # a collection, a memory image and a capture, say) is still an archive.
+    lower = name.lower()
+    for suffix in (".zip", ".7z", ".tar.gz", ".tgz", ".tar", ".rar"):
+        if lower.endswith(suffix):
+            return f"Archive ({suffix.lstrip('.')})"
+    return "-"
 
 
 def _context_host_name(host: dict[str, Any]) -> str:
@@ -2794,6 +2829,8 @@ def _render_command_history_section(commands: list[dict[str, Any]], stories: lis
         lines.append(f"- Command: {_code(_clip(str(command.get('command') or '-'), 600))}")
         if parent and chain:
             lines.append(f"- Process chain: {_escape_md(chain)}")
+        if command.get("script"):
+            lines.append(f"- Script: {_code(command['script'])}")
         if command.get("user"):
             lines.append(f"- User: {_code(str(command.get('user')))}")
         lines.append(f"- Family: {_code(family)} · Launcher: {_code(launcher)}")
