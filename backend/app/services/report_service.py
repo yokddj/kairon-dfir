@@ -161,6 +161,9 @@ DEFAULT_FILTERS = {
 def _default_report_filters_for_case(case: Case) -> dict[str, Any]:
     return dict(DEFAULT_FILTERS)
 SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+# Binaries under these folders are the operating system's own; seeing one in a
+# key event (svchost.exe, net.exe) is activity, not an indicator to block.
+BENIGN_SYSTEM_PATH = re.compile(r"^[a-z]:\\windows\\(?:system32|syswow64|winsxs)\\[^\s]+\.(?:exe|dll)$", re.IGNORECASE)
 _SECRET_INLINE = re.compile(r"(?i)\b(password|secret|token|access_token|refresh_token|apikey|api_key|authorization|bearer|keymaterial)\b\s*[:=]\s*([^\s|,;]+)")
 _BEARER_TOKEN = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{20,}\b")
 _INLINE_CODE = re.compile(r"`([^`]+)`")
@@ -302,7 +305,15 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
 
     timeline_entries, timeline_auto_selected = _build_timeline_entries(selected_bookmarks, selected_findings)
     if filters.get("include_marked_events", True):
-        timeline_entries.extend(_build_marked_event_entries(marked_events))
+        bookmarked_event_ids = {str(bookmark.event_id) for bookmark in selected_bookmarks}
+        timeline_entries.extend(
+            entry
+            for entry in _build_marked_event_entries(marked_events)
+            # A key event already carries the analyst's title and note, and a
+            # mark with no time (a memory process) has no place on a timeline;
+            # it is reported in its own section (Memory Analysis).
+            if entry["timestamp"] and str(entry["event_id"]) not in bookmarked_event_ids
+        )
         timeline_entries.sort(key=lambda item: _safe_dt(item.get("timestamp")))
     ioc_rows = _extract_iocs(case_id, selected_findings, selected_bookmarks)
     evidence_rows = _case_evidence_rows(db, case_id)
@@ -382,7 +393,7 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
     if sections_enabled.get("evidence", True):
         add("evidence", "Evidence Processed", _render_evidence(context, evidence_rows), empty=not context["evidences"])
     if sections_enabled.get("hosts", True):
-        add("hosts", "Hosts", _render_hosts(context), empty=not context["hosts"])
+        add("hosts", "Hosts", _render_hosts(context, selected_findings), empty=not context["hosts"])
     if sections_enabled.get("findings", True):
         add("findings", "Findings", _render_findings(selected_findings), empty=not selected_findings)
     if sections_enabled.get("findings", True) and filters.get("include_detections", True):
@@ -401,7 +412,7 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
         add("defender", "Microsoft Defender", _render_defender_section(defender_report["events"]), empty=not defender_report["events"], notes=defender_report["warnings"])
     if sections_enabled.get("email", True) and filters.get("include_email", True):
         email_markdown = _humanize_table_columns(_collapse_duplicate_table_rows(render_email_artifacts_markdown(email_report["items"])), {"Type", "Client"})
-        add("email", "Email Artifacts", email_markdown, empty=not email_report["items"], notes=email_report["warnings"])
+        add("email", "Email Artifacts", email_markdown, empty=not email_report["items"], notes=_summarize_source_cap_warnings(email_report["warnings"], "Email Artifacts"))
     if sections_enabled.get("motw", True):
         add("motw", "MOTW / Downloaded Files", _humanize_table_columns(_collapse_duplicate_table_rows(render_motw_markdown(motw_report["items"])), {"Source"}), empty=not motw_report["items"], notes=motw_report["warnings"])
     if sections_enabled.get("srum", True) and filters.get("include_srum", True):
@@ -1185,7 +1196,9 @@ def _pdf_palette(primary_hex: str) -> dict[str, colors.Color]:
     }
 
 
-_MARKDOWN_ESCAPE = re.compile(r"\\([*_`|\\])")
+# Renderers escape * _ ` | for markdown, never backslashes: a doubled
+# backslash in text is a UNC path (\\server\share) and must stay as written.
+_MARKDOWN_ESCAPE = re.compile(r"\\([*_`|])")
 
 
 def _pdf_inline(value: str) -> str:
@@ -1831,7 +1844,7 @@ def _build_marked_event_entries(markings: list[EventMarking]) -> list[dict[str, 
                 "timestamp": marking.timestamp,
                 "category": "marked_event",
                 "importance": marking.status,
-                "title": f"Marked event: {marking.status}",
+                "title": f"{_humanize(marking.artifact_type or 'event')} marked {marking.status}" + (f" on {marking.host}" if marking.host else ""),
                 "summary": marking.note or labels or "Analyst-marked event",
                 "note": marking.note or "",
                 "related_finding": marking.finding_id,
@@ -2211,8 +2224,6 @@ def _extract_iocs(case_id: str, findings: list[Finding], bookmarks: list[Timelin
             remember("ip", value, source=source, timestamp=finding.time_start or finding.created_at)
         for value in finding.related_users or []:
             remember("user", value, source=source, timestamp=finding.time_start or finding.created_at)
-        for value in finding.related_hosts or []:
-            remember("host", value, source=source, timestamp=finding.time_start or finding.created_at)
         for item in finding.timeline or []:
             if item.get("event_id"):
                 remember("event_id", item["event_id"], source=source, timestamp=item.get("timestamp"))
@@ -2232,13 +2243,15 @@ def _extract_iocs_from_event(event: dict[str, Any], remember, source: str, times
     file_data = event.get("file") or {}
     if isinstance(file_data, dict):
         for key in ("path", "sha1", "sha256", "md5"):
-            if file_data.get(key):
-                remember("hash" if key in {"sha1", "sha256", "md5"} else "file", file_data.get(key), source=source, timestamp=timestamp)
+            value = file_data.get(key)
+            if not value or (key == "path" and BENIGN_SYSTEM_PATH.search(str(value))):
+                continue
+            remember("hash" if key in {"sha1", "sha256", "md5"} else "file", value, source=source, timestamp=timestamp)
     process_data = event.get("process") or {}
     if isinstance(process_data, dict):
-        for key in ("path", "command_line", "name"):
-            if process_data.get(key):
-                remember("process", process_data.get(key), source=source, timestamp=timestamp)
+        path = str(process_data.get("executable") or process_data.get("path") or "")
+        if path and not BENIGN_SYSTEM_PATH.search(path):
+            remember("file", path, source=source, timestamp=timestamp)
     dns_data = event.get("dns") or {}
     if isinstance(dns_data, dict):
         if dns_data.get("domain"):
@@ -2252,7 +2265,9 @@ def _extract_iocs_from_event(event: dict[str, Any], remember, source: str, times
     if isinstance(download_data, dict):
         if download_data.get("url"):
             remember("url", download_data.get("url"), source=source, timestamp=timestamp)
-        if download_data.get("target_path"):
+        # Events indexed before the PowerShell parser fix can carry a script
+        # argument as target_path with no URL; only a real download counts.
+        if download_data.get("target_path") and download_data.get("url"):
             remember("file", download_data.get("target_path"), source=source, timestamp=timestamp)
     network_data = event.get("network") or {}
     if isinstance(network_data, dict):
@@ -2274,7 +2289,7 @@ def _render_executive_summary(
     *,
     pending_review: int = 0,
 ) -> str:
-    note = _sanitize_text((report.analyst_notes or {}).get("executive_summary") or "")
+    note = _narrative((report.analyst_notes or {}).get("executive_summary"))
     evidences = context.get("evidences") or []
     host_names = _dedupe([_context_host_name(host) for host in context.get("hosts") or []])
     host_names = [name for name in host_names if name and name != "unknown"]
@@ -2464,16 +2479,27 @@ def _context_host_name(host: dict[str, Any]) -> str:
     return str(host.get("host") or host.get("display_name") or host.get("canonical_name") or "unknown")
 
 
-def _render_hosts(context: dict[str, Any]) -> str:
-    rows = [["Host", "Role", "Events", "Findings", "High risk", "First seen (UTC)", "Last seen (UTC)"]]
+def _render_hosts(context: dict[str, Any], findings: list[Finding] | None = None) -> str:
+    # Count the findings this report carries per host (by related_hosts), so the
+    # table agrees with the Findings section instead of the host index counters.
+    reported: Counter[str] = Counter()
+    reported_high: Counter[str] = Counter()
+    for finding in findings or []:
+        for related in {normalize_host_alias(str(item)) for item in (finding.related_hosts or []) if str(item).strip()}:
+            reported[related] += 1
+            if _sev(finding) in {"high", "critical"}:
+                reported_high[related] += 1
+    rows = [["Host", "Role", "Events", "Findings", "High/critical", "First seen (UTC)", "Last seen (UTC)"]]
     for host in context["hosts"]:
         events_count = host.get("events_count", host.get("event_count", 0))
+        name = _context_host_name(host)
+        key = normalize_host_alias(name)
         rows.append([
-            _context_host_name(host),
+            name,
             "primary" if host.get("is_primary") else "alias" if host.get("is_alias") else "host",
             f"{int(events_count or 0):,}",
-            str(host.get("findings_count", 0)),
-            str(host.get("high_risk_count", 0)),
+            str(reported[key] if findings is not None else host.get("findings_count", 0)),
+            str(reported_high[key] if findings is not None else host.get("high_risk_count", 0)),
             _fmt_ts(host.get("first_seen")) or "-",
             _fmt_ts(host.get("last_seen")) or "-",
         ])
@@ -2506,7 +2532,7 @@ def _render_findings(findings: list[Finding]) -> str:
         ]
         lines.append(_markdown_table(summary_rows))
         if finding.description:
-            lines.extend(["", _sanitize_text(finding.description)])
+            lines.extend(["", _narrative(finding.description)])
         if finding.reasons:
             lines.extend(["", "Why it matters:"])
             for reason in finding.reasons[:8]:
@@ -2765,7 +2791,7 @@ def _render_command_history_section(commands: list[dict[str, Any]], stories: lis
         chain = " → ".join(label for label in (_process_label(parent), _process_label(process)) if label)
         heading_process = _process_label(process) or launcher
         lines.extend([f"##### {_fmt_ts(command.get('timestamp')) or 'unknown time'} UTC · {_escape_md(str(command.get('host') or '-'))} · {_escape_md(heading_process)}", ""])
-        lines.append(f"- Command: {_code(str(command.get('command') or '-'))}")
+        lines.append(f"- Command: {_code(_clip(str(command.get('command') or '-'), 600))}")
         if parent and chain:
             lines.append(f"- Process chain: {_escape_md(chain)}")
         if command.get("user"):
@@ -2848,7 +2874,7 @@ def _render_srum_section(events: list[dict[str, Any]]) -> str:
     return _markdown_table(rows)
 
 
-_IOC_TYPE_LABELS = {"ip": "IP address", "url": "URL", "hash": "Hash"}
+_IOC_TYPE_LABELS = {"ip": "IP address", "url": "URL", "hash": "Hash", "user": "Account"}
 
 
 def _render_iocs(rows: list[dict[str, Any]]) -> str:
@@ -2896,7 +2922,7 @@ def _render_network_cloud_usb(findings: list[Finding]) -> str:
 
 
 def _render_recommendations(findings: list[Finding], report: CaseReport) -> str:
-    manual = _sanitize_text((report.analyst_notes or {}).get("recommendations") or "")
+    manual = _narrative((report.analyst_notes or {}).get("recommendations"))
     recommendations: list[str] = []
     finding_types = {finding.finding_type or "" for finding in findings}
     if {"download_execute_detect", "office_powershell", "suspicious_process_chain"} & finding_types:
@@ -2947,7 +2973,7 @@ def _render_appendix(
             "These sections were checked and had no matching data for this case and these parameters, so they are left out of the exported report: "
             + ", ".join(omitted_sections) + ".",
         ])
-    limitations = _sanitize_text((report.analyst_notes or {}).get("limitations") or "")
+    limitations = _narrative((report.analyst_notes or {}).get("limitations"))
     if limitations:
         lines.extend(["", "### Limitations", "", limitations])
     if report.include_raw_appendix:
@@ -3013,8 +3039,9 @@ def _fmt_ts(value: Any) -> str:
 def _code(value: Any) -> str:
     """Inline code span. Its content is literal, so it is redacted but not
     markdown-escaped (escaping inside backticks prints the backslashes)."""
-    text = _sanitize_text(str(value or "")).replace("`", "'")
-    return f"`{text}`" if text else "-"
+    # A code span is one line: a multi-line script would break it open.
+    text = re.sub(r"\s*[\r\n]+\s*", " ", _sanitize_text(str(value or ""))).replace("`", "'")
+    return f"`{text}`" if text and text != "-" else "-"
 
 
 def _drop_empty_columns(rows: list[list[str]], *, zero_is_empty: set[str] | None = None) -> list[list[str]]:
@@ -3036,7 +3063,7 @@ def _drop_empty_columns(rows: list[list[str]], *, zero_is_empty: set[str] | None
 _SOURCE_CAP_WARNING = re.compile(r"showing first (\d+) of (\d+) source matches")
 
 
-def _summarize_source_cap_warnings(warnings: list[str]) -> list[str]:
+def _summarize_source_cap_warnings(warnings: list[str], review_in: str = "Startup & Persistence") -> list[str]:
     """Per-source "showing first N of M" caps read as noise one by one; the
     reader only needs to know the list is a sample and how big the pool was."""
     capped = [match for match in (_SOURCE_CAP_WARNING.search(str(item)) for item in warnings) if match]
@@ -3045,7 +3072,7 @@ def _summarize_source_cap_warnings(warnings: list[str]) -> list[str]:
         total = sum(int(match.group(2)) for match in capped)
         other.append(
             f"{len(capped)} sources had more matching entries than the report lists ({total:,} in total); "
-            "the highest-risk entries are shown. Review Startup & Persistence for the full list."
+            f"the highest-risk entries are shown. Review {review_in} for the full list."
         )
     return other
 
@@ -3219,13 +3246,23 @@ def _markdown_table(rows: list[list[str]]) -> str:
     return "\n".join([header, divider, *body])
 
 
-def _sanitize_text(value: str) -> str:
+def _sanitize_text(value: str, limit: int = 1200) -> str:
     text = value.strip()
     if not text:
         return ""
     text = _SECRET_INLINE.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
     text = _BEARER_TOKEN.sub("Bearer [REDACTED]", text)
-    return text[:1200]
+    return text[:limit]
+
+
+# Analyst narrative (executive summary, recommendations, limitations, finding
+# descriptions) is written for the reader and must not be cut mid-sentence;
+# the 1200-character cap is meant for single values carried into tables.
+_NARRATIVE_LIMIT = 20000
+
+
+def _narrative(value: Any) -> str:
+    return _sanitize_text(str(value or ""), _NARRATIVE_LIMIT)
 
 
 def _escape_md(value: str) -> str:
