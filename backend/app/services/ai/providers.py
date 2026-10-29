@@ -46,6 +46,9 @@ CONNECT_TIMEOUT_SECONDS = 10.0
 READ_TIMEOUT_SECONDS = 180.0
 
 
+TRUNCATED_NOTICE = "Answer truncated at the configured token limit."
+
+
 class ProviderError(RuntimeError):
     """A provider call failed in a way worth showing the analyst verbatim."""
 
@@ -189,7 +192,7 @@ class AnthropicProvider(ChatProvider):
         elif getattr(final, "stop_reason", None) == "max_tokens":
             yield StreamEvent(
                 type="notice",
-                text="Answer truncated at the configured token limit.",
+                text=TRUNCATED_NOTICE,
             )
 
     def list_models(self) -> list[str]:
@@ -395,7 +398,7 @@ def _parse_sse_line(line: str, pending: dict[int, dict] | None = None) -> list[S
             _accumulate_tool_calls(delta.get("tool_calls"), pending)
         if choice.get("finish_reason") == "length":
             events.append(
-                StreamEvent(type="notice", text="Answer truncated at the configured token limit.")
+                StreamEvent(type="notice", text=TRUNCATED_NOTICE)
             )
     return events
 

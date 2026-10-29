@@ -100,6 +100,27 @@ def test_provider_gateway_errors_are_readable() -> None:
     assert len(text) <= 303
 
 
+class _ThinkingProvider:
+    seen_max_tokens = 0
+
+    def __init__(self, credentials):
+        _ThinkingProvider.seen_max_tokens = credentials.max_tokens
+
+    def stream_chat(self, *, system, messages, tools=None):
+        yield StreamEvent(type="notice", text=report_draft.TRUNCATED_NOTICE)
+
+
+def test_drafting_raises_the_token_limit_and_explains_truncation(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _configured_db(monkeypatch)
+    monkeypatch.setattr(report_draft, "build_provider", _ThinkingProvider)
+    monkeypatch.setattr(report_service, "build_case_report_preview", lambda *_a, **_k: {"ai_context": MATERIAL})
+    response = _client(db).post("/api/cases/case-1/reports/report-1/ai-draft")
+    assert response.status_code == 502
+    assert _ThinkingProvider.seen_max_tokens == report_draft.DRAFT_MIN_TOKENS
+    detail = response.json()["detail"]
+    assert "token limit" in detail and "wrote nothing" in detail and "Max tokens" in detail
+
+
 def test_endpoint_refuses_when_ai_is_off_or_there_is_nothing_to_draft(monkeypatch: pytest.MonkeyPatch) -> None:
     db = _configured_db(monkeypatch)
     monkeypatch.setattr(report_service, "build_case_report_preview", lambda *_a, **_k: {"ai_context": {"findings": [], "timeline": []}})

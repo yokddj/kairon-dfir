@@ -14,16 +14,22 @@ from __future__ import annotations
 import html
 import json
 import re
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.services.ai.config import PROVIDERS, AIConfigError, load_config, resolve_provider
-from app.services.ai.providers import ProviderError, build_provider
+from app.services.ai.config import MAX_MAX_TOKENS, PROVIDERS, AIConfigError, load_config, resolve_provider
+from app.services.ai.providers import TRUNCATED_NOTICE, ProviderError, build_provider
 
 PROMPT_VERSION = "report-draft-v1"
 DRAFT_FIELDS = ("executive_summary", "attack_narrative", "recommendations", "limitations")
+
+# Four sections of prose need more room than a chat answer, and reasoning models
+# spend part of the limit thinking before they write. The configured limit is
+# raised to this for drafting, never lowered.
+DRAFT_MIN_TOKENS = min(16000, MAX_MAX_TOKENS)
 
 _LANGUAGE_NAMES = {"en": "English", "es": "Spanish (Spain)"}
 
@@ -85,15 +91,25 @@ def draft_report_narrative(db: Session, case_id: str, report_id: str) -> dict[st
         credentials = resolve_provider(db)
     except AIConfigError as exc:
         raise ReportDraftUnavailable(str(exc)) from exc
+    credentials = replace(credentials, max_tokens=max(credentials.max_tokens, DRAFT_MIN_TOKENS))
     language = _LANGUAGE_NAMES.get(str(material.get("language") or "en"), "English")
     system = SYSTEM_PROMPT.replace("{language}", language)
     user = "Case material (JSON):\n" + json.dumps(material, ensure_ascii=False, default=str)
     text = ""
+    truncated = False
     for event in build_provider(credentials).stream_chat(system=system, messages=[{"role": "user", "content": user}], tools=None):
         if event.type == "text":
             text += event.text
+        elif event.type == "notice" and event.text == TRUNCATED_NOTICE:
+            truncated = True
         elif event.type == "error":
             raise ProviderError(event.text or "The AI provider returned an error.")
+    if truncated:
+        raise ProviderError(
+            f"The model reached its token limit ({credentials.max_tokens}) before finishing the draft"
+            + (" and wrote nothing: reasoning models can spend the whole limit thinking." if not text.strip() else ".")
+            + " Raise Max tokens in AI settings, or the model's context length in a local server."
+        )
     draft = parse_draft(text)
     return {
         "draft": draft,
