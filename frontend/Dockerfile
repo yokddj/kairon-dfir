@@ -13,7 +13,7 @@ FROM nginx:stable-alpine@sha256:0d3b80406a13a767339fbe2f41406d6c7da727ab89cf8fae
 
 ARG KAIRON_COMMIT=unknown
 ARG BUILD_DATE=unknown
-ARG KAIRON_VERSION=1.1.0
+ARG KAIRON_VERSION=1.2.0
 
 LABEL org.opencontainers.image.title="Kairon DFIR frontend" \
       org.opencontainers.image.version="${KAIRON_VERSION}" \
