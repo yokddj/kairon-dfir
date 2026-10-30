@@ -57,6 +57,7 @@ _SPANISH: dict[str, str] = {
     "MOTW / Downloaded Files": "MOTW / Ficheros descargados",
     "SRUM Application and Network Usage": "Uso de aplicaciones y red (SRUM)",
     "Memory Analysis": "Análisis de memoria",
+    "Lateral Movement": "Movimiento lateral",
     "IOCs": "IOCs",
     "Startup & Persistence": "Arranque y persistencia",
     "Network / Cloud / USB": "Red / Nube / USB",
@@ -112,6 +113,27 @@ _SPANISH: dict[str, str] = {
     "Process chain": "Cadena de procesos", "Script": "Script", "Family": "Familia", "Launcher": "Lanzador",
     "Seen in": "Visto en", "Why it is suspicious": "Por qué es sospechoso", "Analyst marking": "Marca del analista",
     "Analyst notes": "Notas del analista",
+    # Lateral movement
+    "No remote logons between machines were found in the authentication logs.":
+        "No se encontraron inicios de sesión remotos entre equipos en los registros de autenticación.",
+    "Remote logons between machines, from the authentication logs of every host, in the order they began. "
+    "A source is named as a case host only when its address was observed on that host. "
+    "These are authentications, not proof of intent: read them with the findings and the timeline.":
+        "Inicios de sesión remotos entre equipos, tomados de los registros de autenticación de cada equipo, en el orden en que empezaron. "
+        "Un origen se identifica como equipo del caso solo cuando su dirección se observó en ese equipo. "
+        "Son autenticaciones, no prueba de intención: deben leerse junto con los hallazgos y la cronología.",
+    "{count} routine connections (machine, anonymous and built-in accounts) are left out.":
+        "Se omiten {count} conexiones rutinarias (cuentas de equipo, anónimas e integradas).",
+    "From": "Origen", "To": "Destino", "Method": "Método",
+    "not a case host": "no es un equipo del caso",
+    "workstation name: {names}": "nombre de estación: {names}",
+    "address seen on several hosts": "dirección vista en varios equipos",
+    "{count} succeeded": "{count} correctos", "{count} failed": "{count} fallidos",
+    "{shown} of {total} connections are shown; the Lateral Movement view lists them all.":
+        "Se muestran {shown} de {total} conexiones; la vista Lateral Movement las lista todas.",
+    "Network logon (type 3: SMB, WinRM, PsExec, WMI...)": "Inicio de sesión de red (tipo 3: SMB, WinRM, PsExec, WMI...)",
+    "Network cleartext logon (type 8)": "Inicio de sesión de red en texto claro (tipo 8)",
+    "Remote Desktop (type 10)": "Escritorio remoto (tipo 10)",
     "Detected by": "Detectado por", "Target": "Objetivo",
     "real-time protection": "protección en tiempo real", "system scan": "análisis del sistema",
     "AMSI (script scan)": "AMSI (análisis de scripts)", "download/attachment scan": "análisis de descargas/adjuntos",

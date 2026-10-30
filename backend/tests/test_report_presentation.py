@@ -370,3 +370,42 @@ def test_language_is_saved_on_the_report() -> None:
     updated = report_service.update_case_report(db, "case-1", "report-1", {"language": "ES"})
     assert updated["language"] == "es"
     assert report_service.update_case_report(db, "case-1", "report-1", {"language": "fr"})["language"] == "en"
+
+
+_LATERAL_EDGES = [
+    {"target_host": "SRV-01", "source_ip": "192.0.2.42", "source_hosts": ["WS-02"], "source_workstations": ["kali"], "user": "svc_sql", "domain": "CORP",
+     "method": "Remote Desktop (type 10)", "successes": 2, "failures": 1, "first_seen": "2026-05-15T12:05:59Z", "last_seen": "2026-05-15T12:30:00Z",
+     "routine_reason": None, "workstation_mismatch": True, "source_ambiguous": False},
+    {"target_host": "DC-01", "source_ip": "192.0.2.41", "source_hosts": ["WS-01"], "source_workstations": [], "user": "WS-01$", "domain": "CORP",
+     "method": "Network logon (type 3: SMB, WinRM, PsExec, WMI...)", "successes": 40, "failures": 0, "first_seen": "2026-05-15T08:00:00Z",
+     "last_seen": "2026-05-15T18:00:00Z", "routine_reason": "machine account", "workstation_mismatch": False, "source_ambiguous": False},
+]
+
+
+def test_lateral_movement_section_lists_remote_logons_without_routine(monkeypatch: pytest.MonkeyPatch) -> None:
+    _quiet_sources(monkeypatch)
+    monkeypatch.setattr("app.services.lateral_movement.get_lateral_movement", lambda *_a, **_k: {"edges": _LATERAL_EDGES})
+    db = _FakeDb(case=Case(id="case-1", name="Sample", status="open", timezone="UTC"), reports=[_report()])
+    preview = report_service.build_case_report_preview(db, "case-1", "report-1", collect_ai_context=True)
+    section = next(section for section in preview["sections"] if section["id"] == "lateral_movement")
+    assert section["empty"] is False
+    markdown = section["markdown"]
+    assert "WS-02 (192.0.2.42) [workstation name: kali]" in markdown
+    assert "CORP\\svc_sql" in markdown and "2 succeeded, 1 failed" in markdown
+    assert "WS-01$" not in markdown and "1 routine connections" in markdown
+    lateral = preview["ai_context"]["lateral_movement"]
+    assert [row["account"] for row in lateral] == ["CORP\\svc_sql"]
+    # A draft may cite a lateral movement row by its time.
+    from app.services.ai import report_draft
+
+    material = {"findings": [], "timeline": [], "lateral_movement": lateral}
+    assert report_draft.validate_draft({"attack_narrative": "svc_sql reached SRV-01 over RDP [12:05:59]."}, material)["issues"] == []
+
+
+def test_lateral_movement_section_is_left_out_when_there_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    _quiet_sources(monkeypatch)
+    monkeypatch.setattr("app.services.lateral_movement.get_lateral_movement", lambda *_a, **_k: {"edges": _LATERAL_EDGES[1:]})
+    db = _FakeDb(case=Case(id="case-1", name="Sample", status="open", timezone="UTC"), reports=[_report()])
+    content, _filename, _media = report_service.export_case_report(db, "case-1", "report-1", format="markdown")
+    assert "Lateral Movement" in content.split("### Sections without matching data")[-1]
+    assert "## Lateral Movement" not in content and "WS-01$" not in content

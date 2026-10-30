@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from io import BytesIO
 import json
+import logging
 from pathlib import Path
 import re
 from typing import Any
@@ -68,6 +69,8 @@ from app.services.mitre_tactics import TACTIC_ORDER, tactic_for, tagged_techniqu
 from app.services.timeline_service import _finding_incident_phase, build_incident_timeline_draft, export_incident_timeline_markdown
 
 
+logger = logging.getLogger(__name__)
+
 REPORT_TEMPLATES = [
     {
         "id": "standard_investigation",
@@ -84,6 +87,7 @@ REPORT_TEMPLATES = [
             "timeline",
             "incident_timeline",
             "process_chains",
+            "lateral_movement",
             "command_history",
             "defender",
             "email",
@@ -314,6 +318,7 @@ def _build_case_report_preview(db: Session, case_id: str, report_id: str, report
     incident_timeline_report = _build_incident_timeline_report_context(db, case_id, filters)
     persistence_report = build_startup_persistence_report_context(db, case_id, filters)
     memory_report = _build_memory_report_context(db, case_id, filters) if sections_enabled.get("memory", True) else []
+    lateral_report = _build_lateral_movement_report_context(db, case_id, filters) if sections_enabled.get("lateral_movement", True) else {"edges": [], "routine": 0}
     findings_by_id = {finding.id: finding for finding in findings}
     selected_finding_ids = list(report.selected_finding_ids or [])
     selected_key_event_ids = list(report.selected_key_event_ids or [])
@@ -447,6 +452,8 @@ def _build_case_report_preview(db: Session, case_id: str, report_id: str, report
         add("incident_timeline", "Incident Timeline", incident_markdown, empty=incident_markdown == "No incident timeline items were generated.", notes=_incident_timeline_report_notes(incident_timeline_report["warnings"]))
     if sections_enabled.get("process_chains", True):
         add("process_chains", "Process Chains", _render_process_chains(selected_chain_findings), empty=not selected_chain_findings)
+    if sections_enabled.get("lateral_movement", True):
+        add("lateral_movement", "Lateral Movement", _render_lateral_movement_section(lateral_report), empty=not lateral_report["edges"], notes=lateral_report.get("warnings") or [])
     if sections_enabled.get("command_history", True) and filters.get("include_command_history", True):
         add("command_history", "Suspicious Command History", _render_command_history_section(command_report["commands"], command_report["stories"]), empty=not command_report["commands"], notes=command_report["warnings"])
     if sections_enabled.get("defender", True) and filters.get("include_defender", True):
@@ -497,7 +504,7 @@ def _build_case_report_preview(db: Session, case_id: str, report_id: str, report
     if not any([len(findings), len(detections), len(marked_events), len(bookmarks), len(command_report["commands"]), len(defender_report["events"]), len(srum_report["events"])]):
         warnings.append("No data matched the selected report filters.")
     ai_context = (
-        _report_ai_context(case, context, report, selected_findings, timeline_entries, ioc_rows, coverage_notes, memory_report, detections, detections_total)
+        _report_ai_context(case, context, report, selected_findings, timeline_entries, ioc_rows, coverage_notes, memory_report, detections, detections_total, lateral_report["edges"])
         if collect_ai_context else None
     )
     return {
@@ -2531,6 +2538,80 @@ def _build_memory_report_context(db: Session, case_id: str, filters: dict[str, A
     )
 
 
+LATERAL_REPORT_ROWS = 60
+
+
+def _build_lateral_movement_report_context(db: Session, case_id: str, filters: dict[str, Any]) -> dict[str, Any]:
+    """Remote logons between machines for the report: the Lateral Movement
+    view without routine traffic (machine, anonymous and built-in accounts),
+    limited to the report's host filter when one is set."""
+    from app.services.lateral_movement import get_lateral_movement
+
+    try:
+        edges = get_lateral_movement(db, case_id).get("edges") or []
+    except Exception:  # noqa: BLE001 -- the report renders without this section
+        logger.warning("report: lateral movement unavailable", exc_info=True)
+        return {"edges": [], "routine": 0, "warnings": ["Lateral movement could not be read; this section is incomplete."]}
+    host = str(filters.get("host") or "").strip()
+    if host:
+        expanded_hosts = _expanded_report_hosts(db, case_id, host)
+        edges = [
+            edge for edge in edges
+            if any(_host_matches_report_filter(name, expanded_hosts) for name in [edge.get("target_host"), *(edge.get("source_hosts") or [])])
+        ]
+    routine = [edge for edge in edges if edge.get("routine_reason")]
+    return {"edges": [edge for edge in edges if not edge.get("routine_reason")], "routine": len(routine), "warnings": []}
+
+
+def _lateral_account(edge: dict[str, Any]) -> str:
+    user = str(edge.get("user") or "").strip()
+    domain = str(edge.get("domain") or "").strip()
+    return f"{domain}\\{user}" if domain and user else user or "-"
+
+
+def _render_lateral_movement_section(report: dict[str, Any]) -> str:
+    edges = report.get("edges") or []
+    if not edges:
+        return tr("No remote logons between machines were found in the authentication logs.")
+    parts = [tr(
+        "Remote logons between machines, from the authentication logs of every host, in the order they began. "
+        "A source is named as a case host only when its address was observed on that host. "
+        "These are authentications, not proof of intent: read them with the findings and the timeline."
+    )]
+    if report.get("routine"):
+        parts.append(tr("{count} routine connections (machine, anonymous and built-in accounts) are left out.", count=report["routine"]))
+    rows = [["First seen (UTC)", "Last seen (UTC)", "From", "To", "Account", "Method", "Result"]]
+    for edge in edges[:LATERAL_REPORT_ROWS]:
+        source = " / ".join(edge.get("source_hosts") or []) or tr("not a case host")
+        source = f"{source} ({edge.get('source_ip')})"
+        notes = []
+        if edge.get("workstation_mismatch"):
+            notes.append(tr("workstation name: {names}", names=", ".join(edge.get("source_workstations") or [])))
+        if edge.get("source_ambiguous"):
+            notes.append(tr("address seen on several hosts"))
+        if notes:
+            source += f" [{'; '.join(notes)}]"
+        result = []
+        if edge.get("successes"):
+            result.append(tr("{count} succeeded", count=edge["successes"]))
+        if edge.get("failures"):
+            result.append(tr("{count} failed", count=edge["failures"]))
+        last = _fmt_ts(edge.get("last_seen"))
+        rows.append([
+            _fmt_ts(edge.get("first_seen")) or "-",
+            last if last and last != _fmt_ts(edge.get("first_seen")) else "-",
+            source,
+            str(edge.get("target_host") or "-"),
+            _lateral_account(edge),
+            tr(str(edge.get("method") or "-")),
+            ", ".join(result) or "-",
+        ])
+    parts.append(_markdown_table(rows))
+    if len(edges) > LATERAL_REPORT_ROWS:
+        parts.append(tr("{shown} of {total} connections are shown; the Lateral Movement view lists them all.", shown=LATERAL_REPORT_ROWS, total=len(edges)))
+    return "\n\n".join(parts)
+
+
 def _clip(value: str, limit: int) -> str:
     return value if len(value) <= limit else f"{value[:limit - 1]}…"
 
@@ -3234,7 +3315,7 @@ def _host_coverage_notes(db: Session, case_id: str) -> list[str]:
         return []
 
 
-_AI_CONTEXT_LIMITS = {"findings": 25, "timeline": 80, "iocs": 60, "text": 1500}
+_AI_CONTEXT_LIMITS = {"findings": 25, "timeline": 80, "iocs": 60, "lateral_movement": 30, "text": 1500}
 
 
 def _report_ai_context(
@@ -3248,6 +3329,7 @@ def _report_ai_context(
     memory_report: list[dict[str, Any]],
     detections: list[DetectionResult],
     detections_total: int,
+    lateral_edges: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The curated material a narrative may be drafted from: what the analyst
     confirmed, bookmarked, marked and accepted -- never the raw index. Findings
@@ -3310,6 +3392,20 @@ def _report_ai_context(
                 ],
             }
             for entry in memory_report or []
+        ],
+        "lateral_movement": [
+            {
+                "time_utc": _fmt_ts(edge.get("first_seen")),
+                "last_utc": _fmt_ts(edge.get("last_seen")),
+                "from_hosts": edge.get("source_hosts") or [],
+                "from_ip": edge.get("source_ip"),
+                "to_host": edge.get("target_host"),
+                "account": _lateral_account(edge),
+                "method": edge.get("method"),
+                "succeeded": edge.get("successes"),
+                "failed": edge.get("failures"),
+            }
+            for edge in (lateral_edges or [])[: _AI_CONTEXT_LIMITS["lateral_movement"]]
         ],
         "automated_detections": {"total": detections_total, "top_rules": [{"rule": name, "matches": count} for name, count in rule_counts.most_common(8)]},
         "analyst_notes": {key: _narrative(value) for key, value in (report.analyst_notes or {}).items() if value},

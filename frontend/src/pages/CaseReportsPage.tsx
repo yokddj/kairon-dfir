@@ -15,6 +15,7 @@ const SECTION_LABELS: Record<string, string> = {
   timeline: "Timeline",
   incident_timeline: "Incident Timeline",
   process_chains: "Process Chains",
+  lateral_movement: "Lateral Movement",
   command_history: "Command History",
   defender: "Defender",
   motw: "MOTW / Downloaded Files",
