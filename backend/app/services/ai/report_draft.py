@@ -20,7 +20,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.services.ai.config import MAX_MAX_TOKENS, PROVIDERS, AIConfigError, load_config, resolve_provider
+from app.services.ai.config import MAX_MAX_TOKENS, PROVIDERS, AIConfigError, ResolvedProvider, load_config, resolve_provider
 from app.services.ai.providers import TRUNCATED_NOTICE, ProviderError, build_provider
 
 PROMPT_VERSION = "report-draft-v2"
@@ -95,21 +95,7 @@ def draft_report_narrative(db: Session, case_id: str, report_id: str) -> dict[st
     language = _LANGUAGE_NAMES.get(str(material.get("language") or "en"), "English")
     system = SYSTEM_PROMPT.replace("{language}", language)
     user = "Case material (JSON):\n" + json.dumps(material, ensure_ascii=False, default=str)
-    text = ""
-    truncated = False
-    for event in build_provider(credentials).stream_chat(system=system, messages=[{"role": "user", "content": user}], tools=None):
-        if event.type == "text":
-            text += event.text
-        elif event.type == "notice" and event.text == TRUNCATED_NOTICE:
-            truncated = True
-        elif event.type == "error":
-            raise ProviderError(event.text or "The AI provider returned an error.")
-    if truncated:
-        raise ProviderError(
-            f"The model reached its token limit ({credentials.max_tokens}) before finishing the draft"
-            + (" and wrote nothing: reasoning models can spend the whole limit thinking." if not text.strip() else ".")
-            + " Raise Max tokens in AI settings, or the model's context length in a local server."
-        )
+    text = complete(credentials, system=system, user=user, what="draft")
     draft = parse_draft(text)
     return {
         "draft": draft,
@@ -124,7 +110,27 @@ def draft_report_narrative(db: Session, case_id: str, report_id: str) -> dict[st
     }
 
 
-def parse_draft(text: str) -> dict[str, str]:
+def complete(credentials: ResolvedProvider, *, system: str, user: str, what: str) -> str:
+    """The model's whole reply to one request, or a ProviderError that says why not."""
+    text = ""
+    truncated = False
+    for event in build_provider(credentials).stream_chat(system=system, messages=[{"role": "user", "content": user}], tools=None):
+        if event.type == "text":
+            text += event.text
+        elif event.type == "notice" and event.text == TRUNCATED_NOTICE:
+            truncated = True
+        elif event.type == "error":
+            raise ProviderError(event.text or "The AI provider returned an error.")
+    if truncated:
+        raise ProviderError(
+            f"The model reached its token limit ({credentials.max_tokens}) before finishing the {what}"
+            + (" and wrote nothing: reasoning models can spend the whole limit thinking." if not text.strip() else ".")
+            + " Raise Max tokens in AI settings, or the model's context length in a local server."
+        )
+    return text
+
+
+def parse_json_reply(text: str, what: str = "draft") -> dict[str, Any]:
     """The JSON object in the reply; tolerant of code fences or stray prose."""
     candidate = text.strip()
     fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", candidate, re.DOTALL)
@@ -137,9 +143,14 @@ def parse_draft(text: str) -> dict[str, str]:
     try:
         data = json.loads(candidate)
     except json.JSONDecodeError as exc:
-        raise ProviderError("The AI reply was not the expected JSON draft; try again.") from exc
+        raise ProviderError(f"The AI reply was not the expected JSON {what}; try again.") from exc
     if not isinstance(data, dict):
-        raise ProviderError("The AI reply was not the expected JSON draft; try again.")
+        raise ProviderError(f"The AI reply was not the expected JSON {what}; try again.")
+    return data
+
+
+def parse_draft(text: str) -> dict[str, str]:
+    data = parse_json_reply(text)
     return {field: _as_text(data.get(field)) for field in DRAFT_FIELDS}
 
 
@@ -156,11 +167,26 @@ _NUMBER = re.compile(r"(?<![\w.:/\\-])\d{2,}(?:[.,]\d+)?(?![\w.:/\\-])")
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
 
 
+def unsupported_facts(text: str, corpus: str, numbers: set[str]) -> list[str]:
+    """IP addresses, times and numbers in ``text`` that the material does not contain."""
+    values = [ip for ip in sorted(set(_IPV4.findall(text))) if ip not in corpus]
+    values += [time for time in sorted({match.group(0) for match in _TIME.finditer(text)}) if time not in corpus]
+    values += [
+        number for number in sorted(set(_NUMBER.findall(text)))
+        if number not in numbers and number.replace(",", "") not in numbers
+    ]
+    return values
+
+
+def corpus_numbers(corpus: str) -> set[str]:
+    return set(_NUMBER.findall(corpus))
+
+
 def validate_draft(draft: dict[str, str], material: dict[str, Any]) -> dict[str, Any]:
     """Check citations and that concrete facts (IPs, times, numbers) appear in
     the material. Findings are leads for the analyst to fix, not errors."""
     corpus = json.dumps(material, ensure_ascii=False, default=str)
-    corpus_numbers = set(_NUMBER.findall(corpus))
+    numbers = corpus_numbers(corpus)
     finding_refs = {str(item.get("ref")) for item in material.get("findings") or []}
     # A time may cite a timeline entry or an event a finding lists as support.
     cited_items = [*(material.get("timeline") or []), *(event for finding in material.get("findings") or [] for event in finding.get("supporting_events") or [])]
@@ -176,16 +202,8 @@ def validate_draft(draft: dict[str, str], material: dict[str, Any]) -> dict[str,
                     issues.append({"field": field, "kind": "unknown_citation", "value": ref})
                 elif _TIME.fullmatch(ref) and ref not in event_times:
                     issues.append({"field": field, "kind": "unknown_citation", "value": ref})
-        uncited_text = _CITATION.sub(" ", text)
-        for ip in sorted(set(_IPV4.findall(uncited_text))):
-            if ip not in corpus:
-                issues.append({"field": field, "kind": "unsupported_fact", "value": ip})
-        for match in sorted({match.group(0) for match in _TIME.finditer(uncited_text)}):
-            if match not in corpus:
-                issues.append({"field": field, "kind": "unsupported_fact", "value": match})
-        for number in sorted(set(_NUMBER.findall(uncited_text))):
-            if number not in corpus_numbers and number.replace(",", "") not in corpus_numbers:
-                issues.append({"field": field, "kind": "unsupported_fact", "value": number})
+        for value in unsupported_facts(_CITATION.sub(" ", text), corpus, numbers):
+            issues.append({"field": field, "kind": "unsupported_fact", "value": value})
         if field in {"executive_summary", "attack_narrative"}:
             for sentence in _SENTENCE_BREAK.split(text):
                 stripped = sentence.strip()

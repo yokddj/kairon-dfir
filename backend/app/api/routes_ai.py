@@ -29,6 +29,7 @@ from app.services.ai.config import (
 )
 from app.services.ai.config import delete_provider as delete_provider_config
 from app.services.ai.crypto import CredentialCryptoError, open_sealed
+from app.services.ai.finding_suggestions import suggest_findings
 from app.services.ai.nl_query import translate_natural_language_query
 from app.services.ai.history import (
     append_turn,
@@ -216,6 +217,26 @@ def draft_case_report_with_ai(
         raise HTTPException(status_code=403, detail="Access denied to this case")
     try:
         return draft_report_narrative(db, case_id, report_id)
+    except ReportDraftUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=provider_error_text(exc)) from exc
+
+
+@router.post("/api/cases/{case_id}/ai/finding-suggestions")
+def suggest_case_findings_with_ai(
+    case_id: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+) -> dict:
+    """Findings the AI proposes from the case's open leads. Nothing is created:
+    the analyst accepts each suggestion through the normal finding creation."""
+    if db.get(Case, case_id) is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    if user is not None and get_effective_case_role(user, case_id, db) is None:
+        raise HTTPException(status_code=403, detail="Access denied to this case")
+    try:
+        return suggest_findings(db, case_id)
     except ReportDraftUnavailable as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ProviderError as exc:
