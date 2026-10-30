@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import { useParams } from "react-router-dom";
 
 import { api, type DocEntry } from "../api/client";
+import { isCodeBlock } from "../lib/markdownCode";
 
 const docSlugByHref: Record<string, string> = {
   "index.md": "index",
@@ -65,11 +66,11 @@ function MarkdownContent({ content, onNavigateDoc }: { content: string; onNaviga
         ol: ({ children }) => <ol className="mt-3 list-decimal space-y-2 pl-6 text-muted">{children}</ol>,
         li: ({ children }) => <li>{children}</li>,
         blockquote: ({ children }) => <blockquote className="mt-4 rounded-2xl border border-line bg-abyss/50 px-4 py-3 text-sm text-muted">{children}</blockquote>,
-        code: ({ inline, children }: any) =>
-          inline ? (
-            <code className="rounded bg-abyss/80 px-1.5 py-0.5 font-mono text-[0.9em] text-accent">{children}</code>
+        code: ({ className, children }) =>
+          isCodeBlock(className, children) ? (
+            <code className="block overflow-x-auto whitespace-pre rounded-2xl border border-line bg-abyss/80 p-4 font-mono text-sm text-ink">{children}</code>
           ) : (
-            <code className="block overflow-x-auto rounded-2xl border border-line bg-abyss/80 p-4 font-mono text-sm text-ink">{children}</code>
+            <code className="rounded bg-abyss/80 px-1.5 py-0.5 font-mono text-[0.9em] text-accent">{children}</code>
           ),
         pre: ({ children }) => <pre className="mt-4">{children}</pre>,
         table: ({ children }) => (

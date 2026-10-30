@@ -23,6 +23,7 @@ import Portal from "../Portal";
 import type { FindingPrefill } from "../../lib/findingPrefill";
 import { useActiveCase } from "../../context/ActiveCaseContext";
 import { useNotifications } from "../../context/NotificationsContext";
+import { isCodeBlock } from "../../lib/markdownCode";
 
 /**
  * Event ids the assistant actually cited, pulled from its own citation links
@@ -127,14 +128,21 @@ function AnswerMarkdown({ content }: { content: string }) {
         h1: ({ children }) => <p className="mb-1 font-semibold text-ink">{children}</p>,
         h2: ({ children }) => <p className="mb-1 font-semibold text-ink">{children}</p>,
         h3: ({ children }) => <p className="mb-1 font-semibold text-ink">{children}</p>,
-        code: ({ inline, children }: any) =>
-          inline ? (
-            <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-[0.85em] text-accent">{children}</code>
-          ) : (
-            <code className="my-2 block overflow-x-auto rounded-xl border border-line bg-black/40 p-2 font-mono text-[11px] text-ink">
+        code: ({ className, children }) =>
+          isCodeBlock(className, children) ? (
+            <code className="my-2 block overflow-x-auto whitespace-pre rounded-xl border border-line bg-black/40 p-2 font-mono text-[11px] text-ink">
               {children}
             </code>
+          ) : (
+            <code className="break-words rounded bg-black/40 px-1 py-0.5 font-mono text-[0.85em] text-accent">{children}</code>
           ),
+        table: ({ children }) => (
+          <div className="mb-2 max-w-full overflow-x-auto last:mb-0">
+            <table className="min-w-full border-collapse text-left text-[12px]">{children}</table>
+          </div>
+        ),
+        th: ({ children }) => <th className="border-b border-line px-2 py-1 font-semibold text-ink">{children}</th>,
+        td: ({ children }) => <td className="border-b border-line/40 px-2 py-1 align-top">{children}</td>,
         pre: ({ children }) => <>{children}</>,
         a: ({ href, children }) => (
           <a href={href} className="text-accent underline underline-offset-2" target="_blank" rel="noreferrer">
