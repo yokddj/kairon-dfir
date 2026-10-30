@@ -4009,6 +4009,35 @@ export type AiReportDraft = {
   provenance: AiReportProvenance;
 };
 
+export type AiFindingSuggestionLead = {
+  ref: string;
+  kind: "detection" | "command" | "antivirus" | "memory_process" | "lateral";
+  time_utc: string | null;
+  host: string | null;
+  label: string;
+};
+
+export type AiFindingSuggestion = {
+  title: string;
+  severity: string;
+  confidence: string | null;
+  description: string;
+  mitre: string[];
+  phase: string | null;
+  leads: AiFindingSuggestionLead[];
+  issues: { kind: "unknown_citation" | "unsupported_fact"; value: string }[];
+  /** Ready to send to createFinding; links come from the leads. */
+  finding: Partial<Finding>;
+};
+
+export type AiFindingSuggestions = {
+  suggestions: AiFindingSuggestion[];
+  dropped: number;
+  lead_counts: Record<string, number>;
+  unavailable_sources: string[];
+  provenance: AiReportProvenance;
+};
+
 export type CaseReportPreviewSection = {
   id: string;
   title: string;
@@ -8200,6 +8229,8 @@ export const api = {
     request<CaseReport>(`/cases/${caseId}/reports/${reportId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   draftCaseReportWithAi: (caseId: string, reportId: string) =>
     request<AiReportDraft>(`/cases/${caseId}/reports/${reportId}/ai-draft`, { method: "POST" }),
+  suggestFindingsWithAi: (caseId: string) =>
+    request<AiFindingSuggestions>(`/cases/${caseId}/ai/finding-suggestions`, { method: "POST" }),
   getCaseReportPreview: (caseId: string, reportId: string) => request<CaseReportPreview>(`/cases/${caseId}/reports/${reportId}/preview`),
   exportCaseReport: async (caseId: string, reportId: string, format: "markdown" | "pdf" = "markdown") => {
     const path = format === "markdown" ? `/reports/${reportId}/download?format=markdown` : `/cases/${caseId}/reports/${reportId}/export?format=${format}`;

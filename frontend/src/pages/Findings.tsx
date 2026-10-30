@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
+import AiFindingSuggestions from "../components/AiFindingSuggestions";
 import FindingsWorkspace from "../components/FindingsWorkspace";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { HostFilter } from "../components/HostFilter";
@@ -32,6 +33,7 @@ export default function Findings() {
           </label>
         </div>
       </section>
+      {selectedCaseId ? <AiFindingSuggestions caseId={selectedCaseId} /> : null}
       {selectedCaseId ? (
         <FindingsWorkspace caseId={selectedCaseId} evidenceId={selectedEvidenceId} host={selectedHost} hostId={hostId || undefined} />
       ) : (

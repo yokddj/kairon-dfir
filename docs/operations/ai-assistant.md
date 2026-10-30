@@ -43,6 +43,21 @@ Two further features reuse the same provider configuration:
   addresses, times and numbers absent from the material are listed. Nothing is
   saved until the analyst saves the notes; the report appendix then records the
   provider, model and time of the draft.
+- **Finding suggestions** (*Suggest findings with AI* on the Findings page)
+  proposes findings from the case's open leads: rule detections no finding
+  covers yet (grouped by rule and host), the riskiest suspicious commands,
+  antivirus detections still in memory, memory processes the analyst marked in
+  Find Evil, and remote logons between machines that are not routine. Each lead
+  goes out with a reference (`L1`, `L2`...) together with the titles of the
+  existing findings, so the model does not repeat them. A suggestion groups the
+  leads of one activity, with severity, confidence and MITRE techniques; its
+  incident phase follows from the techniques. A suggestion that cites no
+  existing lead is left out, and citations to unknown leads and IP addresses,
+  times or numbers absent from its leads are shown next to it. Nothing is
+  created until the analyst clicks *Create finding*: the finding is created
+  through the normal finding API, tagged `ai-suggested`, and its events,
+  detections, hosts, addresses, accounts and time range come from the cited
+  leads, never from the model's text.
 - **Conversations** are stored per case, so a thread can be resumed or deleted.
 
 **Its output is not evidence.** A model can misread or overstate what a lookup
@@ -138,6 +153,7 @@ evidence.
 | POST | `/api/cases/{case_id}/ai/chat` | users with access to the case |
 | POST | `/api/cases/{case_id}/ai/nl-search` | users with access to the case |
 | POST | `/api/cases/{case_id}/reports/{report_id}/ai-draft` | users with access to the case |
+| POST | `/api/cases/{case_id}/ai/finding-suggestions` | users with access to the case |
 | GET | `/api/cases/{case_id}/ai/conversations` | users with access to the case |
 | GET | `/api/cases/{case_id}/ai/conversations/{conversation_id}` | users with access to the case |
 | DELETE | `/api/cases/{case_id}/ai/conversations/{conversation_id}` | users with access to the case |
@@ -158,6 +174,7 @@ frame announces a tool lookup as it starts.
 | `backend/app/services/ai/tools.py` | The read-only lookup tools and their schemas. |
 | `backend/app/services/ai/nl_query.py` | Natural-language to Search-query translation. |
 | `backend/app/services/ai/report_draft.py` | Report narrative drafting and its validation. |
+| `backend/app/services/ai/finding_suggestions.py` | Open leads of a case, finding suggestions and their validation. |
 | `backend/app/services/ai/history.py` | Persisted conversations. |
 | `backend/app/api/routes_ai.py` | HTTP surface. |
 | `frontend/src/pages/AiSettingsPage.tsx` | Administrator configuration. |
