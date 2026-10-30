@@ -11,6 +11,7 @@ from app.api.routes_rules import cancel_rule_import, get_rule_import, import_rul
 from app.models.rule_import_run import RuleImportRun, RuleImportRunStatus
 from app.core.database import Base
 from app.models.case import Case
+from app.rules_engine.sigma import ENGINE_COMPATIBILITY_VERSION
 from app.models.rule import Rule, RuleEngine
 from app.rules_engine.sigma import compile_sigma_rule
 
@@ -192,7 +193,7 @@ detection:
     filtered = list_rules(case_id=CASE_ID, scope="all", import_run_id=result.import_run_id, page=1, page_size=10, db=db)
     metadata = filtered.items[0].metadata_json
     assert metadata["compile_source"] == "internal"
-    assert metadata["compile_version"] == "rules_v3"
+    assert metadata["compile_version"] == ENGINE_COMPATIBILITY_VERSION
     assert metadata["rule_hash"] == filtered.items[0].content_hash
     assert metadata["engine_compatibility"]["executable_by_current_engine"] is True
 
@@ -354,7 +355,7 @@ detection:
 
     assert second.updated_count == 1
     refreshed = list_rules(case_id=CASE_ID, scope="all", import_run_id=second.import_run_id, page=1, page_size=10, db=db).items[0]
-    assert refreshed.metadata_json["compile_version"] == "rules_v3"
+    assert refreshed.metadata_json["compile_version"] == ENGINE_COMPATIBILITY_VERSION
 
 
 def test_cancel_rule_import_marks_queued_run_cancelled() -> None:
