@@ -57,6 +57,9 @@ _SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0, "i
 _CONFIDENCE = {"low", "medium", "high"}
 _ISO_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
 _LEAD_REF = re.compile(r"\bL\d+\b")
+# Models cite runs of leads as [L25-L27] or [L25–27].
+_LEAD_RANGE = re.compile(r"\bL(\d+)\s*[-\u2013]\s*L?(\d+)\b")
+MAX_RANGE = 50
 
 SYSTEM_PROMPT = """You are a senior DFIR analyst triaging a case. You are given its OPEN LEADS as JSON -- automated rule detections, suspicious commands, antivirus detections found in memory, memory processes the analyst marked, and remote logons between machines -- each with a reference (L1, L2...), and the titles of the findings the analyst already has.
 
@@ -161,32 +164,43 @@ def _detection_leads(db: Session, case_id: str, covered: set[str]) -> list[dict[
 
 
 def _command_leads(db: Session, case_id: str, covered: set[str]) -> list[dict[str, Any]]:
+    """The riskiest suspicious commands, one lead per command and host: a
+    script run line by line repeats the same command many times."""
     from app.services.command_history import get_command_history
 
     result = get_command_history(case_id, {"only_suspicious": True, "page": 1, "page_size": 500}, db=db)
-    items = [item for item in result.get("items") or [] if str(item.get("source_event_id") or "") not in covered]
-    items.sort(key=lambda item: -int(item.get("risk_score") or 0))
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for item in result.get("items") or []:
+        if str(item.get("source_event_id") or "") in covered:
+            continue
+        key = (str(item.get("host") or ""), re.sub(r"\s+", " ", str(item.get("command") or "")).strip().lower())
+        groups.setdefault(key, []).append(item)
+    ranked = sorted(groups.values(), key=lambda members: -max(int(item.get("risk_score") or 0) for item in members))
     leads = []
-    for item in items[: MAX_LEADS["command"]]:
-        from_memory = str(item.get("source_type") or "") == "memory"
-        event_id = None if from_memory else (str(item.get("source_event_id") or "") or None)
+    for members in ranked[: MAX_LEADS["command"]]:
+        item = max(members, key=lambda member: int(member.get("risk_score") or 0))
+        times = sorted(time for time in (_iso(member.get("timestamp")) for member in members) if time)
+        # A command recovered from memory has no document to link to.
+        event_ids = [str(member["source_event_id"]) for member in members if member.get("source_event_id") and str(member.get("source_type") or "") != "memory"]
         leads.append(_lead(
             "command",
-            time=item.get("timestamp"),
+            time=times[0] if times else None,
+            last=times[-1] if times else None,
             host=item.get("host"),
             label=f"Command (risk {int(item.get('risk_score') or 0)}): {_clip(item.get('command'), 120)}",
             details={
                 "user": item.get("user"),
                 "command": _clip(item.get("command")),
+                "runs": len(members) if len(members) > 1 else None,
                 "shell": item.get("shell_family"),
                 "risk": item.get("risk_score"),
                 "reasons": (item.get("risk_reasons") or [])[:4],
                 "source": item.get("source_type"),
             },
-            event_ids=[event_id] if event_id else [],
-            evidence_ids=[item["evidence_id"]] if item.get("evidence_id") else [],
+            event_ids=event_ids[:MAX_EVENT_IDS],
+            evidence_ids=_dedupe([member.get("evidence_id") for member in members]),
             hosts=[item["host"]] if item.get("host") else [],
-            users=[item["user"]] if item.get("user") else [],
+            users=_dedupe([member.get("user") for member in members]),
         ))
     return leads
 
@@ -360,6 +374,17 @@ def _dedupe(values: list[Any], limit: int | None = None) -> list[str]:
     return output[:limit] if limit else output
 
 
+def _lead_refs(text: str) -> list[str]:
+    """Lead references in ``text``, with ranges expanded."""
+    refs: list[str] = []
+    for match in _LEAD_RANGE.finditer(text):
+        first, last = int(match.group(1)), int(match.group(2))
+        if first <= last <= first + MAX_RANGE:
+            refs.extend(f"L{number}" for number in range(first, last + 1))
+    refs.extend(_LEAD_REF.findall(_LEAD_RANGE.sub(" ", text)))
+    return refs
+
+
 def build_suggestions(raw: Any, leads: list[dict[str, Any]], provenance: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
     """Checked suggestions with their links resolved from the cited leads, and
     how many the model proposed without a valid lead (dropped)."""
@@ -372,9 +397,8 @@ def build_suggestions(raw: Any, leads: list[dict[str, Any]], provenance: dict[st
             continue
         title = _clip(item.get("title"), 200)
         description = str(item.get("description") or "").strip()[:4000]
-        listed = [str(ref).strip().strip("[]") for ref in (item.get("leads") if isinstance(item.get("leads"), list) else [])]
-        cited = _LEAD_REF.findall(description)
-        refs = _dedupe([*listed, *cited])
+        listed = [ref for value in (item.get("leads") if isinstance(item.get("leads"), list) else []) for ref in _lead_refs(str(value))]
+        refs = _dedupe([*listed, *_lead_refs(description)])
         valid = [ref for ref in refs if ref in by_ref]
         if not title or not valid:
             dropped += 1
@@ -382,7 +406,7 @@ def build_suggestions(raw: Any, leads: list[dict[str, Any]], provenance: dict[st
         used = [by_ref[ref] for ref in valid]
         issues = [{"kind": "unknown_citation", "value": ref} for ref in refs if ref not in by_ref]
         corpus = json.dumps([_model_view(lead) for lead in used], ensure_ascii=False, default=str)
-        issues += [{"kind": "unsupported_fact", "value": value} for value in unsupported_facts(_LEAD_REF.sub(" ", f"{title} {description}"), corpus, corpus_numbers(corpus))]
+        issues += [{"kind": "unsupported_fact", "value": value} for value in unsupported_facts(_LEAD_REF.sub(" ", _LEAD_RANGE.sub(" ", f"{title} {description}")), corpus, corpus_numbers(corpus))]
         severity = str(item.get("severity") or "").strip().lower()
         severity = severity if severity in FindingSeverity.__members__ else "medium"
         confidence = str(item.get("confidence") or "").strip().lower()
