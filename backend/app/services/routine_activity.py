@@ -13,7 +13,8 @@ An event missing the path or the parent is never routine: it cannot be shown
 to match. So a svchost.exe started from a user folder, or by cmd.exe, stays
 visible -- that is exactly what an analyst looks for. Tools an attacker also
 uses (wevtutil, schtasks, rundll32, powershell, cmd...) are never in the
-table, whatever their parent. Linux entries cover the systemd-managed daemons
+table, whatever their parent; nor is conhost.exe, which any program can start
+and which runs commands itself with --headless. Linux entries cover the systemd-managed daemons
 that start at every boot. Memory process listings carry no parent name, so
 nothing from a memory image is ever treated as routine.
 """
@@ -21,8 +22,6 @@ nothing from a memory image is ever treated as routine.
 from __future__ import annotations
 
 from typing import Any
-
-ANY_PARENT = "*"
 
 _SYSTEM32 = ("*\\windows\\system32\\{name}",)
 _SYSTEM32_AND_WOW64 = ("*\\windows\\system32\\{name}", "*\\windows\\syswow64\\{name}")
@@ -64,8 +63,6 @@ ROUTINE_PROCESSES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "sppextcomobj.exe": (_SYSTEM32, ("svchost.exe",)),
     "searchprotocolhost.exe": (_SYSTEM32, ("searchindexer.exe",)),
     "searchfilterhost.exe": (_SYSTEM32, ("searchindexer.exe",)),
-    # The console host of any console program: it carries nothing of its own.
-    "conhost.exe": (_SYSTEM32, (ANY_PARENT,)),
     # .NET native image generation after updates
     "ngentask.exe": (_DOTNET, ("svchost.exe", "taskhostw.exe")),
     "ngen.exe": (_DOTNET, ("ngentask.exe", "ngen.exe")),
@@ -96,19 +93,17 @@ def routine_process_clause() -> dict[str, Any]:
     """An OpenSearch clause matching routine process starts (for must_not)."""
     should = []
     for name, (paths, parents) in ROUTINE_PROCESSES.items():
-        conditions: list[dict[str, Any]] = [
+        should.append({"bool": {"filter": [
             {"term": {"process.name": {"value": name, "case_insensitive": True}}},
             {"bool": {"should": [
                 {"wildcard": {field: {"value": _wildcard_value(pattern), "case_insensitive": True}}}
                 for pattern in _patterns(name, paths) for field in _PATH_FIELDS
             ], "minimum_should_match": 1}},
-        ]
-        if ANY_PARENT not in parents:
-            conditions.append({"bool": {"should": [
+            {"bool": {"should": [
                 {"term": {field: {"value": parent, "case_insensitive": True}}}
                 for parent in parents for field in _PARENT_FIELDS
-            ], "minimum_should_match": 1}})
-        should.append({"bool": {"filter": conditions}})
+            ], "minimum_should_match": 1}},
+        ]}})
     return {"bool": {"should": should, "minimum_should_match": 1}}
 
 
@@ -126,4 +121,4 @@ def is_routine_process(name: str | None, path: str | None, parent: str | None) -
     paths, parents = entry
     if not any(_matches(pattern, str(path)) for pattern in _patterns(str(name).lower(), paths)):
         return False
-    return ANY_PARENT in parents or str(parent or "").strip().lower() in parents
+    return str(parent or "").strip().lower() in parents

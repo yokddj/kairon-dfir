@@ -2763,7 +2763,7 @@ export default function Search() {
                 </div>
                 <label
                   className="flex items-center gap-2 rounded-full border border-line px-3 py-1.5 text-xs text-muted"
-                  title="Hides process starts of core system processes (svchost.exe, conhost.exe, systemd daemons...) only when the image path and the parent are the expected ones. A masquerading process stays visible."
+                  title="Hides process starts of core system processes (svchost.exe, services.exe, systemd daemons...) only when the image path and the parent are the expected ones. A masquerading process stays visible."
                 >
                   <input
                     type="checkbox"
