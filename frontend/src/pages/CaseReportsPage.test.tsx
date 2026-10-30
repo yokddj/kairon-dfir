@@ -16,7 +16,12 @@ const listFindingsMock = vi.fn();
 const listTimelineKeyEventsMock = vi.fn();
 const exportCaseReportMock = vi.fn();
 const getAiStatusMock = vi.fn();
-const draftCaseReportWithAiMock = vi.fn();
+const startCaseReportAiDraftMock = vi.fn();
+const getCaseReportAiDraftMock = vi.fn();
+
+function completedJob(result: unknown) {
+  return { job: { id: "job-1", kind: "ai_report_draft", status: "completed", created_at: null, started_at: null, finished_at: "2026-05-18T08:00:00Z", error: null, result } };
+}
 
 vi.mock("../api/client", () => ({
   api: {
@@ -30,7 +35,8 @@ vi.mock("../api/client", () => ({
     listTimelineKeyEvents: (...args: unknown[]) => listTimelineKeyEventsMock(...args),
     exportCaseReport: (...args: unknown[]) => exportCaseReportMock(...args),
     getAiStatus: (...args: unknown[]) => getAiStatusMock(...args),
-    draftCaseReportWithAi: (...args: unknown[]) => draftCaseReportWithAiMock(...args),
+    startCaseReportAiDraft: (...args: unknown[]) => startCaseReportAiDraftMock(...args),
+    getCaseReportAiDraft: (...args: unknown[]) => getCaseReportAiDraftMock(...args),
   },
 }));
 
@@ -150,6 +156,7 @@ describe("CaseReportsPage", () => {
       { id: "bookmark-1", title: "Payload executed", importance: "high", category: "execution", include_in_report: true },
     ]);
     getAiStatusMock.mockResolvedValue({ enabled: false, provider: null, model: null, hosting: null });
+    getCaseReportAiDraftMock.mockResolvedValue({ job: null });
     exportCaseReportMock.mockResolvedValue({ blob: new Blob(["# Report"], { type: "text/markdown" }), filename: "case-report-case-1.md" });
   });
 
@@ -213,18 +220,18 @@ describe("CaseReportsPage", () => {
   it("drafts with AI after consent, shows validation and saves with provenance", async () => {
     getAiStatusMock.mockResolvedValue({ enabled: true, provider: "openai_compatible", label: "OpenAI", model: "gpt-x", hosting: "custom" });
     const provenance = { provider: "OpenAI", model: "gpt-x", hosting: "cloud", generated_at: "2026-05-18T08:00:00Z", prompt_version: "report-draft-v1" };
-    draftCaseReportWithAiMock.mockResolvedValue({
+    startCaseReportAiDraftMock.mockResolvedValue(completedJob({
       draft: { executive_summary: "Payload fetched [F1].", attack_narrative: "Phishing then PowerShell [F1].", recommendations: "- Isolate the host", limitations: "- No memory image" },
       validation: { ok: false, issues: [{ field: "attack_narrative", kind: "unsupported_fact", value: "198.51.100.9" }] },
       provenance,
-    });
+    }));
     updateCaseReportMock.mockClear();
     renderPage();
     await userEvent.click(await screen.findByRole("button", { name: /draft with ai/i }));
     const consent = screen.getByRole("dialog", { name: /draft with ai/i });
     expect(consent).toHaveTextContent("OpenAI");
     expect(consent).toHaveTextContent(/leaves this deployment/i);
-    expect(draftCaseReportWithAiMock).not.toHaveBeenCalled();
+    expect(startCaseReportAiDraftMock).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: /send and draft/i }));
 
     await waitFor(() => expect(screen.getByLabelText(/Attack narrative/i)).toHaveValue("Phishing then PowerShell [F1]."));
@@ -246,11 +253,11 @@ describe("CaseReportsPage", () => {
 
   it("discarding an AI draft restores the previous notes", async () => {
     getAiStatusMock.mockResolvedValue({ enabled: true, provider: "ollama", label: "Ollama", model: "llama", hosting: "local" });
-    draftCaseReportWithAiMock.mockResolvedValue({
+    startCaseReportAiDraftMock.mockResolvedValue(completedJob({
       draft: { executive_summary: "AI text [F1].", attack_narrative: "", recommendations: "", limitations: "" },
       validation: { ok: true, issues: [] },
       provenance: { provider: "Ollama", model: "llama", hosting: "local", generated_at: "", prompt_version: "v1" },
-    });
+    }));
     renderPage();
     const note = await screen.findByLabelText(/Executive summary note/i);
     await userEvent.type(note, "Mine");
@@ -260,6 +267,28 @@ describe("CaseReportsPage", () => {
     await waitFor(() => expect(note).toHaveValue("AI text [F1]."));
     await userEvent.click(screen.getByRole("button", { name: /discard ai draft/i }));
     expect(note).toHaveValue("Mine");
+  });
+
+  it("offers the last finished AI draft after a reload, without applying it on its own", async () => {
+    getAiStatusMock.mockResolvedValue({ enabled: true, provider: "ollama", label: "Ollama", model: "llama", hosting: "local" });
+    getCaseReportAiDraftMock.mockResolvedValue(completedJob({
+      draft: { executive_summary: "Earlier AI text [F1].", attack_narrative: "", recommendations: "", limitations: "" },
+      validation: { ok: true, issues: [] },
+      provenance: { provider: "Ollama", model: "llama", hosting: "local", generated_at: "2026-05-18T07:59:00Z", prompt_version: "v3" },
+    }));
+    renderPage();
+    const note = await screen.findByLabelText(/Executive summary note/i);
+    await userEvent.click(await screen.findByTestId("load-ai-draft"));
+    expect(note).toHaveValue("Earlier AI text [F1].");
+  });
+
+  it("shows a failed AI draft job", async () => {
+    getAiStatusMock.mockResolvedValue({ enabled: true, provider: "ollama", label: "Ollama", model: "llama", hosting: "local" });
+    startCaseReportAiDraftMock.mockResolvedValue({ job: { ...completedJob(null).job, status: "failed", error: "The model reached its token limit." } });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /draft with ai/i }));
+    await userEvent.click(screen.getByRole("button", { name: /send and draft/i }));
+    expect(await screen.findByText(/token limit/i)).toBeInTheDocument();
   });
 
   it("updates report filters and exposes advanced report filters", async () => {

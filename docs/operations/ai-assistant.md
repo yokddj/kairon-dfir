@@ -21,6 +21,9 @@ tools** against the same data the analyst can already open in Kairon.
 | `search_command_history` | Shell and PowerShell command history. |
 | `get_process_tree` | The process tree around a process. |
 | `list_persistence`, `list_downloads`, `list_email_artifacts`, `search_memory_artifacts` | Artifact-specific views. |
+| `list_lateral_movement` | Remote logons between hosts (the Lateral Movement view), routine accounts hidden unless asked. |
+| `get_memory_triage` | Per memory image: antivirus detections still in memory and the processes the analyst marked. |
+| `get_host_coverage` | Per host: telemetry present and missing, when process records begin, event log clears. |
 | `list_findings`, `list_detections` | Findings and detection hits. |
 
 The tools cannot write: the assistant cannot create findings, edit notes, change
@@ -58,6 +61,14 @@ Two further features reuse the same provider configuration:
   through the normal finding API, tagged `ai-suggested`, and its events,
   detections, hosts, addresses, accounts and time range come from the cited
   leads, never from the model's text.
+- Drafting and suggestions run as **background jobs** in the analysis worker
+  (`services/ai/jobs.py`, stored as `case_analysis_jobs` rows). The page polls
+  the job, so it can be closed while a slow local model works; the last result
+  stays available (per report for drafts, per case for suggestions) until the
+  next run. Only one job per target runs at a time. A job the worker never
+  finished (restart, the computer slept) is reported as failed after 31 minutes.
+  The same worker processes evidence: a job waits while an evidence is being
+  ingested, and the page says it is queued.
 - **Conversations** are stored per case, so a thread can be resumed or deleted.
 
 **Its output is not evidence.** A model can misread or overstate what a lookup
@@ -152,8 +163,10 @@ evidence.
 | GET | `/api/ai/status` | any authenticated user |
 | POST | `/api/cases/{case_id}/ai/chat` | users with access to the case |
 | POST | `/api/cases/{case_id}/ai/nl-search` | users with access to the case |
-| POST | `/api/cases/{case_id}/reports/{report_id}/ai-draft` | users with access to the case |
-| POST | `/api/cases/{case_id}/ai/finding-suggestions` | users with access to the case |
+| POST | `/api/cases/{case_id}/reports/{report_id}/ai-draft` | users with access to the case (starts a job, 202) |
+| GET | `/api/cases/{case_id}/reports/{report_id}/ai-draft` | users with access to the case (latest job and draft) |
+| POST | `/api/cases/{case_id}/ai/finding-suggestions` | users with access to the case (starts a job, 202) |
+| GET | `/api/cases/{case_id}/ai/finding-suggestions` | users with access to the case (latest job and suggestions) |
 | GET | `/api/cases/{case_id}/ai/conversations` | users with access to the case |
 | GET | `/api/cases/{case_id}/ai/conversations/{conversation_id}` | users with access to the case |
 | DELETE | `/api/cases/{case_id}/ai/conversations/{conversation_id}` | users with access to the case |

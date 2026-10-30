@@ -116,6 +116,7 @@ Sections with no matching data (Microsoft Defender or SRUM in a Linux case, an e
 - process chains
 - suspicious command history: an overview table and one detail block per command; one execution seen by several sources is reported once with all of them
 - Defender, email, MOTW, SRUM, startup and persistence where the case has them
+- Process Chains: for each finding ticked under *Process chains* (any finding with events or process nodes), an execution tree -- the process the finding points to (resolved like Execution Stories, from its process GUID or its events), up to three ancestors and its descendants up to three levels, 24 processes at most. The PDF draws it (the finding's process highlighted, high-risk processes in red, a parent with no record of its own dashed as "not in the evidence"); Markdown carries it as an indented text tree. A finding whose events are not process starts says so instead
 - Lateral Movement: remote logons between machines (the Lateral Movement view without machine, anonymous and built-in accounts), with source, target, account, method, successes and failures; limited to the report's host filter. Left out of the export when there are none
 - Memory Analysis (only when the case has memory images): per image the system and capture time, the analyses run with their item counts, and the Find Evil triage with the processes the analyst marked suspicious or important
 - deduplicated IOCs

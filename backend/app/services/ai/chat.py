@@ -49,7 +49,10 @@ dedicated tool over a keyword guess: list_downloads for downloads (Mark of the \
 Web records the source URL), list_persistence for autoruns and services, \
 search_command_history for what was actually run (PowerShell, cmd, scheduled \
 tasks, shell history) rather than search_events, which is generic and does \
-not de-duplicate or risk-score commands. Guessing at file extensions or folder \
+not de-duplicate or risk-score commands; list_lateral_movement for remote \
+logons between hosts and where an account logged on from; get_memory_triage \
+for antivirus detections recovered from memory images; get_host_coverage \
+before saying something did not happen on a host. Guessing at file extensions or folder \
 paths is a last resort, not a first move.
 - list_detections and list_findings answer different questions: a detection is \
 a raw rule match nobody has reviewed yet; a finding is what an analyst (or the \
@@ -293,6 +296,9 @@ def _describe_lookup(name: str, args: dict) -> str:
         "list_email_artifacts": "Looking for email and webmail activity",
         "search_memory_artifacts": "Searching memory forensics artifacts",
         "get_timeline": "Reading the timeline",
+        "list_lateral_movement": "Checking remote logons between hosts",
+        "get_memory_triage": "Reading antivirus detections and marked processes in memory",
+        "get_host_coverage": "Checking what each host's evidence covers",
     }
     label = labels.get(name, f"Running {name}")
     return f"{label}: {detail}" if detail else label
