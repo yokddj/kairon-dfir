@@ -113,6 +113,15 @@ _SPANISH: dict[str, str] = {
     "Process chain": "Cadena de procesos", "Script": "Script", "Family": "Familia", "Launcher": "Lanzador",
     "Seen in": "Visto en", "Why it is suspicious": "Por qué es sospechoso", "Analyst marking": "Marca del analista",
     "Analyst notes": "Notas del analista",
+    # Execution diagrams
+    "Execution tree: the process this finding points to, what started it and what it started.":
+        "Árbol de ejecución: el proceso al que apunta este hallazgo, qué lo inició y qué inició.",
+    "The tree is cut at {count} processes or three levels; Execution Stories shows the rest.":
+        "El árbol se corta en {count} procesos o tres niveles; Execution Stories muestra el resto.",
+    "Some parent/child links are inferred (PID and time), not recorded identifiers.":
+        "Algunos enlaces padre/hijo se deducen (PID y hora), no son identificadores registrados.",
+    "No process-creation record was found for this finding's events, so no execution tree is drawn.":
+        "No se encontró ningún registro de creación de proceso para los eventos de este hallazgo, así que no se dibuja árbol de ejecución.",
     # Lateral movement
     "No remote logons between machines were found in the authentication logs.":
         "No se encontraron inicios de sesión remotos entre equipos en los registros de autenticación.",

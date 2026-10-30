@@ -294,7 +294,8 @@ export default function CaseReportsPage() {
   const selectedFindingIds = new Set(currentReport?.selected_finding_ids ?? []);
   const selectedKeyEventIds = new Set(currentReport?.selected_key_event_ids ?? []);
   const chainCandidates = useMemo(
-    () => (findingsQuery.data ?? []).filter((finding) => (finding.related_process_node_ids?.length ?? 0) > 0),
+    // Any finding with process nodes or events: the report resolves the process behind it and draws its tree.
+    () => (findingsQuery.data ?? []).filter((finding) => (finding.related_process_node_ids?.length ?? 0) > 0 || (finding.event_ids?.length ?? 0) > 0),
     [findingsQuery.data],
   );
   const previewCounts = previewQuery.data?.counts ?? previewQuery.data?.stats ?? {};
@@ -772,6 +773,7 @@ export default function CaseReportsPage() {
 
                     <div>
                       <p className="text-sm font-semibold">Process chains</p>
+                      <p className="mt-1 text-xs text-muted">Each one gets an execution tree in the report: what started the process behind the finding and what it started.</p>
                       <div className="mt-2 max-h-44 space-y-2 overflow-y-auto pr-1">
                         {chainCandidates.map((finding) => (
                           <label key={finding.id} className="flex items-start gap-3 rounded-2xl border border-line bg-abyss/60 px-3 py-2 text-sm text-muted">

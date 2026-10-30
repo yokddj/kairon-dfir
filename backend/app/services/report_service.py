@@ -328,6 +328,7 @@ def _build_case_report_preview(db: Session, case_id: str, report_id: str, report
     bookmarks_by_id = {bookmark.id: bookmark for bookmark in bookmarks}
     selected_bookmarks = [bookmarks_by_id[bookmark_id] for bookmark_id in selected_key_event_ids if bookmark_id in bookmarks_by_id] if filters.get("include_timeline_events", True) else []
     selected_chain_findings = [findings_by_id[finding_id] for finding_id in selected_process_chain_ids if finding_id in findings_by_id]
+    execution_trees = _execution_trees(db, case, selected_chain_findings) if sections_enabled.get("process_chains", True) else {}
     if not selected_findings and findings:
         selected_findings = [_auto_select_findings(findings)[0]] if _auto_select_findings(findings) else []
     if not selected_bookmarks and bookmarks:
@@ -419,10 +420,13 @@ def _build_case_report_preview(db: Session, case_id: str, report_id: str, report
     }
     filters_applied = _report_filters_applied(filters, report.time_range or {})
 
-    def add(section_id: str, title: str, markdown: str, *, empty: bool = False, notes: list[str] | None = None) -> None:
+    def add(section_id: str, title: str, markdown: str, *, empty: bool = False, notes: list[str] | None = None, diagrams: dict[str, Any] | None = None) -> None:
         # An empty section's body already says there is nothing to show, so it
         # carries no warning: repeating "no data" in a warning box is noise.
-        sections.append({"id": section_id, "title": tr(title), "markdown": markdown, "warnings": [] if empty else list(notes or []), "empty": empty})
+        section = {"id": section_id, "title": tr(title), "markdown": markdown, "warnings": [] if empty else list(notes or []), "empty": empty}
+        if diagrams:
+            section["diagrams"] = diagrams
+        sections.append(section)
 
     if sections_enabled.get("executive_summary", True):
         add("executive_summary", "Executive Summary", _render_executive_summary(case, context, selected_findings, report, pending_review=pending_review))
@@ -451,7 +455,8 @@ def _build_case_report_preview(db: Session, case_id: str, report_id: str, report
         incident_markdown = _render_incident_timeline_section(case_id, incident_timeline_report["items"])
         add("incident_timeline", "Incident Timeline", incident_markdown, empty=incident_markdown == "No incident timeline items were generated.", notes=_incident_timeline_report_notes(incident_timeline_report["warnings"]))
     if sections_enabled.get("process_chains", True):
-        add("process_chains", "Process Chains", _render_process_chains(selected_chain_findings), empty=not selected_chain_findings)
+        add("process_chains", "Process Chains", _render_process_chains(selected_chain_findings, execution_trees), empty=not selected_chain_findings,
+            diagrams={finding_id: tree for finding_id, tree in execution_trees.items() if tree})
     if sections_enabled.get("lateral_movement", True):
         add("lateral_movement", "Lateral Movement", _render_lateral_movement_section(lateral_report), empty=not lateral_report["edges"], notes=lateral_report.get("warnings") or [])
     if sections_enabled.get("command_history", True) and filters.get("include_command_history", True):
@@ -824,7 +829,7 @@ def _render_pdf_document(report: CaseReport, case: Case, context: dict[str, Any]
         if section.get("warnings"):
             story.append(_build_warning_table([str(item) for item in section["warnings"]], styles, palette))
             story.append(Spacer(1, 6))
-        _append_markdown_to_story(story, str(section.get("markdown") or ""), styles, palette)
+        _append_markdown_to_story(story, str(section.get("markdown") or ""), styles, palette, diagrams=section.get("diagrams"), width=doc.width)
         story.append(Spacer(1, 10))
 
     case_label = _sanitize_text(str(case.name or case.id))
@@ -947,13 +952,28 @@ def _build_pdf_styles(palette: dict[str, colors.Color]) -> dict[str, ParagraphSt
 _HEADING_STYLES = {2: "subheading", 3: "subheading", 4: "minor_heading", 5: "minor_heading", 6: "minor_heading"}
 
 
-def _append_markdown_to_story(story: list[Any], markdown: str, styles: dict[str, ParagraphStyle], palette: dict[str, colors.Color]) -> None:
+def _append_markdown_to_story(
+    story: list[Any],
+    markdown: str,
+    styles: dict[str, ParagraphStyle],
+    palette: dict[str, colors.Color],
+    *,
+    diagrams: dict[str, Any] | None = None,
+    width: float = 174 * mm,
+) -> None:
     lines = markdown.splitlines()
     index = 0
+    pending_diagram: str | None = None
     while index < len(lines):
         line = lines[index].rstrip()
         stripped = line.strip()
         if not stripped:
+            index += 1
+            continue
+        marker = re.match(r"^<!--\s*execution-diagram:(\S+)\s*-->$", stripped)
+        if marker or stripped.startswith("<!--"):
+            # Comments are not shown; a diagram marker replaces the text tree after it.
+            pending_diagram = marker.group(1) if marker else None
             index += 1
             continue
         if stripped.startswith("```"):
@@ -963,6 +983,14 @@ def _append_markdown_to_story(story: list[Any], markdown: str, styles: dict[str,
                 code_lines.append(lines[index])
                 index += 1
             index += 1
+            tree = (diagrams or {}).get(pending_diagram or "")
+            pending_diagram = None
+            if tree:
+                from app.services.report_execution_diagram import execution_tree_drawing
+
+                story.append(execution_tree_drawing(tree, width, palette))
+                story.append(Spacer(1, 6))
+                continue
             story.append(Paragraph(escape(_sanitize_text("\n".join(code_lines))).replace("\n", "<br/>"), styles["code"]))
             continue
         if stripped.startswith("|"):
@@ -2980,7 +3008,26 @@ def _render_incident_timeline_section(case_id: str, items: list[dict[str, Any]])
     return _markdown_table(_drop_empty_columns(rows))
 
 
-def _render_process_chains(findings: list[Finding]) -> str:
+def _execution_trees(db: Session, case: Case, findings: list[Finding]) -> dict[str, dict[str, Any] | None]:
+    """The process tree behind each finding picked for Process Chains."""
+    if not findings:
+        return {}
+    from app.services.report_execution_diagram import build_execution_tree
+
+    evidences = db.query(Evidence).filter(Evidence.case_id == case.id).all()
+    trees: dict[str, dict[str, Any] | None] = {}
+    for finding in findings:
+        try:
+            trees[str(finding.id)] = build_execution_tree(db, case, evidences, finding)
+        except Exception:  # noqa: BLE001 -- the section keeps its text without the diagram
+            logger.warning("report: execution diagram for finding %s failed", finding.id, exc_info=True)
+            trees[str(finding.id)] = None
+    return trees
+
+
+def _render_process_chains(findings: list[Finding], trees: dict[str, dict[str, Any] | None] | None = None) -> str:
+    from app.services.report_execution_diagram import MARKER, render_tree_text
+
     if not findings:
         return "No process chains selected or available."
     lines = []
@@ -2988,8 +3035,18 @@ def _render_process_chains(findings: list[Finding]) -> str:
         lines.extend([f"### {_escape_md(finding.title)}", "", f"- Risk: {int(finding.risk_score or 0)}"])
         if finding.reasons:
             lines.append("- Why it matters: " + "; ".join(_sanitize_text(str(item)) for item in finding.reasons[:6]))
-        if finding.timeline:
-            for item in finding.timeline[:4]:
+        tree = (trees or {}).get(str(finding.id))
+        if tree:
+            lines.extend(["", tr("Execution tree: the process this finding points to, what started it and what it started."), ""])
+            lines.extend([MARKER.format(key=finding.id), "```text", render_tree_text(tree), "```"])
+            if tree.get("truncated"):
+                lines.append(tr("The tree is cut at {count} processes or three levels; Execution Stories shows the rest.", count=len(tree["nodes"])))
+            if not tree.get("exact"):
+                lines.append(tr("Some parent/child links are inferred (PID and time), not recorded identifiers."))
+        else:
+            if trees is not None:
+                lines.append("- " + tr("No process-creation record was found for this finding's events, so no execution tree is drawn."))
+            for item in (finding.timeline or [])[:4]:
                 lines.append(f"- {_fmt_ts(item.get('timestamp')) or 'unknown time'} · {_sanitize_text(str(item.get('summary') or ''))}")
         lines.append("")
     return "\n".join(lines).strip()
