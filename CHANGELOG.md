@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.2.0 - 2026-10-30
+
+Full notes: [docs/releases/1.2.0.md](docs/releases/1.2.0.md).
+
 ### Highlights
 
 - Memory Analysis promoted from Experimental to Core DFIR Capability — Preview, with a real activation boundary, and then to Stable (2026-10-25): its results reach Timeline, Search, Command History, Persistence, Findings and the report.

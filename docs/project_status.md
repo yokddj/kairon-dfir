@@ -3,7 +3,7 @@
 ## Current status
 
 Kairon DFIR is a case-centric DFIR platform for Windows, Linux, disk-image and
-memory evidence, at version 1.1.0 with further work under `Unreleased` in the
+memory evidence, at version 1.2.0; work after it goes under `Unreleased` in the
 [CHANGELOG](../CHANGELOG.md). It is a self-hosted beta for trusted labs.
 
 [roadmap.md](roadmap.md) is the source of truth for maturity; this page is a
