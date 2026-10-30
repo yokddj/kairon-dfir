@@ -49,6 +49,9 @@ MAX_EVENT_IDS = 50
 MAX_DETECTION_IDS = 50
 MAX_EXISTING_FINDINGS = 80
 MAX_TEXT = 400
+# Beyond this, a time range describes the data (default dates of built-in
+# items, clock errors), not when one activity happened.
+MAX_TIME_RANGE_DAYS = 365
 
 # Detections an analyst closed, or that automation retired, are not leads.
 _CLOSED_DETECTION_STATUSES = ("dismissed", "false_positive", "archived", "stale", "stale_event_link", "promoted_to_finding")
@@ -385,6 +388,19 @@ def _lead_refs(text: str) -> list[str]:
     return refs
 
 
+def _activity_range(times: list[str]) -> list[str]:
+    """First and last time of the leads, or nothing when they span more than a
+    year: each lead still shows its own times."""
+    if not times:
+        return []
+    try:
+        first = datetime.fromisoformat(times[0].replace("Z", "+00:00"))
+        last = datetime.fromisoformat(times[-1].replace("Z", "+00:00"))
+    except ValueError:
+        return []
+    return [times[0], times[-1]] if (last - first).days <= MAX_TIME_RANGE_DAYS else []
+
+
 def build_suggestions(raw: Any, leads: list[dict[str, Any]], provenance: dict[str, Any]) -> tuple[list[dict[str, Any]], int]:
     """Checked suggestions with their links resolved from the cited leads, and
     how many the model proposed without a valid lead (dropped)."""
@@ -414,7 +430,7 @@ def build_suggestions(raw: Any, leads: list[dict[str, Any]], provenance: dict[st
         mitre = tagged_techniques([str(value) for value in item.get("mitre") or []] if isinstance(item.get("mitre"), list) else [str(item.get("mitre") or "")])
         backing = lambda key: [value for lead in used for value in lead["backing"].get(key) or []]  # noqa: E731
         evidence_ids = _dedupe(backing("evidence_ids"))
-        times = sorted(time for lead in used for time in (lead["time_utc"], lead["last_utc"]) if time)
+        times = _activity_range(sorted(time for lead in used for time in (lead["time_utc"], lead["last_utc"]) if time))
         suggestions.append({
             "title": title,
             "severity": severity,
