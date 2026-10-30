@@ -67,3 +67,22 @@ def test_detections_link_the_first_file_and_list_the_rest(monkeypatch) -> None:
     assert detection["mitre"] == ["T1486"] and detection["matched_at"] == "2025-03-07T19:41:00Z"
     assert "6 data files reappeared with the extension .enc in 1 folder within 5 s" in detection["message"]
     assert get_builtin_detection_definition(mass_encryption.RULE_KEY).name == "Possible mass file encryption"
+
+
+def test_file_events_are_read_page_by_page(monkeypatch) -> None:
+    import app.core.opensearch as opensearch
+
+    pages = [[{"_source": {"event_id": str(n)}, "sort": [n, str(n)]} for n in range(start, start + size)] for start, size in ((0, 3), (3, 3), (6, 1))]
+    bodies: list[dict] = []
+
+    class Client:
+        def search(self, index, body):
+            bodies.append(dict(body))
+            return {"hits": {"hits": pages[len(bodies) - 1]}}
+
+    monkeypatch.setattr(mass_encryption, "PAGE_SIZE", 3)
+    monkeypatch.setattr(opensearch, "get_opensearch_client", lambda **kwargs: Client())
+    monkeypatch.setattr(opensearch, "index_exists", lambda client, index: True)
+    events = mass_encryption._query_events("c", "e")
+    assert [event["event_id"] for event in events] == [str(n) for n in range(7)]
+    assert all(body["size"] == 3 for body in bodies) and bodies[1]["search_after"] == [2, "2"]

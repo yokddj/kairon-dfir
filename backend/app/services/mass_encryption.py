@@ -41,7 +41,9 @@ _NAME = re.compile(r"^(?P<stem>.+)\.(?P<data>" + "|".join(DATA_EXTENSIONS) + r")
 _NAME_QUERY = r".+\.(" + "|".join(DATA_EXTENSIONS + tuple(ext.upper() for ext in DATA_EXTENSIONS)) + r")\.[A-Za-z0-9_]{1,16}"
 MIN_FILES = 5
 WINDOW_SECONDS = 600
-MAX_EVENTS = 20000
+MAX_EVENTS = 50000
+# OpenSearch returns at most 10000 hits per request; the rest come page by page.
+PAGE_SIZE = 5000
 MAX_RELATED = 50
 MAX_EXAMPLES = 5
 
@@ -105,14 +107,20 @@ def _query_events(case_id: str, evidence_id: str) -> list[dict[str, Any]]:
     index = get_events_index(case_id)
     if not index_exists(client, index):
         return []
-    body = {
-        "size": MAX_EVENTS,
+    body: dict[str, Any] = {
+        "size": PAGE_SIZE,
         "_source": ["event_id", "stable_event_id", "@timestamp", "file.name", "file.path", "host.name"],
         "query": {"bool": {"filter": [{"term": {"evidence_id": evidence_id}}, {"regexp": {"file.name": {"value": _NAME_QUERY}}}]}},
-        "sort": [{"@timestamp": "asc"}],
+        "sort": [{"@timestamp": "asc"}, {"event_id": "asc"}],
     }
-    response = client.search(index=index, body=body)
-    return [hit.get("_source") or {} for hit in (response.get("hits") or {}).get("hits") or []]
+    events: list[dict[str, Any]] = []
+    while len(events) < MAX_EVENTS:
+        hits = (client.search(index=index, body=body).get("hits") or {}).get("hits") or []
+        events.extend(hit.get("_source") or {} for hit in hits)
+        if len(hits) < PAGE_SIZE:
+            break
+        body["search_after"] = hits[-1]["sort"]
+    return events[:MAX_EVENTS]
 
 
 def detect_mass_file_encryption(db: Session, *, case_id: str, evidence_id: str) -> int:
