@@ -164,6 +164,7 @@ function TimelinePage() {
       group_by: groupBy as "none" | "hour" | "day",
       finding_id: searchParams.get("finding_id") || undefined,
       key_events_only: searchParams.get("key_events_only") === "true" || undefined,
+      hide_routine: searchParams.get("hide_routine") === "true" || undefined,
     }),
     [selectedHost, resolvedEvidenceId, mode, query, riskMin, timeFrom, timeTo, sort, cursorStack, groupBy, searchParams],
   );
@@ -600,6 +601,23 @@ function TimelinePage() {
                 <option value="day">Day</option>
                 <option value="none">None</option>
               </select>
+            </label>
+            <label
+              className="flex items-center gap-2 rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-muted"
+              title="Hides process starts of core system processes only when the image path and the parent are the expected ones. A masquerading process stays visible."
+            >
+              <input
+                type="checkbox"
+                checked={searchParams.get("hide_routine") === "true"}
+                onChange={(event) => {
+                  const params = new URLSearchParams(searchParams);
+                  if (event.target.checked) params.set("hide_routine", "true");
+                  else params.delete("hide_routine");
+                  setCursorStack([]);
+                  setSearchParams(params);
+                }}
+              />
+              Hide routine system activity
             </label>
           </div>
         ) : null}

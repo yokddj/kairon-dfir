@@ -30,6 +30,7 @@ from app.services.investigation_memory import (
     wants_non_memory_source,
 )
 from app.search.query_syntax import QuerySyntaxError, SEARCH_SYNTAX_EXAMPLES, analyze_query_syntax, evaluate_query_syntax
+from app.services.routine_activity import routine_process_clause
 
 
 IOC_HASH_RE = re.compile(r"^[A-Fa-f0-9]{32}$|^[A-Fa-f0-9]{40}$|^[A-Fa-f0-9]{64}$")
@@ -284,6 +285,9 @@ MEMORY_SEARCH_FILTER_PARAMS = frozenset({
     "q", "exclude_q", "evidence_id", "artifact_type", "exclude_artifact_type",
     "host", "host_id", "host_scope", "exclude_host", "process_name",
     "time_from", "time_to", "source_category", "source",
+    # Memory process rows carry no parent name, so none is routine: hiding
+    # routine activity leaves memory results as they are.
+    "hide_routine",
 })
 SEARCH_CONTROL_PARAMS = frozenset({
     "scope", "sort", "page", "page_size", "cursor", "filters",
@@ -1142,6 +1146,8 @@ def _build_event_exclusions(case_id: str, params: dict[str, Any], db: Session | 
     exclude_query, _ = normalize_search_value(params.get("exclude_q"))
     if exclude_query:
         must_not.append(_build_text_query(exclude_query))
+    if str(params.get("hide_routine") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        must_not.append(routine_process_clause())
     _, builder_must_not = _build_filter_builder_clauses(case_id, params, db)
     must_not.extend(builder_must_not)
     return must_not

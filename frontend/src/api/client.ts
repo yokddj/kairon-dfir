@@ -7992,6 +7992,7 @@ export const api = {
       include_highlights?: boolean;
       include_facets?: boolean;
       include_filesystem_timeline?: boolean;
+      hide_routine?: boolean;
     },
   ) => {
     const query = new URLSearchParams();
@@ -8112,6 +8113,7 @@ export const api = {
       lightweight?: boolean;
       group_by?: "none" | "hour" | "day" | "finding" | "process" | "artifact";
       key_events_only?: boolean;
+      hide_routine?: boolean;
     },
   ) => {
     const query = new URLSearchParams();

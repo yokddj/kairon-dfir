@@ -71,6 +71,7 @@ def get_case_timeline(
     lightweight: bool = Query(default=False),
     group_by: str = Query(default="hour"),
     key_events_only: bool = Query(default=False),
+    hide_routine: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> dict:
     resolved_host = host
@@ -108,6 +109,7 @@ def get_case_timeline(
                 "process_node_id": process_node_id,
                 "file_path": file_path,
                 "process_name": process_name,
+                "hide_routine": hide_routine,
                 "domain": domain,
                 "ip": ip,
                 "user": user,
@@ -153,6 +155,7 @@ def get_case_timeline(
             "process_node_id": process_node_id,
             "file_path": file_path,
             "process_name": process_name,
+            "hide_routine": hide_routine,
             "domain": domain,
             "ip": ip,
             "user": user,
