@@ -184,3 +184,11 @@ def test_endpoint_refuses_without_leads_or_ai(monkeypatch: pytest.MonkeyPatch) -
     response = _client(db).post("/api/cases/case-1/ai/finding-suggestions")
     assert response.status_code == 409 and "not enabled" in response.json()["detail"]
     assert _client(db).post("/api/cases/other/ai/finding-suggestions").status_code == 404
+
+
+def test_a_time_range_spanning_years_is_left_empty() -> None:
+    leads = _leads()
+    leads[2]["time_utc"], leads[2]["last_utc"] = "1992-05-01T11:00:00Z", "2025-12-31T12:00:00Z"
+    suggestions, _ = finding_suggestions.build_suggestions([{"title": "Scheduled tasks", "leads": ["L3"], "description": "Tasks [L3]."}], leads, PROVENANCE)
+    assert suggestions[0]["finding"]["time_start"] is None and suggestions[0]["finding"]["time_end"] is None
+    assert suggestions[0]["leads"][0]["time_utc"] == "1992-05-01T11:00:00Z"
