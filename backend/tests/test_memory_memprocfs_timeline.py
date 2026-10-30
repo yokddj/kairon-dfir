@@ -41,7 +41,7 @@ def test_every_event_is_a_dated_memprocfs_case_event() -> None:
         assert document["@timestamp"].endswith("Z") and document["@timestamp"].startswith("2025-03-07T19:4")
         assert document["artifact"] == {"type": f"memprocfs_{timeline}", "name": document["artifact"]["name"], "parser": "memprocfs", "source_path": f"\\forensic\\csv\\timeline_{timeline}.csv"}
         assert document["case_id"] == "case-1" and document["evidence_id"] == "ev-1"
-        assert document["event"]["message"] and document["search_text"] == document["event"]["message"]
+        assert document["event"]["message"] and document["event"]["message"] in document["search_text"]
         assert document["event_id"].startswith("memprocfs-")
 
 
@@ -62,8 +62,68 @@ def test_event_log_rows_keep_the_event_id_channel_and_data() -> None:
     assert document["windows"]["event_id"] == 4688
     assert document["windows"]["channel"] == "Security" and document["event"]["provider"] == "Microsoft-Windows-Security-Auditing"
     assert "NewProcessName=C:\\Windows\\System32\\cmd.exe" in document["windows"]["event_data_summary"]
-    assert document["event"]["type"] == "event_id_4688"
-    assert document["process"] == {"pid": "5152"}
+    # Normalized as the disk parser reads a 4688: a process creation, with its program and user.
+    assert document["event"]["type"] == "process_start" and document["event"]["category"] == "process"
+    assert document["process"]["pid"] == "5152" and document["process"]["name"] == "cmd.exe"
+    assert document["user"]["name"] == "bob"
+    assert "memory" in document["tags"] and "memprocfs" in document["tags"]
+
+
+def _row(timeline: str, text: str, time: str = "2025-03-07 19:37:27") -> dict:
+    return {"Time": time, "Type": "X", "Action": "---", "PID": "0", "Value32": "0x0", "Value64": "0x0", "Text": text}
+
+
+DEFENDER_1116 = (
+    "log:[Microsoft-Windows-Windows Defender%4Operational.evtx] provider:[Microsoft-Windows-Windows Defender] "
+    "channel:[Microsoft-Windows-Windows Defender/Operational] event:1116 level:3 record:147 data:[Product Name=Microsoft Defender Antivirus; "
+    "Threat Name=Trojan:Win32/Wacatac.B!ml; Severity Name=Severe; Category Name=Trojan; Detection User=PC\\alice; "
+    "Path=file:_C:\\Users\\alice\\Downloads\\invoice.exe; Action Name=Not Applicable]"
+)
+
+
+def test_memory_event_log_records_get_the_detections_their_evtx_copy_gets() -> None:
+    from app.workers.tasks import _builtin_detection_from_document
+
+    document = timeline_event(_row("eventlog", DEFENDER_1116), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
+    assert document["artifact"]["type"] == "memprocfs_eventlog" and document["artifact"]["parser"] == "memprocfs"
+    assert document["event"]["category"] == "detection" and "defender" in document["tags"]
+    assert document["risk_score"] > 0 and document["suspicious_reasons"]
+    assert memprocfs_timeline.detection_candidates([document]) == [document]
+    assert _builtin_detection_from_document(document) is not None
+
+
+def test_a_record_the_disk_normalizer_does_not_know_keeps_its_data_in_the_message() -> None:
+    text = "log:[System.evtx] provider:[Some-Provider] channel:[System] event:9999 level:4 record:1 data:[Key=Value; Other=Thing]"
+    document = timeline_event(_row("eventlog", text), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
+    assert document["event"]["message"] == "System event 9999: Key=Value; Other=Thing"
+    assert memprocfs_timeline.detection_candidates([document]) == []
+
+
+def test_memory_amcache_entries_are_judged_like_disk_amcache() -> None:
+    from app.workers.tasks import _builtin_detection_from_document
+
+    downloaded = timeline_event(_row("amcache", "AmCache file inventory record updated: c:\\users\\alice\\downloads\\invoice.exe"), timeline="amcache", case_id="c", evidence_id="e", scan_run_id="r")
+    assert downloaded["artifact"]["type"] == "memprocfs_amcache"
+    assert _builtin_detection_from_document(downloaded)[0] == "amcache_executable_in_downloads"
+    installed = timeline_event(_row("amcache", "AmCache file inventory record updated: c:\\program files\\vendor\\app.exe"), timeline="amcache", case_id="c", evidence_id="e", scan_run_id="r")
+    assert memprocfs_timeline.detection_candidates([installed]) == []
+
+
+def test_a_created_prefetch_file_records_the_program_run() -> None:
+    document = timeline_event(
+        {**_row("ntfs", "\\1\\Windows\\Prefetch\\INVOICE.EXE-AB6C9DDF.pf"), "Action": "CRE"}, timeline="ntfs", case_id="c", evidence_id="e", scan_run_id="r"
+    )
+    assert document["event"]["type"] == "prefetch_file_created" and document["event"]["category"] == "execution"
+    assert document["process"]["name"] == "INVOICE.EXE"
+    modified = timeline_event({**_row("ntfs", "\\1\\Windows\\Prefetch\\INVOICE.EXE-AB6C9DDF.pf"), "Action": "MOD"}, timeline="ntfs", case_id="c", evidence_id="e", scan_run_id="r")
+    assert modified["event"]["type"] == "file_modified"
+
+
+def test_ntfs_records_are_not_put_through_the_mft_normalizer() -> None:
+    document = timeline_event(
+        {**_row("ntfs", "\\1\\Users\\alice\\AppData\\Local\\Vendor\\helper.dll"), "Action": "CRE"}, timeline="ntfs", case_id="c", evidence_id="e", scan_run_id="r"
+    )
+    assert document["risk_score"] == 0 and memprocfs_timeline.detection_candidates([document]) == []
 
 
 def test_web_task_amcache_and_registry_rows_are_structured() -> None:
@@ -111,6 +171,15 @@ def test_indexing_replaces_the_evidence_events_in_batches(tmp_path: Path, monkey
         return {"success": True, "documents_indexed": len(documents)}
 
     monkeypatch.setattr(opensearch, "bulk_index_events_with_report", fake_bulk)
+    detected: list[int] = []
+    monkeypatch.setattr(memprocfs_timeline, "create_timeline_detections", lambda db, **kwargs: detected.append(len(kwargs["candidates"])) or {"builtin": 1})
+    report = memprocfs_timeline.index_memprocfs_timeline(tmp_path, case_id="c", evidence_id="e", scan_run_id="r")
+    assert not detected and "detections" not in report
+    report = memprocfs_timeline.index_memprocfs_timeline(tmp_path, case_id="c", evidence_id="e", scan_run_id="r", db=object())
+    assert report["detections"] == {"builtin": 1} and detected == [2]
+    batches.clear()
+    calls[:] = calls[: calls.index("refresh") + 1]
+    calls[: calls.index("refresh") + 1] = []
     report = memprocfs_timeline.index_memprocfs_timeline(tmp_path, case_id="c", evidence_id="e", scan_run_id="r")
     assert report["indexed"] == 14 and report["replaced"] == 7 and not report["truncated"]
     assert report["by_timeline"]["ntfs"] == 2
@@ -161,13 +230,13 @@ def test_execution_indexes_saved_timelines_without_failing_the_run(tmp_path: Pat
 
     run = SimpleNamespace(id="run-1", case_id="case-1", evidence_id="ev-1")
     monkeypatch.setattr(execution, "index_memprocfs_timeline", lambda directory, **kwargs: {"indexed": 3, "directory": directory.name, **kwargs})
-    assert execution._index_memprocfs_timeline(run, tmp_path)["indexed"] == 3
+    assert execution._index_memprocfs_timeline(None, run, tmp_path)["indexed"] == 3
 
     def broken(*_a, **_k):
         raise RuntimeError("opensearch down")
 
     monkeypatch.setattr(execution, "index_memprocfs_timeline", broken)
-    report = execution._index_memprocfs_timeline(run, tmp_path)
+    report = execution._index_memprocfs_timeline(None, run, tmp_path)
     assert report["indexed"] == 0 and "opensearch down" in report["error"]
 
 
@@ -197,9 +266,9 @@ def test_powershell_script_blocks_become_powershell_commands() -> None:
     document = timeline_event(row, timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
     assert document["powershell"]["command"] == script
     assert document["powershell"]["script_block_id"] == "abc-1" and document["powershell"]["message_total"] == "2"
-    assert document["process"] == {"name": "powershell.exe", "pid": "5404"}
+    assert document["process"]["name"] == "powershell.exe" and document["process"]["pid"] == "5404"
     assert document["windows"]["event_id"] == 4104
-    assert document["event"]["message"].startswith("PowerShell event 4104: $c = New-Object")
+    assert "$c = New-Object" in document["event"]["message"]
 
 
 def test_powershell_command_invocations_and_engine_starts_name_their_command() -> None:
@@ -215,9 +284,9 @@ def test_powershell_command_invocations_and_engine_starts_name_their_command() -
 
 def test_other_event_log_records_are_not_powershell_commands() -> None:
     security = timeline_event(_eventlog_row(4104, "Some-Other-Provider", "Application", "ScriptBlockText=x"), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
-    assert "powershell" not in security
+    assert "command" not in (security.get("powershell") or {})
     empty = timeline_event(_eventlog_row(4104, "Microsoft-Windows-PowerShell", "Microsoft-Windows-PowerShell/Operational", "MessageNumber=1; MessageTotal=1; ScriptBlockText=; ScriptBlockId=z"), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
-    assert "powershell" not in empty
+    assert "command" not in (empty.get("powershell") or {})
 
 
 def test_powershell_log_lists_the_evidence_records_oldest_first(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -809,7 +809,7 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     artifact_indexing = _index_artifact_results(run.case_id, artifact_results, db, run)
                     indexing["artifacts"] = artifact_indexing
                 if (output_dir / MEMPROCFS_TIMELINE_DIRNAME).is_dir():
-                    indexing["memprocfs_timeline"] = _index_memprocfs_timeline(run, output_dir / MEMPROCFS_TIMELINE_DIRNAME)
+                    indexing["memprocfs_timeline"] = _index_memprocfs_timeline(db, run, output_dir / MEMPROCFS_TIMELINE_DIRNAME)
                 _recount_plugin_states(run)
                 skipped_count = sum(1 for item in run.plugin_runs if str(item.status or "").startswith("skipped_"))
                 run.status = "completed" if run.plugins_failed == 0 and skipped_count == 0 else "completed_with_errors"
@@ -1049,11 +1049,12 @@ def _resolve_raw_output_path(relative_path: str | None) -> Path | None:
     return candidates[0] if candidates else None
 
 
-def _index_memprocfs_timeline(run: MemoryScanRun, directory: Path) -> dict[str, Any]:
-    """Index the timelines MemProcFS's forensic scan saved next to FindEvil. Saved even when
-    FindEvil itself had nothing to report; a failure here never affects the run's other results."""
+def _index_memprocfs_timeline(db: Session, run: MemoryScanRun, directory: Path) -> dict[str, Any]:
+    """Index the timelines MemProcFS's forensic scan saved next to FindEvil, with their detections.
+    Saved even when FindEvil itself had nothing to report; a failure here never affects the run's
+    other results."""
     try:
-        return index_memprocfs_timeline(directory, case_id=run.case_id, evidence_id=run.evidence_id, scan_run_id=run.id)
+        return index_memprocfs_timeline(directory, case_id=run.case_id, evidence_id=run.evidence_id, scan_run_id=run.id, db=db)
     except Exception as exc:  # noqa: BLE001
         logger.warning("memprocfs timeline indexing failed", extra={"run_id": run.id, "error": _sanitize_message(exc)})
         return {"indexed": 0, "error": _sanitize_message(exc)}

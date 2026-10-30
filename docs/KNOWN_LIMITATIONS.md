@@ -20,7 +20,7 @@ This document describes current known limitations. It is intentionally explicit 
 - Volatility and MemProcFS execution is off until enabled per deployment ([memory/memory_operations.md](memory/memory_operations.md)).
 - Linux images need a symbol file for the exact kernel (Volatility 3 ISF or Volatility 2 profile); Windows symbols come from a local cache or an operator-approved download.
 - Windows-only views (DLLs, drivers, VADs, MemProcFS) have no Linux equivalent.
-- Detections and SIEM export do not read memory results.
+- Detections and SIEM export do not read the memory index (processes, Find Evil, network); the event log records and Amcache entries MemProcFS recovers are normalized like their disk copies and get Sigma and built-in detections.
 - PSReadLine history and PowerShell 4104/4103 records recovered from memory have not been validated on an image that contains them.
 - Running Kairon with Memory disabled (`memory_enabled=false`) is possible but not a tested configuration.
 

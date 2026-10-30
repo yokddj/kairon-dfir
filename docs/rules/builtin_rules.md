@@ -132,6 +132,7 @@ Then restart the backend and worker so the change takes effect.
 | Deleted Executable Candidate | inherits from event | executables/scripts with `InUse = false` | MFTECmd `file_deleted_or_not_in_use` | Yes |
 | Executable in Downloads | inherits from event | executables/scripts in Downloads, AppData or Temp | MFTECmd / USN | Yes |
 | Possible Timestomping SI/FN Mismatch | inherits from event | wide differences between `$SI` and `$FN` timestamps | MFTECmd | Yes |
+| Possible Mass File Encryption | high | five or more data files reappearing with the same appended extension (`Memo.docx.enc`) within ten minutes on one host | MFT / USN and the MFT recovered from memory | Yes |
 | Executable Downloaded | inherits from event | downloads of executables or installers | Browser download | Yes |
 | Script Downloaded | inherits from event | downloads of `.ps1`, `.bat`, `.cmd`, `.js`, `.vbs` | Browser download | Yes |
 | Archive Downloaded From File Sharing | inherits from event | ZIP/RAR/7z from a sharing or cloud storage site | Browser download | Yes |
@@ -391,6 +392,13 @@ Then restart the backend and worker so the change takes effect.
 - **What it looks for**: executables or scripts in suspicious user paths
 - **Evidence it uses**: MFT / USN
 - **How to investigate it**: review whether the file was executed, whether it has ADS, and whether it appears in the Registry or Defender
+
+### 4m-bis. Possible Mass File Encryption
+
+- **Internal ID**: `possible_mass_file_encryption`
+- **What it looks for**: on one host, at least five distinct data files (documents, spreadsheets, images, archives, databases...) whose name reappears with one extension appended (`Memo.docx` -> `Memo.docx.enc`), all within ten minutes. Extensions Windows and applications append for their own use (`.lnk` in Recent, `.crdownload`, `.tmp`, `.bak`...) do not count. One detection per host, extension and burst, linked to the first file and listing the others (MITRE T1486).
+- **Evidence it uses**: any indexed file event with a name: MFT and USN from disk, and the NTFS records MemProcFS recovers from memory. Runs at the end of an evidence's ingest and after a memory image's MemProcFS timeline is indexed.
+- **How to investigate it**: find the process that wrote the files at that time (Prefetch, Amcache, the memory process list), look for a ransom note, and check whether the originals still exist.
 
 ### 4n. Possible Timestomping SI/FN Mismatch
 
