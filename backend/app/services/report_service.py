@@ -2567,6 +2567,8 @@ def _build_memory_report_context(db: Session, case_id: str, filters: dict[str, A
 
 
 LATERAL_REPORT_ROWS = 60
+# Short method names for the report table; the view keeps the long ones.
+_LATERAL_METHOD_SHORT = {"3": "Network (type 3)", "8": "Network cleartext (type 8)", "10": "RDP (type 10)"}
 
 
 def _build_lateral_movement_report_context(db: Session, case_id: str, filters: dict[str, Any]) -> dict[str, Any]:
@@ -2631,7 +2633,7 @@ def _render_lateral_movement_section(report: dict[str, Any]) -> str:
             source,
             str(edge.get("target_host") or "-"),
             _lateral_account(edge),
-            tr(str(edge.get("method") or "-")),
+            tr(_LATERAL_METHOD_SHORT.get(str(edge.get("logon_type") or ""), str(edge.get("method") or "-"))),
             ", ".join(result) or "-",
         ])
     parts.append(_markdown_table(rows))
