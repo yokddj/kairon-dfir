@@ -1486,7 +1486,7 @@ def _apply_data_quality(document: dict) -> dict:
     return document
 
 
-# A Terminal Services session record naming a network address ("Address: 10.0.0.5",
+# A Terminal Services session record naming a network address ("Address: 203.0.113.5",
 # "Source Network Address=fe80::1"); a console session says "LOCAL" or names none.
 _REMOTE_SESSION_ADDRESS = re.compile(r"address\W{0,3}(?!local\b)[0-9a-f]{1,4}[.:]", re.IGNORECASE)
 
