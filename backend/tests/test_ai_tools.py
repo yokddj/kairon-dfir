@@ -1259,3 +1259,41 @@ def test_search_memory_artifacts_is_advertised_and_wired():
     spec = next(s for s in TOOL_SPECS if s["name"] == "search_memory_artifacts")
     assert set(spec["input_schema"]["properties"]) >= {"query", "artifact_family", "process_name", "pid", "evidence_id", "limit"}
     assert spec["input_schema"]["required"] == []
+
+
+def test_lateral_movement_tool_filters_and_hides_routine(monkeypatch):
+    edges = [
+        {"target_host": "SRV01", "source_ip": "192.0.2.42", "source_hosts": ["WS02"], "user": "svc_sql", "method": "Remote Desktop (type 10)", "successes": 2, "failures": 0, "routine_reason": None},
+        {"target_host": "DC01", "source_ip": "192.0.2.41", "source_hosts": ["WS01"], "user": "WS01$", "method": "Network logon", "successes": 9, "failures": 0, "routine_reason": "machine account"},
+        {"target_host": "DC01", "source_ip": "198.51.100.7", "source_hosts": [], "user": "admin", "method": "Network logon", "successes": 0, "failures": 30, "routine_reason": None},
+    ]
+    monkeypatch.setattr("app.services.lateral_movement.get_lateral_movement", lambda *_a: {"edges": edges, "addresses": [{"ip": "192.0.2.42", "hosts": ["WS02"]}]})
+    monkeypatch.setattr(tools_module, "_resolve_host", lambda *_a: None)
+    result = run_tool(None, "case-1", "list_lateral_movement", {})
+    assert result["total_connections"] == 2 and result["routine_connections_hidden"] == 1
+    assert run_tool(None, "case-1", "list_lateral_movement", {"failed_only": True})["connections"][0]["user"] == "admin"
+    assert run_tool(None, "case-1", "list_lateral_movement", {"user": "svc"})["total_connections"] == 1
+    assert run_tool(None, "case-1", "list_lateral_movement", {"include_routine": True})["total_connections"] == 3
+
+
+def test_memory_triage_tool_lists_antivirus_detections_per_image(monkeypatch):
+    images = [{
+        "filename": "ws02.dmp", "evidence_id": "ev-1", "host": "WS02",
+        "find_evil": {"available": True, "unreviewed_count": 4, "marked_processes": [{"process": "PSEXESVC.exe", "pid": 5736, "mark": "suspicious"}],
+                      "antivirus_detections": [{"first_seen": "2026-01-10T09:15:02Z", "threat": "HackTool:Win32/Sample", "target_kind": "cmdline", "target": "tool.exe dump", "sources": ["system scan"], "records": 3}]},
+    }]
+    monkeypatch.setattr("app.services.memory.report_section.build_memory_report_context", lambda *_a, **_k: images)
+    monkeypatch.setattr(tools_module, "_resolve_host", lambda *_a: None)
+    result = run_tool(None, "case-1", "get_memory_triage", {})
+    image = result["memory_images"][0]
+    assert image["antivirus_detections"][0]["target"] == "tool.exe dump"
+    assert image["marked_processes"][0]["process"] == "PSEXESVC.exe" and image["unreviewed_processes"] == 4
+
+
+def test_host_coverage_tool_reports_gaps(monkeypatch):
+    coverage = {"hosts": [{"host_id": "h1", "host": "WS02", "event_count": 10, "families": {"Process creation log": 0}, "missing_families": ["Process creation log"], "log_clears": []}],
+                "warnings": ["WS02 has no Process creation log data while other hosts in this case do."]}
+    monkeypatch.setattr("app.services.host_coverage.build_case_host_coverage", lambda *_a: coverage)
+    monkeypatch.setattr(tools_module, "_resolve_host", lambda *_a: None)
+    result = run_tool(None, "case-1", "get_host_coverage", {})
+    assert result["hosts"][0]["missing_families"] == ["Process creation log"] and result["warnings"]

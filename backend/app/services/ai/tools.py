@@ -788,6 +788,107 @@ def tool_list_downloads(db: Session, case_id: str, args: dict) -> dict:
     }
 
 
+LATERAL_KEYS = (
+    "first_seen", "last_seen", "source_hosts", "source_ip", "source_workstations", "target_host",
+    "user", "domain", "method", "successes", "failures", "routine_reason", "workstation_mismatch", "source_ambiguous",
+)
+
+
+def tool_list_lateral_movement(db: Session, case_id: str, args: dict) -> dict:
+    """Remote logons between machines, one row per target, source address, account and method.
+
+    Built from the normalized logon events of every platform (Windows network,
+    cleartext and Remote Desktop logons; Linux SSH and other remote logins). The
+    source is named as a case host only through addresses observed on that host.
+    """
+    from app.services.lateral_movement import get_lateral_movement
+
+    limit = _limit(args.get("limit"))
+    result = get_lateral_movement(db, case_id)
+    edges = result.get("edges") or []
+    host = _resolve_host(db, case_id, args.get("host") or args.get("host_id"))
+    if host:
+        names = {name.lower() for name in (host.display_name, host.canonical_name) if name}
+        edges = [edge for edge in edges if str(edge.get("target_host") or "").lower() in names or names & {str(item).lower() for item in edge.get("source_hosts") or []}]
+    user = str(args.get("user") or "").strip().lower()
+    if user:
+        edges = [edge for edge in edges if user in str(edge.get("user") or "").lower()]
+    routine = sum(1 for edge in edges if edge.get("routine_reason"))
+    if not args.get("include_routine"):
+        edges = [edge for edge in edges if not edge.get("routine_reason")]
+    if args.get("failed_only"):
+        edges = [edge for edge in edges if edge.get("failures")]
+    rows = _rows(edges, LATERAL_KEYS, limit)
+    return {
+        "total_connections": len(edges),
+        "routine_connections_hidden": 0 if args.get("include_routine") else routine,
+        "connections": rows,
+        "host_addresses": (result.get("addresses") or [])[:MAX_ROWS_HARD],
+        "truncated": bool(result.get("truncated")),
+        "note": (
+            "No remote logon between machines was found. This view needs Windows Security logons "
+            "(4624/4625) or Linux authentication logs; check describe_case before concluding none happened."
+        ) if not edges else None,
+    }
+
+
+def tool_get_memory_triage(db: Session, case_id: str, args: dict) -> dict:
+    """Per memory image: antivirus detections still in memory and the processes the analyst marked.
+
+    Defender detection records recovered by Find Evil survive cleared event logs,
+    so they can be the only record of a tool that ran.
+    """
+    from app.services.memory.report_section import build_memory_report_context
+
+    host = _resolve_host(db, case_id, args.get("host") or args.get("host_id"))
+    names = {name.lower() for name in (host.display_name, host.canonical_name) if name} if host else set()
+    images = []
+    for entry in build_memory_report_context(db, case_id):
+        if names and str(entry.get("host") or "").lower() not in names:
+            continue
+        find_evil = entry.get("find_evil") or {}
+        images.append({
+            "image": entry.get("filename"),
+            "evidence_id": entry.get("evidence_id"),
+            "host": entry.get("host"),
+            "system": entry.get("system"),
+            "captured_at": entry.get("captured_at"),
+            "find_evil_run": bool(find_evil.get("available")),
+            "antivirus_detections": [
+                {key: item.get(key) for key in ("first_seen", "last_seen", "threat", "engine", "sources", "target_kind", "target", "records")}
+                for item in (find_evil.get("antivirus_detections") or [])[:MAX_ROWS_HARD]
+            ],
+            "marked_processes": (find_evil.get("marked_processes") or [])[:MAX_ROWS_HARD],
+            "unreviewed_processes": find_evil.get("unreviewed_count"),
+        })
+    return {
+        "memory_images": images,
+        "note": "No memory image in this case." if not images else None,
+    }
+
+
+def tool_get_host_coverage(db: Session, case_id: str, args: dict) -> dict:
+    """What telemetry each host has, what it lacks that other hosts have, and log clears.
+
+    Use it before saying something did not happen on a host: a host without
+    process creation or authentication logs cannot show it.
+    """
+    from app.services.host_coverage import build_case_host_coverage
+
+    result = build_case_host_coverage(db, case_id)
+    host = _resolve_host(db, case_id, args.get("host") or args.get("host_id"))
+    rows = result.get("hosts") or []
+    if host:
+        rows = [row for row in rows if str(row.get("host_id")) == str(host.id)]
+    return {
+        "hosts": [
+            {key: row.get(key) for key in ("host", "event_count", "families", "missing_families", "telemetry_first_seen", "log_clears")}
+            for row in rows
+        ],
+        "warnings": result.get("warnings") or [],
+    }
+
+
 BROWSER_DOWNLOAD_KEYS = (
     "id", "timestamp", "host", "user", "title", "summary",
     "artifact_type", "parser", "event_type", "risk_score",
@@ -1183,6 +1284,58 @@ TOOL_SPECS: list[dict] = [
         },
     },
     {
+        "name": "list_lateral_movement",
+        "description": (
+            "List remote logons between machines: who reached which host, from which address and "
+            "case host, with which account and method (Windows network/RDP logons, Linux SSH), with "
+            "first/last time and succeeded/failed counts. Use it for lateral movement, pivoting, "
+            "'where did this account log on from' and brute-force questions. Routine machine, anonymous "
+            "and built-in account logons are hidden unless include_routine is true."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "string", "description": "Only connections to or from this host. A name or a host_id both work."},
+                "user": {"type": "string", "description": "Only accounts containing this text."},
+                "include_routine": {"type": "boolean", "description": "Also list machine, anonymous and built-in account logons."},
+                "failed_only": {"type": "boolean", "description": "Only connections with failed attempts."},
+                "limit": {"type": "integer", "description": f"Max entries, 1-{MAX_ROWS_HARD}."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_memory_triage",
+        "description": (
+            "Per memory image: antivirus (Defender) detections still in memory with time, threat, "
+            "what detected it and the target (file or full command line), and the processes the "
+            "analyst marked in Find Evil. Detections in memory survive cleared event logs, so check "
+            "this when logs were cleared or a tool's execution is unexplained."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "string", "description": "Only the images of this host. A name or a host_id both work."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_host_coverage",
+        "description": (
+            "Per host: which telemetry families it has (process creation, authentication, PowerShell...), "
+            "which ones it lacks that other hosts have, when its process records begin, and event log "
+            "clears. Call it before stating that something did not happen on a host."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "string", "description": "Only this host. A name or a host_id both work."},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_timeline",
         "description": (
             "Read a window of the case timeline in chronological order. Use it to see what "
@@ -1216,6 +1369,9 @@ HANDLERS: dict[str, Callable[[Session, str, dict], dict]] = {
     "list_email_artifacts": tool_list_email_artifacts,
     "search_memory_artifacts": tool_search_memory_artifacts,
     "get_timeline": tool_get_timeline,
+    "list_lateral_movement": tool_list_lateral_movement,
+    "get_memory_triage": tool_get_memory_triage,
+    "get_host_coverage": tool_get_host_coverage,
 }
 
 

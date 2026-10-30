@@ -21,6 +21,9 @@ tools** against the same data the analyst can already open in Kairon.
 | `search_command_history` | Shell and PowerShell command history. |
 | `get_process_tree` | The process tree around a process. |
 | `list_persistence`, `list_downloads`, `list_email_artifacts`, `search_memory_artifacts` | Artifact-specific views. |
+| `list_lateral_movement` | Remote logons between hosts (the Lateral Movement view), routine accounts hidden unless asked. |
+| `get_memory_triage` | Per memory image: antivirus detections still in memory and the processes the analyst marked. |
+| `get_host_coverage` | Per host: telemetry present and missing, when process records begin, event log clears. |
 | `list_findings`, `list_detections` | Findings and detection hits. |
 
 The tools cannot write: the assistant cannot create findings, edit notes, change
