@@ -71,6 +71,17 @@ def test_suggestions_are_checked_and_linked_from_their_leads() -> None:
     assert "llama-local" in finding["source_label"]
 
 
+def test_cited_ranges_of_leads_are_expanded() -> None:
+    suggestions, _ = finding_suggestions.build_suggestions(
+        [{"title": "Activity on ws-01", "leads": ["L1-L2"], "description": "Tool run and logons [L2–3]. Also [L9-L12]."}],
+        _leads(), PROVENANCE,
+    )
+    item = suggestions[0]
+    assert [lead["ref"] for lead in item["leads"]] == ["L1", "L2", "L3"]
+    assert {issue["value"] for issue in item["issues"] if issue["kind"] == "unknown_citation"} == {"L9", "L10", "L11", "L12"}
+    assert not [issue for issue in item["issues"] if issue["kind"] == "unsupported_fact"]
+
+
 def test_unknown_severity_and_confidence_fall_back() -> None:
     suggestions, _ = finding_suggestions.build_suggestions(
         [{"title": "Detections on ws-01", "severity": "severe", "confidence": "certain", "mitre": "T1059.001", "description": "Rule fired [L3]."}],
@@ -107,11 +118,15 @@ def test_command_leads_skip_covered_events_and_keep_memory_commands_unlinked(mon
         {"timestamp": "2026-01-10T09:00:00Z", "host": "ws-01", "command": "whoami /all", "risk_score": 40, "source_event_id": "ev-1", "source_type": "sysmon"},
         {"timestamp": "2026-01-10T09:05:00Z", "host": "ws-01", "command": "covered.exe", "risk_score": 95, "source_event_id": "ev-2", "source_type": "sysmon"},
         {"timestamp": "2026-01-10T09:10:00Z", "host": "ws-01", "command": "tool.exe dump", "risk_score": 90, "source_event_id": "mem-key", "source_type": "memory"},
+        {"timestamp": "2026-01-10T09:12:00Z", "host": "ws-01", "command": "whoami  /all", "risk_score": 40, "source_event_id": "ev-3", "source_type": "sysmon"},
     ]
     monkeypatch.setattr("app.services.command_history.get_command_history", lambda *_a, **_k: {"items": items})
     leads = finding_suggestions._command_leads(None, "case-1", {"ev-2"})
     assert [lead["details"]["command"] for lead in leads] == ["tool.exe dump", "whoami /all"]
-    assert leads[0]["backing"]["event_ids"] == [] and leads[1]["backing"]["event_ids"] == ["ev-1"]
+    assert leads[0]["backing"]["event_ids"] == []
+    # The same command on the same host is one lead with every run.
+    assert leads[1]["backing"]["event_ids"] == ["ev-1", "ev-3"] and leads[1]["details"]["runs"] == 2
+    assert leads[1]["time_utc"] == "2026-01-10T09:00:00Z" and leads[1]["last_utc"] == "2026-01-10T09:12:00Z"
 
 
 def test_lateral_leads_leave_out_routine_logons(monkeypatch: pytest.MonkeyPatch) -> None:
