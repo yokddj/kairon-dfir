@@ -55,6 +55,7 @@ from app.ingest.browser.sqlite_chromium import parse_chromium_history_sqlite
 from app.ingest.browser.sqlite_firefox import parse_firefox_places_sqlite
 from app.ingest.archive import ArchiveExtractionError, copy_folder, extract_archive, inventory_folder, write_tree_metadata
 from app.ingest.csv_json import list_generic_artifacts
+from app.ingest.bundled_evidence import bundled_evidence, bundled_kind
 from app.ingest.detector import EVIDENCE_TYPES_WITHOUT_INGEST_SUPPORT, detect_evidence_type
 from app.ingest.host_detection import detect_host_from_artifacts, detect_host_from_velociraptor_collection, normalize_hostname
 from app.ingest.host_facts_extraction import extract_host_fact_documents
@@ -3538,6 +3539,10 @@ def _classify_and_dispatch_extracted(
             continue
 
         result = classifier.classify(file_path)
+        kind = bundled_kind(result.category.value, file_path)
+        if kind:
+            # Evidence of its own kind: not ingested with the collection, listed on the evidence.
+            entry = {**entry, "bundled_evidence": kind}
 
         logger.info(
             "Extracted: %s | Classification: %s(%s)",
@@ -5460,6 +5465,7 @@ def ingest_evidence(evidence_id: str) -> None:
             }
             if linux_inventory.get("hostname") and not metadata.get("provided_host"):
                 metadata.setdefault("linux_detected_hostname", linux_inventory.get("hostname"))
+        metadata["bundled_evidence"] = bundled_evidence(archive_entries)
         evidence.metadata_json = metadata
         db.add(evidence)
         db.commit()

@@ -822,6 +822,12 @@ export default function EvidenceDetail() {
   const statuses = [...new Set((manifest?.artifacts ?? []).map((artifact) => artifact.status))];
   const discovery = (data?.metadata_json?.velociraptor_discovery as { candidates?: VelociraptorCandidate[]; collection_root?: string; hostname?: string; total_files_scanned?: number } | undefined) ?? null;
   const discoveryCandidates = discovery?.candidates ?? [];
+  const bundledEvidence = (Array.isArray(data?.metadata_json?.bundled_evidence) ? data.metadata_json.bundled_evidence : []) as {
+    path: string;
+    kind: string;
+    label: string;
+    size_bytes?: number | null;
+  }[];
   const evtxDeferredCount = typeof data?.metadata_json?.evtx_deferred_count === "number" ? (data.metadata_json.evtx_deferred_count as number) : 0;
   const evtxPartialCount = typeof data?.metadata_json?.evtx_partial_count === "number" ? (data.metadata_json.evtx_partial_count as number) : 0;
   const evtxCoverageStatus = typeof data?.metadata_json?.evtx_coverage_status === "string" ? (data.metadata_json.evtx_coverage_status as string) : "";
@@ -1650,6 +1656,24 @@ function formatReportStatus(status: string | null | undefined) {
                 )}
               </div>
             </div>
+          </div>
+        ) : null}
+
+        {bundledEvidence.length ? (
+          <div className="mt-5 rounded-3xl border border-amber/30 bg-amber/10 p-5" data-testid="evidence-bundled-unprocessed">
+            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-amber">Not processed with this upload</p>
+            <p className="mt-2 text-sm text-muted">
+              These files are evidence of their own kind and were left out of this collection's ingest. Upload each one as separate evidence to analyse it
+              {bundledEvidence.some((item) => item.kind === "pcap") ? " (packet captures cannot be analysed yet)" : ""}.
+            </p>
+            <ul className="mt-3 space-y-1 text-sm">
+              {bundledEvidence.map((item) => (
+                <li key={item.path} className="break-all">
+                  <span className="text-ink">{item.label}</span> · <span className="font-mono text-xs text-muted">{item.path}</span>
+                  {typeof item.size_bytes === "number" ? <span className="text-xs text-muted"> · {formatBytes(item.size_bytes)}</span> : null}
+                </li>
+              ))}
+            </ul>
           </div>
         ) : null}
 
