@@ -11,6 +11,13 @@ left out because pslist/psscan and netscan already give them.
 Every row becomes one event: artifact.parser "memprocfs", artifact.type "memprocfs_<timeline>".
 Ids are derived from the row, so indexing the same scan again replaces the same events; the
 evidence's previous MemProcFS events are removed first, so a new scan never mixes with an old one.
+
+Event log records and Amcache entries are the same records the disk parsers read, so they also go
+through the disk normalizer: they get the tags, risk score, user, process and detection fields an
+EVTX or Amcache file gives, and the built-in detections disk evidence gets (see
+detection_candidates). The type and provenance stay MemProcFS's. NTFS records are not: the MFT
+normalizer flags every program and script under AppData, which on a memory image is hundreds of
+browser and application files.
 """
 
 from __future__ import annotations
@@ -64,6 +71,23 @@ POWERSHELL_EVENT_IDS = (4104, 4103, 400, 403, 600, 800)
 _EVENT_DATA_FIELD = re.compile(r";\s+(?=[A-Za-z][A-Za-z0-9_]*=)")
 # Inside a field's text: "HostApplication=..." (400/403/600/800) or "Host Application = ..." (4103's
 # ContextInfo), and "CommandLine=..." (800), one per line.
+# MemProcFS writes the record's level as its number.
+_EVENT_LEVELS = {"1": "Critical", "2": "Error", "3": "Warning", "4": "Information", "5": "Verbose"}
+# What the disk normalizer reads each timeline as.
+_DISK_ARTIFACT_META: dict[str, dict[str, str]] = {
+    "eventlog": {"artifact_type": "evtx", "parser": "evtxecmd_csv"},
+    "amcache": {"artifact_type": "amcache", "parser": "amcache_csv"},
+}
+# Fields of the disk normalizer's document that describe the record; the rest (ids, host, time,
+# artifact, source) stay the memory event's own.
+_NORMALIZED_FIELDS = (
+    "event", "windows", "user", "process", "parent", "detection", "file", "service", "task", "network", "source",
+    "destination", "powershell", "execution", "amcache", "registry", "suspicious_reasons", "risk_score", "data_quality",
+)
+# A record the disk normalizer does not recognise gets a placeholder message; the memory event's
+# own message carries the record's data.
+_GENERIC_EVENT_ACTIONS = {"windows_event_observed"}
+_PREFETCH = re.compile(r"\\Windows\\Prefetch\\(?P<program>[^\\]+?)-[0-9A-F]{8}\.pf$", re.I)
 _HOST_APPLICATION = re.compile(r"Host ?Application\s*=\s*(?P<value>[^\r\n]*)")
 _COMMAND_LINE = re.compile(r"CommandLine\s*=\s*(?P<value>[^\r\n]*)")
 
@@ -137,6 +161,12 @@ def _details(timeline: str, action: str, text: str) -> tuple[str, str, str, dict
     if timeline == "ntfs":
         path = _VOLUME_PREFIX.sub("", text)
         file_verb = {"read": "accessed"}.get(verb, verb)
+        prefetch = _PREFETCH.search(path)
+        if prefetch and verb == "created":
+            # Windows creates a program's Prefetch file the first time it runs it.
+            program = prefetch["program"]
+            extra = {"file": _file_fields(path), "process": {"name": program}, "execution": {"source": "prefetch_file_created", "program": program}}
+            return "execution", "prefetch_file_created", f"Program run (Prefetch file created, MFT in memory): {program}", extra
         return "file", f"file_{file_verb}", f"File {file_verb} (MFT in memory): {path}", {"file": _file_fields(path)}
     if timeline == "registry":
         return "registry", "registry_key_modified", f"Registry key written: {text}", {"registry": {"key_path": text, "path": text}}
@@ -184,6 +214,87 @@ def _details(timeline: str, action: str, text: str) -> tuple[str, str, str, dict
     return "unknown", f"memprocfs_{timeline}", text, {}
 
 
+def _has_value(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_has_value(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_value(item) for item in value)
+    return value not in (None, "")
+
+
+def _disk_row(timeline: str, text: str, timestamp: str) -> dict[str, Any] | None:
+    """The row a disk parser would have produced for this record, or None."""
+    if timeline == "eventlog":
+        match = _EVTX.search(text)
+        if not match:
+            return None
+        data = (match["data"] or "").strip()
+        fields = event_data_fields(data)
+        return {
+            **fields,
+            "EventData": fields,
+            "EventDataSummary": data,
+            "EventId": match["event"],
+            "Channel": match["channel"],
+            "Provider": match["provider"],
+            "RecordNumber": match["record"],
+            "Level": _EVENT_LEVELS.get(match["level"], match["level"]),
+            "TimeCreated": timestamp,
+        }
+    if timeline == "amcache":
+        match = _AMCACHE_PATH.search(text)
+        if not match:
+            return None
+        return {"FullPath": match["path"], "Name": match["path"].rsplit("\\", 1)[-1], "KeyLastWriteTimestamp": timestamp}
+    return None
+
+
+def _normalize_like_disk(document: dict[str, Any], timeline: str, text: str) -> None:
+    """Fill ``document`` with what the disk normalizer reads from the same record."""
+    from app.ingest.normalizer import normalize_row
+
+    row = _disk_row(timeline, text, document["@timestamp"])
+    if row is None:
+        return
+    meta = {**_DISK_ARTIFACT_META[timeline], "source_tool": PARSER, "source_format": "csv", "source_path": document["source_file"], "os_type": "windows"}
+    try:
+        normalized = normalize_row(document["case_id"], document["evidence_id"], "", row, meta)
+    except Exception:  # noqa: BLE001 -- the memory event stands on its own
+        logger.debug("memprocfs record not normalized", exc_info=True)
+        return
+    own_message = document["event"]["message"]
+    own_powershell = document.get("powershell")
+    for field in _NORMALIZED_FIELDS:
+        # powershell_fields already decided whether the record names a command; the disk
+        # normalizer falls back to "powershell.exe" for an empty script block.
+        if field == "powershell" and not own_powershell:
+            continue
+        value = normalized.get(field)
+        # The disk document carries every block, most of them empty for a given record.
+        if not _has_value(value):
+            continue
+        current = document.get(field)
+        if isinstance(current, dict) and isinstance(value, dict):
+            document[field] = {**current, **{key: item for key, item in value.items() if _has_value(item)}}
+        else:
+            document[field] = value
+    if normalized["event"].get("action") in _GENERIC_EVENT_ACTIONS or not normalized["event"].get("message"):
+        document["event"]["message"] = own_message
+    if own_powershell:
+        document["powershell"] = {**(document.get("powershell") or {}), **own_powershell}
+        document.setdefault("process", {})["name"] = document["process"].get("name") or "powershell.exe"
+    if timeline == "eventlog" and row.get("EventData"):
+        # Where an EVTX record's named fields are kept.
+        document["windows"].setdefault("event_data", row["EventData"])
+    document["tags"] = sorted({*document.get("tags", []), *normalized.get("tags", [])})
+    document["search_text"] = f"{normalized.get('search_text') or ''} {own_message}"[:_MAX_EVENTLOG_TEXT]
+
+
+def detection_candidates(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The events the disk normalizer flagged, for the built-in detections disk evidence gets."""
+    return [document for document in documents if document.get("suspicious_reasons") or int(document.get("risk_score") or 0) > 0]
+
+
 def timeline_event(row: dict[str, str], *, timeline: str, case_id: str, evidence_id: str, scan_run_id: str) -> dict[str, Any] | None:
     """One indexed event for a row of MemProcFS's timeline_<timeline>.csv, or None for a row
     without a usable time."""
@@ -219,6 +330,8 @@ def timeline_event(row: dict[str, str], *, timeline: str, case_id: str, evidence
         "tags": ["memory", "memprocfs"],
         **extra,
     }
+    if timeline in _DISK_ARTIFACT_META:
+        _normalize_like_disk(document, timeline, text)
     pid = (row.get("PID") or "").strip()
     if pid.isdigit() and int(pid) > 0:
         document.setdefault("process", {})["pid"] = pid
@@ -253,8 +366,30 @@ def _delete_previous(case_id: str, evidence_id: str) -> int:
     return delete_by_query_and_wait(client, index, {"bool": {"filter": [{"term": {"evidence_id": evidence_id}}, {"term": {"artifact.parser": PARSER}}]}})
 
 
-def index_memprocfs_timeline(directory: Path, *, case_id: str, evidence_id: str, scan_run_id: str) -> dict[str, Any]:
-    """Replace the evidence's MemProcFS timeline events with the ones saved in ``directory``."""
+def create_timeline_detections(db: Any, *, case_id: str, evidence_id: str, candidates: list[dict[str, Any]]) -> dict[str, int]:
+    """The built-in detections of the indexed memory events: per event, as disk ingest creates
+    them, and the mass-encryption check over the evidence's file events. Indexing again finds the
+    same events and adds nothing."""
+    from app.services.mass_encryption import detect_mass_file_encryption
+    from app.workers.tasks import _create_builtin_detections_for_ids
+
+    created = {"builtin": 0, "mass_encryption": 0}
+    try:
+        created["builtin"] = _create_builtin_detections_for_ids(db, case_id=case_id, evidence_id=evidence_id, artifact_id=None, documents=candidates)
+    except Exception:  # noqa: BLE001 -- the events are indexed either way
+        db.rollback()
+        logger.warning("memprocfs timeline: built-in detections failed", exc_info=True)
+    try:
+        created["mass_encryption"] = detect_mass_file_encryption(db, case_id=case_id, evidence_id=evidence_id)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.warning("memprocfs timeline: mass-encryption check failed", exc_info=True)
+    return created
+
+
+def index_memprocfs_timeline(directory: Path, *, case_id: str, evidence_id: str, scan_run_id: str, db: Any = None) -> dict[str, Any]:
+    """Replace the evidence's MemProcFS timeline events with the ones saved in ``directory``, and
+    with ``db``, create their detections."""
     from app.core.opensearch import bulk_index_events_with_report, ensure_case_index, get_events_index, refresh_index
 
     counts: dict[str, int] = {}
@@ -264,10 +399,12 @@ def index_memprocfs_timeline(directory: Path, *, case_id: str, evidence_id: str,
     index = ensure_case_index(case_id)
     report["replaced"] = _delete_previous(case_id, evidence_id)
     batch: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
 
     def flush() -> None:
         if not batch:
             return
+        candidates.extend(detection_candidates(batch))
         result = bulk_index_events_with_report(case_id, batch, index=index, refresh=False)
         if not result.get("success"):
             raise RuntimeError("MemProcFS timeline events could not be indexed: " + "; ".join((result.get("failed_items") or [])[:5]))
@@ -282,5 +419,7 @@ def index_memprocfs_timeline(directory: Path, *, case_id: str, evidence_id: str,
     flush()
     report["truncated"] = sum(counts.values()) >= MAX_EVENTS
     refresh_index(get_events_index(case_id), raise_on_error=False)
+    if db is not None:
+        report["detections"] = create_timeline_detections(db, case_id=case_id, evidence_id=evidence_id, candidates=candidates)
     logger.info("memprocfs timeline indexed", extra={"case_id": case_id, "evidence_id": evidence_id, "indexed": report["indexed"], "by_timeline": counts})
     return report

@@ -1972,6 +1972,18 @@ BUILTIN_DETECTION_CATALOG: dict[str, BuiltinDetectionDefinition] = {
         false_positives="Cambios normales de red del usuario durante trabajo legítimo.",
         investigation_guidance="Mantener wording prudente: revisar la secuencia temporal completa y no asumir por sí sola actividad maliciosa.",
     ),
+    "possible_mass_file_encryption": BuiltinDetectionDefinition(
+        key="possible_mass_file_encryption",
+        name="Possible mass file encryption",
+        description="Marca ráfagas de ficheros de datos que reaparecen con una misma extensión añadida (Memo.docx -> Memo.docx.enc) en pocos minutos, el rastro que deja un ransomware al cifrar.",
+        severity_source="fixed_high",
+        default_enabled=True,
+        evidence="Eventos de fichero con nombre: MFT/USN de disco y MFT recuperada de memoria (MemProcFS).",
+        fields_consulted=("file.name", "file.path", "@timestamp", "host.name"),
+        example_match="Seis documentos de Desktop y Downloads con copia .enc creada en el mismo segundo.",
+        false_positives="Herramientas de cifrado o compresión lanzadas a propósito sobre muchos documentos, conversiones masivas.",
+        investigation_guidance="Buscar el proceso que escribió los ficheros (Prefetch/Amcache/procesos de memoria a esa hora), notas de rescate y si los originales siguen existiendo.",
+    ),
 }
 
 

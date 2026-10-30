@@ -157,7 +157,9 @@ EVENT_DEFINITIONS: tuple[EventDefinition, ...] = (
     EventDefinition("security_5156", 5156, "network", "network_connection_allowed", "network_connection_allowed", tags=("network", "firewall"), valid_sources=(SECURITY_AUDITING,)),
     EventDefinition("eventlog_1102", 1102, "anti_forensics", "audit_log_cleared", "audit_log_cleared", severity="high", tags=("anti_forensics", "log_cleared", "security"), valid_sources=(EVENTLOG_SECURITY,)),
     EventDefinition("system_7036", 7036, "service", "service_state_changed", "service_state_changed", tags=("service",), valid_sources=(SYSTEM_SCM,)),
-    EventDefinition("system_7040", 7040, "service", "service_start_type_changed", "service_start_type_changed", severity="medium", tags=("service", "persistence"), valid_sources=(SYSTEM_SCM,)),
+    # A start type change installs nothing (that is 7045); Windows switches its own services between
+    # automatic and manual start all the time.
+    EventDefinition("system_7040", 7040, "service", "service_start_type_changed", "service_start_type_changed", severity="low", tags=("service",), valid_sources=(SYSTEM_SCM,)),
     EventDefinition("system_7045", 7045, "persistence", "service_created", "service_created", severity="high", tags=("service", "persistence"), valid_sources=(SYSTEM_SCM,)),
     EventDefinition("task_106", 106, "persistence", "scheduled_task_registered", "scheduled_task_registered", severity="medium", tags=("scheduled_task", "persistence"), valid_sources=(TASK_SCHEDULER, TASK_SCHEDULER_ALT)),
     EventDefinition("task_140", 140, "persistence", "scheduled_task_updated", "scheduled_task_updated", severity="medium", tags=("scheduled_task",), valid_sources=(TASK_SCHEDULER, TASK_SCHEDULER_ALT)),

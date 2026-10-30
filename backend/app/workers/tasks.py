@@ -100,6 +100,7 @@ from app.services.host_attribution import choose_primary_host, classify_host_can
 from app.services.host_facts import create_host_fact_observations, delete_host_facts_for_evidence
 from app.services.host_users import create_host_user_fact_observations, delete_host_user_facts_for_evidence
 from app.services.host_identity import apply_case_host_identity
+from app.services.mass_encryption import detect_mass_file_encryption
 from app.services.parser_backend_evaluation import _tool_dll_path
 from app.services.evidence_runs import get_evidence_run, merge_evidence_metadata, start_ingest_run, sync_ingest_run_from_metadata, upsert_ingest_run
 from app.services.indexing_profiles import close_indexing_plan_job
@@ -3963,7 +3964,8 @@ def _builtin_detection_from_document(document: dict) -> tuple[str, str, str, str
     process = document.get("process", {}) or {}
     file_data = document.get("file", {}) or {}
     disabled_rules = set(load_builtin_detection_overrides().get("disabled_rules", []))
-    if event_type in {"program_observed", "installed_program_observed", "execution_candidate"} and str((document.get("artifact", {}) or {}).get("type") or "") == "amcache":
+    # Amcache entries MemProcFS recovers from memory are normalized as Amcache rows (memprocfs_timeline).
+    if event_type in {"program_observed", "installed_program_observed", "execution_candidate"} and str((document.get("artifact", {}) or {}).get("type") or "") in {"amcache", "memprocfs_amcache"}:
         target_path = str(file_data.get("path") or process.get("path") or "").lower()
         publisher = str(process.get("publisher") or "").strip()
         if "defender_correlated" in tags:
@@ -4183,6 +4185,10 @@ def _builtin_detection_from_document(document: dict) -> tuple[str, str, str, str
     if event_type in {
         "defender_detection",
         "defender_log_observed",
+        # What the event log normalizer calls Defender's 1116 and 1118.
+        "malware_detected",
+        "defender_malware_detected",
+        "defender_action_failed",
         "threat_detected",
         "threat_blocked",
         "threat_quarantined",
@@ -6556,6 +6562,14 @@ def ingest_evidence(evidence_id: str) -> None:
         evidence = db.get(Evidence, evidence_id)
         if not evidence:
             raise RuntimeError(f"Evidence {evidence_id} disappeared before ingest finalization")
+        if indexed_count:
+            # Needs the evidence's file events together, so it runs once they are all indexed.
+            try:
+                detect_mass_file_encryption(db, case_id=evidence.case_id, evidence_id=evidence_id)
+            except Exception as exc:  # noqa: BLE001
+                db.rollback()
+                logger.warning("Mass-encryption check failed for evidence %s: %s", evidence_id, exc)
+                detection_warnings.append("mass_encryption_check_failed")
         _debug_db_trace(
             "_finalization_session_reset",
             db=db,

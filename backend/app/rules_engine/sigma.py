@@ -115,6 +115,11 @@ SIGMA_FIELD_MAP = {
     "Company": ["process.company"],
 }
 
+# Windows event log records, whichever way they reached the case: parsed from EVTX files, or
+# recovered from memory by MemProcFS. A record from memory carries the same event id, channel and
+# provider as its EVTX copy, so the same rules apply to it.
+WINDOWS_EVENT_LOG_ARTIFACT_TYPES = frozenset({"windows_event", "evtx_raw", "memprocfs_eventlog"})
+
 MODIFIER_SUFFIXES = ("|contains", "|endswith", "|startswith", "|re", "|all")
 SEARCH_TEXT_FALLBACK_FIELDS = {"ScriptBlockText", "Details", "CommandLine", "ParentCommandLine"}
 CONDITION_TOKENS_RE = re.compile(r"\(|\)|\band\b|\bor\b|\bnot\b|[A-Za-z0-9_*]+", re.IGNORECASE)
@@ -1008,7 +1013,7 @@ def build_sigma_rule_prefilter(rule_data: dict, case_profile: dict) -> dict:
     field_exists: set[str] = set()
 
     if product == "windows":
-        artifact_types.update({"windows_event", "evtx_raw"} & artifact_types_present or {"windows_event"})
+        artifact_types.update(WINDOWS_EVENT_LOG_ARTIFACT_TYPES & artifact_types_present or {"windows_event"})
     if service:
         for channel in channels_present:
             lowered = channel.lower()
@@ -1278,7 +1283,7 @@ def document_matches_sigma_logsource(logsource: dict, document: dict) -> tuple[b
     category = str(logsource.get("category") or "").strip().lower()
     if product == "windows":
         artifact_type = str(_get_nested_value(document, "artifact.type") or "").strip().lower()
-        if artifact_type and artifact_type not in {"windows_event", "evtx_raw"}:
+        if artifact_type and artifact_type not in WINDOWS_EVENT_LOG_ARTIFACT_TYPES:
             return False, "logsource_mismatch"
     if product == "linux" and service in LINUX_SERVICE_ARTIFACT_TYPES:
         artifact_type = str(_get_nested_value(document, "artifact.type") or "").strip().lower()

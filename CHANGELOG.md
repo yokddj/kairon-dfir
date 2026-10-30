@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added
+
+- Built-in detection **Possible mass file encryption**: five or more data files that reappear with one appended extension (`Memo.docx` -> `Memo.docx.enc`) within ten minutes on one host, the mark ransomware leaves when it encrypts in place. Reads any indexed file event with a name (MFT and USN from disk, the MFT MemProcFS recovers from memory), at the end of an evidence's ingest and after a memory image's timeline is indexed. Extensions Windows and applications append themselves (`.lnk`, `.crdownload`, `.tmp`, `.bak`...) do not count.
+
+### Changed
+
+- Memory: the event log records and Amcache entries MemProcFS recovers are normalized like their EVTX and Amcache copies from disk (tags, risk, user, process and Defender detection fields) and get the built-in detections disk evidence gets; Sigma's Windows rules now run on them too (the engine only accepted EVTX documents as Windows event logs). A memory-only case therefore gets detections, and with them leads for **Suggest findings with AI**, instead of only the antivirus records Find Evil lists. The memory index (processes, Find Evil, network) still does not reach Detections. NTFS records are not put through the MFT normalizer, which flags every program under AppData; a Prefetch file seen being created in the MFT in memory is recorded as a program run.
+
+### Fixed
+
+- Defender's 1116 (malware detected) got the generic "High-risk event" built-in detection instead of **Defender High Severity Detection** and its sibling rules.
+- Terminal Services session manager records of console sessions (`Address: LOCAL`, and logoff or disconnect records that name no address) were tagged as RDP and produced "RDP activity" detections. Only a record naming a network address is remote access now.
+- Event ids 106 and 140 were tagged as scheduled-task persistence whatever wrote them; AppReadiness uses 106 for unrelated records. Now only the Task Scheduler's log counts.
+- 7040 (a service's start type changed) was tagged as persistence and scored high enough to become a "High-risk event"; Windows switches its own services between automatic and manual start constantly. It is now a low-severity service event.
+
 ## 1.2.0 - 2026-10-30
 
 Full notes: [docs/releases/1.2.0.md](docs/releases/1.2.0.md).

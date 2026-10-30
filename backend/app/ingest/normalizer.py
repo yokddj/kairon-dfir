@@ -1486,6 +1486,30 @@ def _apply_data_quality(document: dict) -> dict:
     return document
 
 
+# A Terminal Services session record naming a network address ("Address: 10.0.0.5",
+# "Source Network Address=fe80::1"); a console session says "LOCAL" or names none.
+_REMOTE_SESSION_ADDRESS = re.compile(r"address\W{0,3}(?!local\b)[0-9a-f]{1,4}[.:]", re.IGNORECASE)
+
+
+def _windows_record_text(windows: dict) -> str:
+    event_data = windows.get("event_data") if isinstance(windows.get("event_data"), dict) else {}
+    values = [f"{key}={value}" for key, value in event_data.items() if isinstance(value, (str, int))]
+    payload = event_data.get("payload_columns") if isinstance(event_data.get("payload_columns"), dict) else {}
+    values += [str(value) for value in payload.values() if isinstance(value, str) and len(value) < 500]
+    return " ".join([*values, str(windows.get("event_data_summary") or "")])
+
+
+def _drop_routine_windows_tags(tags: set[str], windows: dict) -> None:
+    """Tags an event id alone suggests but the record itself rules out."""
+    source = f"{windows.get('channel') or ''} {windows.get('provider') or ''}".lower()
+    if not source.strip():
+        return
+    # The session manager logs console sessions too: only a record naming a network address is
+    # remote access. Its logoff and disconnect records name none, whatever the session was.
+    if "localsessionmanager" in source and not _REMOTE_SESSION_ADDRESS.search(_windows_record_text(windows)):
+        tags.difference_update({"rdp", "remote_access"})
+
+
 def _apply_suspicious_tags(document: dict) -> dict:
     tags = set(document.get("tags", []))
     suspicious_reasons = set(str(item) for item in (document.get("suspicious_reasons") or []) if item)
@@ -1514,12 +1538,16 @@ def _apply_suspicious_tags(document: dict) -> dict:
 
     if event_id in (4697, 7045):
         tags.update({"service_install", "persistence"})
-    if event_id in (4698, 4702, 106, 140):
+    # 106 and 140 are task registration and update only in the Task Scheduler's own log; other
+    # providers (AppReadiness, ...) use the same numbers for unrelated records.
+    channel_text = f"{windows.get('channel') or ''} {windows.get('provider') or ''}".lower()
+    if event_id in (4698, 4702) or (event_id in (106, 140) and (not channel_text.strip() or "taskscheduler" in channel_text)):
         tags.update({"scheduled_task", "persistence"})
     if event_id in SUSPICIOUS_RULES.get("event_ids", {}).get("rdp", []):
         tags.add("rdp")
     if event_id in SUSPICIOUS_RULES.get("event_ids", {}).get("powershell", []):
         tags.add("powershell")
+    _drop_routine_windows_tags(tags, windows)
 
     document["tags"] = sorted(tags)
     if document.get("_preserve_risk_score"):
