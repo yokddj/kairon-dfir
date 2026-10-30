@@ -154,3 +154,22 @@ def test_accepted_draft_shows_narrative_and_ai_provenance(monkeypatch: pytest.Mo
     assert "ai_provenance" not in report.metadata_json
     content, _filename, _media = report_service.export_case_report(db, "case-1", "report-1", format="markdown")
     assert "Use of AI" not in content
+
+
+def test_no_transaction_is_held_while_the_model_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model can take minutes; an open transaction meanwhile blocks migrations
+    and any schema change at startup."""
+    db = _configured_db(monkeypatch)
+    order: list[str] = []
+    original_commit = db.commit
+    monkeypatch.setattr(db, "commit", lambda: (order.append("commit"), original_commit())[1])
+
+    class Provider(_DraftingProvider):
+        def stream_chat(self, **kwargs):
+            order.append("model")
+            yield from super().stream_chat(**kwargs)
+
+    monkeypatch.setattr(report_draft, "build_provider", Provider)
+    monkeypatch.setattr(report_service, "build_case_report_preview", lambda *_a, **_k: {"ai_context": MATERIAL})
+    report_draft.draft_report_narrative(db, "case-1", "report-1")
+    assert order.index("commit") < order.index("model")

@@ -27,6 +27,7 @@ MAX_ANCESTORS = 3
 MAX_DEPTH = 3
 MAX_NODES = 24
 MAX_SEEDS = 6
+MAX_RESOLVED = 3
 MARKER = "<!-- execution-diagram:{key} -->"
 
 
@@ -46,19 +47,30 @@ def _node(raw: dict[str, Any], **extra: Any) -> dict[str, Any]:
 
 
 def _story_for(case: Any, evidences: list[Any], finding: Any) -> dict[str, Any] | None:
+    """The story of the riskiest process the finding's first resolving seeds
+    point to: a finding's first event is not always its key process."""
     from app.services.process_tree import build_execution_story
 
     seeds = [("process_guid", value) for value in (finding.related_process_node_ids or [])[:3]]
     seeds += [("source_event_id", value) for value in (finding.event_ids or [])[:MAX_SEEDS]]
+    stories: list[dict[str, Any]] = []
+    seen_targets: set[str] = set()
     for kind, value in seeds:
+        if len(stories) >= MAX_RESOLVED:
+            break
         try:
             story = build_execution_story(case, evidences, scope="case", max_nodes=80, parent_depth=MAX_ANCESTORS, child_depth=MAX_DEPTH, **{kind: str(value)})
         except Exception:  # noqa: BLE001 -- try the next seed; the report renders without a diagram
             logger.warning("execution diagram: story for %s %s failed", kind, value, exc_info=True)
             continue
-        if story.get("target"):
-            return story
-    return None
+        target = story.get("target")
+        if target and str(target.get("id")) not in seen_targets:
+            seen_targets.add(str(target.get("id")))
+            stories.append(story)
+    if not stories:
+        return None
+    # Riskiest first; on a tie the one that started more, then the earliest seed.
+    return max(enumerate(stories), key=lambda item: (int(item[1]["target"].get("risk_score") or 0), len(item[1].get("children") or []), -item[0]))[1]
 
 
 def build_execution_tree(db: Session, case: Any, evidences: list[Any], finding: Any) -> dict[str, Any] | None:

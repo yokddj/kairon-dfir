@@ -374,7 +374,7 @@ def test_language_is_saved_on_the_report() -> None:
 
 _LATERAL_EDGES = [
     {"target_host": "SRV-01", "source_ip": "192.0.2.42", "source_hosts": ["WS-02"], "source_workstations": ["kali"], "user": "svc_sql", "domain": "CORP",
-     "method": "Remote Desktop (type 10)", "successes": 2, "failures": 1, "first_seen": "2026-05-15T12:05:59Z", "last_seen": "2026-05-15T12:30:00Z",
+     "method": "Remote Desktop (type 10)", "logon_type": "10", "successes": 2, "failures": 1, "first_seen": "2026-05-15T12:05:59Z", "last_seen": "2026-05-15T12:30:00Z",
      "routine_reason": None, "workstation_mismatch": True, "source_ambiguous": False},
     {"target_host": "DC-01", "source_ip": "192.0.2.41", "source_hosts": ["WS-01"], "source_workstations": [], "user": "WS-01$", "domain": "CORP",
      "method": "Network logon (type 3: SMB, WinRM, PsExec, WMI...)", "successes": 40, "failures": 0, "first_seen": "2026-05-15T08:00:00Z",
@@ -391,7 +391,7 @@ def test_lateral_movement_section_lists_remote_logons_without_routine(monkeypatc
     assert section["empty"] is False
     markdown = section["markdown"]
     assert "WS-02 (192.0.2.42) [workstation name: kali]" in markdown
-    assert "CORP\\svc_sql" in markdown and "2 succeeded, 1 failed" in markdown
+    assert "CORP\\svc_sql" in markdown and "2 succeeded, 1 failed" in markdown and "RDP (type 10)" in markdown
     assert "WS-01$" not in markdown and "1 routine connections" in markdown
     lateral = preview["ai_context"]["lateral_movement"]
     assert [row["account"] for row in lateral] == ["CORP\\svc_sql"]

@@ -81,3 +81,15 @@ def test_no_job_is_queued_when_ai_is_off(db, monkeypatch) -> None:
     with pytest.raises(jobs.ReportDraftUnavailable):
         jobs.start_ai_job(db, CASE, jobs.FINDING_SUGGESTIONS)
     assert db.queued == []
+
+
+def test_aware_timestamps_from_postgres_are_compared_in_utc() -> None:
+    from datetime import UTC, datetime, timedelta, timezone
+
+    job = CaseAnalysisJob(case_id=CASE, analysis_type=jobs.FINDING_SUGGESTIONS, status=CaseAnalysisJobStatus.running)
+    job.started_at = datetime.now(timezone(timedelta(hours=2))) - timedelta(minutes=5)
+    job.created_at = datetime.now(UTC)
+    assert jobs._stalled(job) is False
+    job.started_at = datetime.now(UTC) - timedelta(seconds=jobs.JOB_TIMEOUT_SECONDS + 120)
+    assert jobs._stalled(job) is True
+    assert jobs._iso(datetime(2026, 1, 10, 11, 0, tzinfo=timezone(timedelta(hours=2)))) == "2026-01-10T09:00:00+00:00"

@@ -31,6 +31,13 @@ def _now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+def _naive_utc(value: datetime | None) -> datetime | None:
+    """Postgres returns aware timestamps and SQLite naive ones; compare in naive UTC."""
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone(UTC).replace(tzinfo=None)
+
+
 def _jobs(db: Session, case_id: str, kind: str, report_id: str | None):
     jobs = (
         db.query(CaseAnalysisJob)
@@ -44,7 +51,7 @@ def _jobs(db: Session, case_id: str, kind: str, report_id: str | None):
 
 def _stalled(job: CaseAnalysisJob) -> bool:
     """A job the worker never finished (restart, sleep): past its timeout."""
-    reference = job.started_at or job.created_at
+    reference = _naive_utc(job.started_at or job.created_at)
     return job.status in _ACTIVE and reference is not None and _now() - reference > timedelta(seconds=JOB_TIMEOUT_SECONDS + 60)
 
 
@@ -104,7 +111,7 @@ def serialize_job(db: Session, job: CaseAnalysisJob) -> dict[str, Any]:
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.replace(tzinfo=UTC).isoformat() if value else None
+    return _naive_utc(value).replace(tzinfo=UTC).isoformat() if value else None
 
 
 def _mark_created(db: Session, case_id: str, result: dict[str, Any]) -> dict[str, Any]:

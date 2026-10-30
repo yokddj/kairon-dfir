@@ -95,6 +95,8 @@ def draft_report_narrative(db: Session, case_id: str, report_id: str) -> dict[st
     language = _LANGUAGE_NAMES.get(str(material.get("language") or "en"), "English")
     system = SYSTEM_PROMPT.replace("{language}", language)
     user = "Case material (JSON):\n" + json.dumps(material, ensure_ascii=False, default=str)
+    # The model can take minutes: hold no transaction (and no lock) meanwhile.
+    db.commit()
     text = complete(credentials, system=system, user=user, what="draft")
     draft = parse_draft(text)
     return {

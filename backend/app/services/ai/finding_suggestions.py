@@ -342,6 +342,8 @@ def suggest_findings(db: Session, case_id: str) -> dict[str, Any]:
         ],
     }
     system = SYSTEM_PROMPT.replace("{max}", str(MAX_SUGGESTIONS))
+    # The model can take minutes: hold no transaction (and no lock) meanwhile.
+    db.commit()
     text = complete(credentials, system=system, user="Open leads (JSON):\n" + json.dumps(material, ensure_ascii=False, default=str), what="suggestions")
     reply = parse_json_reply(text, "suggestions")
     provenance = {

@@ -43,7 +43,7 @@ def test_tree_has_ancestors_the_process_and_its_children(monkeypatch) -> None:
     monkeypatch.setattr("app.services.process_tree.build_execution_story", story)
     finding = SimpleNamespace(related_process_node_ids=[], event_ids=["ev-1", "ev-2", "ev-3"])
     tree = diagram.build_execution_tree(None, None, [], finding)
-    assert seeds == ["ev-1", "ev-2"]
+    assert seeds == ["ev-1", "ev-2", "ev-3"]
     assert [(node["name"], node["depth"], node["missing"], node["focus"]) for node in tree["nodes"]] == [
         ("services.exe", 0, True, False),
         ("cmd.exe", 1, False, False),
@@ -79,3 +79,11 @@ def test_report_section_carries_the_text_tree_and_the_pdf_draws_it(monkeypatch) 
     assert not any(isinstance(item, Drawing) for item in story)
     missing = report_service._render_process_chains([finding], {"f1": None})
     assert "No process-creation record" in missing
+
+
+def test_the_riskiest_resolved_process_is_drawn(monkeypatch) -> None:
+    low = {**STORY, "target": {**TARGET, "id": "p9", "name": "csc.exe", "risk_score": 10}, "children": []}
+    stories = {"ev-1": low, "ev-2": STORY}
+    monkeypatch.setattr("app.services.process_tree.build_execution_story", lambda *_a, **k: stories.get(k.get("source_event_id"), {"target": None}))
+    tree = diagram.build_execution_tree(None, None, [], SimpleNamespace(related_process_node_ids=[], event_ids=["ev-1", "ev-2"]))
+    assert next(node for node in tree["nodes"] if node["focus"])["name"] == "rundll32.exe"

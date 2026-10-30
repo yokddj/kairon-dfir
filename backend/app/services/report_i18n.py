@@ -143,6 +143,7 @@ _SPANISH: dict[str, str] = {
     "Network logon (type 3: SMB, WinRM, PsExec, WMI...)": "Inicio de sesión de red (tipo 3: SMB, WinRM, PsExec, WMI...)",
     "Network cleartext logon (type 8)": "Inicio de sesión de red en texto claro (tipo 8)",
     "Remote Desktop (type 10)": "Escritorio remoto (tipo 10)",
+    "Network (type 3)": "Red (tipo 3)", "Network cleartext (type 8)": "Red en claro (tipo 8)", "RDP (type 10)": "RDP (tipo 10)",
     "Detected by": "Detectado por", "Target": "Objetivo",
     "real-time protection": "protección en tiempo real", "system scan": "análisis del sistema",
     "AMSI (script scan)": "AMSI (análisis de scripts)", "download/attachment scan": "análisis de descargas/adjuntos",
