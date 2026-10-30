@@ -234,6 +234,7 @@ function buildState(searchParams: URLSearchParams) {
     marked_has_note: searchParams.get("marked_has_note") ?? "",
     marked_in_finding: searchParams.get("marked_in_finding") ?? "",
     include_filesystem_timeline: searchParams.get("include_filesystem_timeline") ?? "",
+    hide_routine: searchParams.get("hide_routine") ?? "",
     evidence_id: searchParams.get("evidence_id") ?? "",
     workbench: searchParams.get("workbench") ?? "",
     domain_scope: searchParams.get("domain_scope") ?? "",
@@ -1527,6 +1528,7 @@ export default function Search() {
       marked_has_note: state.marked_has_note,
       marked_in_finding: state.marked_in_finding,
       include_filesystem_timeline: state.include_filesystem_timeline,
+      hide_routine: state.hide_routine,
       evidence_id: state.evidence_id || selectedEvidenceId,
       platform: state.platform || registryDefaultFilters.platform,
       source_category: state.source_category || registryDefaultFilters.source_category,
@@ -1583,6 +1585,7 @@ export default function Search() {
         marked_has_note: searchRequestState.marked_has_note === "true" || undefined,
         marked_in_finding: searchRequestState.marked_in_finding === "true" || undefined,
         include_filesystem_timeline: searchRequestState.include_filesystem_timeline === "true" || undefined,
+        hide_routine: searchRequestState.hide_routine === "true" || undefined,
         time_from: searchRequestState.time_from || undefined,
         time_to: searchRequestState.time_to || undefined,
         sort: searchRequestState.sort,
@@ -1774,6 +1777,7 @@ export default function Search() {
     if (state.parser.length) chips.push({ key: "parser", label: `parser: ${state.parser.join(", ")}`, clear: { parser: null } });
     if (state.backend_variant.length) chips.push({ key: "backend_variant", label: `backend: ${state.backend_variant.join(", ")}`, clear: { backend_variant: null } });
     if (state.parser_backend.length) chips.push({ key: "parser_backend", label: `parser backend: ${state.parser_backend.join(", ")}`, clear: { parser_backend: null } });
+    if (state.hide_routine === "true") chips.push({ key: "hide_routine", label: "NOT routine system activity", clear: { hide_routine: null } });
     if (state.exclude_parser.length) chips.push({ key: "exclude_parser", label: `NOT parser: ${state.exclude_parser.join(", ")}`, clear: { exclude_parser: null } });
     if (state.exclude_host) chips.push({ key: "exclude_host", label: `NOT host: ${state.exclude_host}`, clear: { exclude_host: null } });
     if (state.exclude_user) chips.push({ key: "exclude_user", label: `NOT user: ${state.exclude_user}`, clear: { exclude_user: null } });
@@ -2023,6 +2027,7 @@ export default function Search() {
     if (searchRequestState.parser_backend.length) params.set("parser_backend", joinParam(searchRequestState.parser_backend));
     if (searchRequestState.exclude_artifact_type.length) params.set("exclude_artifact_type", joinParam(searchRequestState.exclude_artifact_type));
     if (searchRequestState.exclude_parser.length) params.set("exclude_parser", joinParam(searchRequestState.exclude_parser));
+    if (searchRequestState.hide_routine === "true") params.set("hide_routine", "true");
     if (searchRequestState.host) params.set("host", searchRequestState.host);
     if (searchRequestState.host_id) params.set("host_id", searchRequestState.host_id);
     if (searchRequestState.user) params.set("user", searchRequestState.user);
@@ -2756,6 +2761,17 @@ export default function Search() {
                     </button>
                   ))}
                 </div>
+                <label
+                  className="flex items-center gap-2 rounded-full border border-line px-3 py-1.5 text-xs text-muted"
+                  title="Hides process starts of core system processes (svchost.exe, services.exe, systemd daemons...) only when the image path and the parent are the expected ones. A masquerading process stays visible."
+                >
+                  <input
+                    type="checkbox"
+                    checked={state.hide_routine === "true"}
+                    onChange={(event) => updateParams({ hide_routine: event.target.checked ? "true" : null })}
+                  />
+                  Hide routine system activity
+                </label>
                 {state.tab === "timeline" ? (
                   <label className="flex items-center gap-2 rounded-full border border-line px-3 py-1.5 text-xs text-muted">
                     <input

@@ -119,6 +119,10 @@ Use Artifact Views when you need specialized columns:
 
 Artifact Views should always offer a way back to Search for matching documents.
 
+## Hiding routine system activity
+
+*Hide routine system activity* (Search and Timeline, off by default, `hide_routine=true` in the API) hides the process starts the operating system makes on its own. A process start is hidden only when three facts on the event match a known-good baseline: the process name is a core system process (svchost.exe, services.exe, lsass.exe, WmiPrvSE.exe, .NET ngen workers, systemd daemons...), its image lives in the directory it always runs from, and its parent is the process that always starts it. An event missing the path or the parent is never hidden. A svchost.exe started from another folder or by another parent stays visible: that is the masquerading this baseline exists to expose. Tools an attacker also uses (wevtutil, schtasks, rundll32, PowerShell, cmd, conhost, sshd...) are never in the baseline. Other events from these processes (network, file) are not affected. Memory process rows carry no parent name and are never hidden. The baseline lives in `backend/app/services/routine_activity.py`.
+
 ## Advanced backend filters
 
 EZ Tool advanced rebuilds can produce additional docs for LNK, Jumplist, Amcache and Shimcache.

@@ -179,6 +179,11 @@ describe("TimelinePage", () => {
     );
   });
 
+  it("passes the routine activity filter from the url", async () => {
+    renderPage("/cases/case-1/timeline?hide_routine=true");
+    await waitFor(() => expect(getTimelineMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ hide_routine: true })));
+  });
+
   it("renders ntfs artifact label when present", async () => {
     getTimelineMock.mockResolvedValueOnce({
       case_id: "case-1",

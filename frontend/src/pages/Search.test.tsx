@@ -357,6 +357,15 @@ describe("Search page", () => {
     expect(within(chips).getByText(/NOT source: Security\.evtx/i)).toBeInTheDocument();
   });
 
+  it("hides routine system activity on request and shows it as a NOT chip", async () => {
+    renderPage(["/search"]);
+    await screen.findByTestId("results-table");
+    expect(searchCaseMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ hide_routine: undefined }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /Hide routine system activity/i }));
+    await waitFor(() => expect(searchCaseMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ hide_routine: true })));
+    expect(within(screen.getByTestId("active-filter-chips")).getByText(/NOT routine system activity/i)).toBeInTheDocument();
+  });
+
   it("preserves command phrase queries with hyphen flags as literal text", async () => {
     renderPage(["/search?q=powershell%20-ep%20bypass"]);
     await screen.findByTestId("results-table");
