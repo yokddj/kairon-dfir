@@ -295,7 +295,12 @@ export default function CaseReportsPage() {
   const selectedKeyEventIds = new Set(currentReport?.selected_key_event_ids ?? []);
   const chainCandidates = useMemo(
     // Any finding with process nodes or events: the report resolves the process behind it and draws its tree.
-    () => (findingsQuery.data ?? []).filter((finding) => (finding.related_process_node_ids?.length ?? 0) > 0 || (finding.event_ids?.length ?? 0) > 0),
+    // The findings list carries counts, not the id lists themselves.
+    () => (findingsQuery.data ?? []).filter((finding) =>
+      (finding.event_count ?? 0) > 0
+      || Boolean(finding.process_entity_id)
+      || (finding.related_process_node_ids?.length ?? 0) > 0
+      || (finding.event_ids?.length ?? 0) > 0),
     [findingsQuery.data],
   );
   const previewCounts = previewQuery.data?.counts ?? previewQuery.data?.stats ?? {};
