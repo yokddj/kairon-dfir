@@ -15,6 +15,12 @@
 - Defender's 1116 (malware detected) got the generic "High-risk event" built-in detection instead of **Defender High Severity Detection** and its sibling rules.
 - Terminal Services session manager records of console sessions (`Address: LOCAL`, and logoff or disconnect records that name no address) were tagged as RDP and produced "RDP activity" detections. Only a record naming a network address is remote access now.
 - Event ids 106 and 140 were tagged as scheduled-task persistence whatever wrote them; AppReadiness uses 106 for unrelated records. Now only the Task Scheduler's log counts.
+- Sigma matched records a rule was not written for, on disk and memory cases alike:
+  - A selection written as a list of maps (`- ServiceName: PSEXESVC` / `- ImagePath|endswith: \PSEXESVC.exe`) was dropped when compiling, so `all of selection_*` kept only the event id: every 7045 matched PsExec, AnyDesk, PDQDeploy and a dozen other service-installation rules.
+  - `contains|all` matched a field holding any one of the values instead of all of them.
+  - A rule's `service` restricted the channel for five services only, by substring, and `windefend` was not one of them. Each Windows service now maps to its channels as in the Sigma Windows pipeline (AppLocker's 8025 no longer matches Windows Hello's), Sysmon categories need Sysmon records (WMI Event Subscription matched any event 19-21), script-block rules need the PowerShell Operational log, and Linux rules no longer run on Windows records (Modifying Crontab matched the word REPLACE anywhere).
+  - The channels a case has were read from a 1000-event sample, so on a memory image (all registry writes in the sample) every Defender rule was skipped. They now come from an aggregation over the scope; and the evaluated documents now carry the channel, provider and type the log-source checks read.
+  - Stored compilations are refreshed when the engine changes.
 - 7040 (a service's start type changed) was tagged as persistence and scored high enough to become a "High-risk event"; Windows switches its own services between automatic and manual start constantly. It is now a low-severity service event.
 
 ## 1.2.0 - 2026-10-30

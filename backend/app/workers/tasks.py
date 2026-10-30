@@ -85,6 +85,7 @@ from app.models.rule_set import RuleSet
 from app.rules_engine.heuristic import build_heuristic_query, load_heuristic_rule
 from app.rules_engine.builtin_catalog import get_builtin_detection_definition
 from app.rules_engine.sigma import (
+    ENGINE_COMPATIBILITY_VERSION as SIGMA_ENGINE_VERSION,
     build_sigma_case_profile,
     build_sigma_query,
     build_sigma_query_from_compiled,
@@ -9637,6 +9638,16 @@ def _sigma_rule_source_fields(compiled_rule: dict | None) -> list[str]:
         "artifact.name",
         "artifact.type",
         "artifact.parser",
+        # What document_matches_sigma_logsource reads: without them every record looked
+        # channel-less and passed the channel checks.
+        "windows.event_id",
+        "windows.channel",
+        "windows.provider",
+        "event.channel",
+        "event.type",
+        "event.action",
+        "os.type",
+        "linux.audit_type",
         "host.name",
         "file.path",
         "file.sha256",
@@ -9852,6 +9863,19 @@ def _case_source_products(case_id: str, scope_query: dict) -> set[str]:
     return products
 
 
+def _case_term_counts(case_id: str, scope_query: dict, field_name: str, size: int = 2000) -> dict[str, int]:
+    """How many events in scope hold each value of ``field_name``; empty when it cannot be read."""
+    try:
+        result = search_documents(
+            get_events_index(case_id),
+            {"size": 0, "query": scope_query, "aggs": {"values": {"terms": {"field": field_name, "size": size}}}},
+        )
+    except Exception:  # noqa: BLE001 -- the sample's view stands
+        return {}
+    buckets = ((result.get("aggregations") or {}).get("values") or {}).get("buckets") or []
+    return {str(bucket.get("key")): int(bucket.get("doc_count") or 0) for bucket in buckets if str(bucket.get("key", "")).strip()}
+
+
 # Cached per process: an index's result window does not change during a run, and
 # this is consulted once per rule.
 _RESULT_WINDOW_CACHE: dict[str, int] = {}
@@ -9962,6 +9986,13 @@ def _build_sigma_case_profile_for_scope(case_id: str, evidence_id: str | None, m
     profile["source_products"] = sorted(
         set(profile.get("source_products") or []) | _case_source_products(case_id, query)
     )
+    # The same holds for which channels, record types and event ids the case has: a memory
+    # image's sample is all registry writes, and its Defender channel looked absent, so every
+    # Defender rule was skipped as an unsupported log source.
+    for profile_key, field_name in (("channels_present", "windows.channel"), ("artifact_types_present", "artifact.type"), ("event_ids_present", "windows.event_id")):
+        counts = _case_term_counts(case_id, query, field_name)
+        if counts:
+            profile[profile_key] = {**dict(profile.get(profile_key) or {}), **counts}
     profile["case_id"] = case_id
     if evidence_id:
         profile["evidence_id"] = evidence_id
@@ -10042,7 +10073,7 @@ def run_rule_on_case(rule_id: str | None, case_id: str, evidence_id: str | None 
         sigma_metadata = {}
         if rule.engine.value == "sigma":
             sigma_compiled = dict((rule.metadata_json or {}).get("sigma_compilation") or {})
-            if sigma_compiled.get("compile_status") != "compiled":
+            if sigma_compiled.get("compile_status") != "compiled" or sigma_compiled.get("compile_version") != SIGMA_ENGINE_VERSION:
                 sigma_rule_data = parse_sigma_rule(rule.content)[0]
                 sigma_compiled = compile_sigma_rule(sigma_rule_data)
             sigma_metadata = extract_sigma_metadata(sigma_rule_data) if sigma_rule_data else {
@@ -10717,7 +10748,7 @@ def run_rules_on_case(case_id: str, engines: list[str], rule_ids: list[str], ena
                 continue
             try:
                 sigma_compiled = dict((item.metadata_json or {}).get("sigma_compilation") or {})
-                if sigma_compiled.get("compile_status") != "compiled":
+                if sigma_compiled.get("compile_status") != "compiled" or sigma_compiled.get("compile_version") != SIGMA_ENGINE_VERSION:
                     sigma_rules = parse_sigma_rule(item.content)
                     sigma_rule_data = sigma_rules[0]
                     sigma_compiled = compile_sigma_rule(sigma_rule_data)

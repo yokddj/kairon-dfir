@@ -206,23 +206,84 @@ SIGMA_FIELD_CATEGORY_HINTS = {
     "url.full": "network_connection",
     "powershell.script_block_text": "powershell",
 }
+# The event log channels each Sigma Windows ``service`` reads, as the Sigma Windows pipeline maps
+# them (lower case; a trailing * is a prefix). A rule for a service only runs on records of these
+# channels: before, only five services were known, by substring, and the rest -- system, windefend,
+# applocker, wmi, dns-server, capi2... -- ran on every channel holding the same event id (AppLocker's
+# 8025 matched Windows Hello's, Defender's 1006 any provider's).
 SIGMA_SERVICE_CHANNEL_HINTS = {
-    "sysmon": ["sysmon"],
+    "sysmon": ["microsoft-windows-sysmon/operational"],
     "security": ["security"],
-    "powershell": ["powershell"],
-    "defender": ["defender"],
-    "taskscheduler": ["taskscheduler", "task scheduler"],
+    "system": ["system"],
+    "application": ["application"],
+    "powershell": ["microsoft-windows-powershell/operational", "powershellcore/operational", "windows powershell"],
+    "powershell-classic": ["windows powershell"],
+    "powershell-operational": ["microsoft-windows-powershell/operational", "powershellcore/operational"],
+    "defender": ["microsoft-windows-windows defender/operational"],
+    "windefend": ["microsoft-windows-windows defender/operational"],
+    "taskscheduler": ["microsoft-windows-taskscheduler/operational"],
+    "wmi": ["microsoft-windows-wmi-activity/operational"],
+    "applocker": ["microsoft-windows-applocker/*"],
+    "dns-server": ["dns server"],
+    "dns-server-analytic": ["microsoft-windows-dns-server/analytical"],
+    "dns-client": ["microsoft-windows-dns-client/operational", "microsoft-windows-dns client events/operational"],
+    "driver-framework": ["microsoft-windows-driverframeworks-usermode/operational"],
+    "ntlm": ["microsoft-windows-ntlm/operational"],
+    "codeintegrity-operational": ["microsoft-windows-codeintegrity/operational"],
+    "firewall-as": ["microsoft-windows-windows firewall with advanced security/firewall"],
+    "bits-client": ["microsoft-windows-bits-client/operational"],
+    "terminalservices-localsessionmanager": ["microsoft-windows-terminalservices-localsessionmanager/operational"],
+    "smbclient-security": ["microsoft-windows-smbclient/security"],
+    "smbclient-connectivity": ["microsoft-windows-smbclient/connectivity"],
+    "printservice-admin": ["microsoft-windows-printservice/admin"],
+    "printservice-operational": ["microsoft-windows-printservice/operational"],
+    "shell-core": ["microsoft-windows-shell-core/operational"],
+    "openssh": ["openssh/operational"],
+    "lsa-server": ["microsoft-windows-lsa/operational"],
+    "capi2": ["microsoft-windows-capi2/operational"],
+    "appxpackaging-om": ["microsoft-windows-appxpackaging/operational"],
+    "appxdeployment-server": ["microsoft-windows-appxdeploymentserver/operational"],
+    "appmodel-runtime": ["microsoft-windows-appmodel-runtime/admin"],
+    "security-mitigations": ["microsoft-windows-security-mitigations/*"],
+    "diagnosis-scripted": ["microsoft-windows-diagnosis-scripted/operational"],
+    "dhcp": ["microsoft-windows-dhcp-server/operational"],
+    "msexchange-management": ["msexchange management"],
+    "certificateservicesclient-lifecycle-system": ["microsoft-windows-certificateservicesclient-lifecycle-system/operational"],
+    "kernel-shimengine": ["microsoft-windows-kernel-shimengine/*"],
+    "ldap": ["microsoft-windows-ldap-client/debug"],
 }
+# Sysmon's own categories (and the Security log's process creation): a record with a channel only
+# counts when it comes from one of these services, as with service-based rules.
+_SYSMON_ONLY_CATEGORIES = (
+    "registry_set", "registry_add", "registry_delete", "registry_event", "registry_rename", "file_event", "file_delete",
+    "file_change", "file_access", "file_rename", "file_block_executable", "file_block_shredding", "file_executable_detected",
+    "network_connection", "image_load", "pipe_created", "process_access", "create_remote_thread", "driver_load",
+    "dns_query", "wmi_event", "raw_access_thread", "create_stream_hash", "process_tampering", "clipboard_capture",
+    "process_termination", "sysmon_status", "sysmon_error",
+)
 SIGMA_CATEGORY_SERVICE_HINTS = {
+    **{category: ["sysmon"] for category in _SYSMON_ONLY_CATEGORIES},
     "process_creation": ["sysmon", "security"],
-    "registry_set": ["sysmon"],
-    "file_event": ["sysmon"],
-    "network_connection": ["sysmon"],
-    "image_load": ["sysmon"],
-    "pipe_created": ["sysmon"],
     "powershell": ["powershell"],
+    # Script block (4104) and module (4103) logging live in the Operational log only.
+    "ps_script": ["powershell-operational"],
+    "ps_module": ["powershell-operational"],
+    "ps_classic_start": ["powershell-classic"],
+    "ps_classic_provider_start": ["powershell-classic"],
+    "ps_classic_script": ["powershell-classic"],
 }
-ENGINE_COMPATIBILITY_VERSION = "rules_v3"
+
+
+def channel_matches_service(channel: str, service: str) -> bool:
+    """Whether an event log channel is one the Sigma ``service`` reads (an unknown service: yes)."""
+    patterns = SIGMA_SERVICE_CHANNEL_HINTS.get(service)
+    if not patterns:
+        return True
+    lowered = str(channel or "").strip().lower()
+    return any(lowered.startswith(pattern[:-1]) if pattern.endswith("*") else lowered == pattern for pattern in patterns)
+
+
+ENGINE_COMPATIBILITY_VERSION = "rules_v4"
 SUPPORTED_MODIFIERS = {"contains", "endswith", "startswith", "re", "all", "windash"}
 UNSUPPORTED_FEATURE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("unsupported_correlation", re.compile(r"\bnear\b|\bwithin\b|\bby\b", re.IGNORECASE)),
@@ -307,6 +368,11 @@ MAX_KEYWORDS_PER_SELECTION = 200
 MIN_KEYWORD_LITERAL_CHARS = 3
 _MIN_KEYWORD_RUN_CHARS = 2
 _KEYWORD_CANDIDATE_RUNS = 3
+
+
+def _is_map_list_selection(selection: object) -> bool:
+    """A selection written as a list of maps: it matches when any one of the maps does."""
+    return isinstance(selection, list) and bool(selection) and all(isinstance(item, dict) and item for item in selection)
 
 
 def _is_keyword_selection(selection: object) -> bool:
@@ -435,7 +501,7 @@ def _sigma_detection_block_names(rule_data: dict) -> list[str]:
     return [
         str(name)
         for name, selection in detection.items()
-        if name != "condition" and ((isinstance(selection, dict) and selection) or (keywords_enabled and _is_keyword_selection(selection)))
+        if name != "condition" and ((isinstance(selection, dict) and selection) or _is_map_list_selection(selection) or (keywords_enabled and _is_keyword_selection(selection)))
     ]
 
 
@@ -790,17 +856,21 @@ def compile_sigma_rule(rule_data: dict) -> dict:
                 }
             ]
             continue
-        if not isinstance(selection, dict):
+        if isinstance(selection, dict):
+            blocks = [selection]
+        elif _is_map_list_selection(selection):
+            blocks = list(selection)
+        else:
             continue
         compiled_selection: list[dict[str, object]] = []
-        for sigma_field, expected in selection.items():
-            mapped_fields, used_fallback = _mapped_sigma_fields(str(sigma_field))
-            base_field, modifier, transforms = parse_field_modifiers(str(sigma_field))
-            expected_values = _flatten_values(expected)
-            if transforms:
-                expected_values = apply_value_transforms([str(item) for item in expected_values], transforms)
-            compiled_selection.append(
-                {
+        for alternative, block in enumerate(blocks):
+            for sigma_field, expected in block.items():
+                mapped_fields, used_fallback = _mapped_sigma_fields(str(sigma_field))
+                base_field, modifier, transforms = parse_field_modifiers(str(sigma_field))
+                expected_values = _flatten_values(expected)
+                if transforms:
+                    expected_values = apply_value_transforms([str(item) for item in expected_values], transforms)
+                clause = {
                     "sigma_field": str(sigma_field),
                     "base_field": base_field,
                     "mapped_fields": mapped_fields,
@@ -808,7 +878,10 @@ def compile_sigma_rule(rule_data: dict) -> dict:
                     "expected": expected_values,
                     "used_fallback": used_fallback,
                 }
-            )
+                if len(blocks) > 1:
+                    # Clauses of one map are ANDed; the maps of a list are alternatives.
+                    clause["alternative"] = alternative
+                compiled_selection.append(clause)
         selections[str(selection_name)] = compiled_selection
     compiled["compiled_query"]["selections"] = selections
     return compiled
@@ -1014,11 +1087,8 @@ def build_sigma_rule_prefilter(rule_data: dict, case_profile: dict) -> dict:
 
     if product == "windows":
         artifact_types.update(WINDOWS_EVENT_LOG_ARTIFACT_TYPES & artifact_types_present or {"windows_event"})
-    if service:
-        for channel in channels_present:
-            lowered = channel.lower()
-            if any(hint in lowered for hint in SIGMA_SERVICE_CHANNEL_HINTS.get(service, [])):
-                candidate_channels.add(channel)
+    if service and service in SIGMA_SERVICE_CHANNEL_HINTS:
+        candidate_channels.update(channel for channel in channels_present if channel_matches_service(channel, service))
     if category:
         candidate_event_ids.update(SIGMA_EVENT_ID_HINTS.get(category, []))
         for mapped_field, hinted_category in SIGMA_FIELD_CATEGORY_HINTS.items():
@@ -1026,10 +1096,7 @@ def build_sigma_rule_prefilter(rule_data: dict, case_profile: dict) -> dict:
                 field_exists.add(mapped_field)
         if not candidate_channels:
             for hinted_service in SIGMA_CATEGORY_SERVICE_HINTS.get(category, []):
-                for channel in channels_present:
-                    lowered = channel.lower()
-                    if any(hint in lowered for hint in SIGMA_SERVICE_CHANNEL_HINTS.get(hinted_service, [])):
-                        candidate_channels.add(channel)
+                candidate_channels.update(channel for channel in channels_present if channel_matches_service(channel, hinted_service))
     for field in extract_sigma_detection_fields(rule_data):
         mapped_fields, _ = _mapped_sigma_fields(field)
         for mapped_field in mapped_fields:
@@ -1105,8 +1172,7 @@ def preflight_sigma_rule(rule_data: dict, case_profile: dict, *, enabled: bool =
         }
 
     if service:
-        hints = SIGMA_SERVICE_CHANNEL_HINTS.get(service, [])
-        if hints and not any(any(hint in channel for hint in hints) for channel in channels_present):
+        if service in SIGMA_SERVICE_CHANNEL_HINTS and not any(channel_matches_service(channel, service) for channel in channels_present):
             return {
                 "status": "skipped_unsupported_logsource",
                 "reason": service,
@@ -1173,8 +1239,7 @@ def preflight_compiled_sigma_rule(compiled_rule: dict, case_profile: dict, *, en
     if product and product not in products:
         return {"status": "skipped_unsupported_platform", "reason": product, "logsource": logsource, "fields": fields, "prefilter": {}}
     if service:
-        hints = SIGMA_SERVICE_CHANNEL_HINTS.get(service, [])
-        if hints and not any(any(hint in channel for hint in hints) for channel in channels_present):
+        if service in SIGMA_SERVICE_CHANNEL_HINTS and not any(channel_matches_service(channel, service) for channel in channels_present):
             return {"status": "skipped_unsupported_logsource", "reason": service, "logsource": logsource, "fields": fields, "prefilter": {}}
     missing_fields: list[str] = []
     partial_support = False
@@ -1273,6 +1338,12 @@ def _document_event_labels(document: dict) -> set[str]:
     return labels
 
 
+def _is_windows_record(document: dict) -> bool:
+    artifact_type = str(_get_nested_value(document, "artifact.type") or "").strip().lower()
+    os_type = str(_get_nested_value(document, "os.type") or "").strip().lower()
+    return artifact_type in WINDOWS_EVENT_LOG_ARTIFACT_TYPES or os_type == "windows" or _get_nested_value(document, "windows.event_id") not in (None, "")
+
+
 def _document_channel(document: dict) -> str:
     return str(_get_nested_value(document, "windows.channel") or _get_nested_value(document, "event.channel") or "").lower()
 
@@ -1285,15 +1356,18 @@ def document_matches_sigma_logsource(logsource: dict, document: dict) -> tuple[b
         artifact_type = str(_get_nested_value(document, "artifact.type") or "").strip().lower()
         if artifact_type and artifact_type not in WINDOWS_EVENT_LOG_ARTIFACT_TYPES:
             return False, "logsource_mismatch"
+    if product == "linux" and _is_windows_record(document):
+        # A Linux rule (keyword rules search free text) has nothing to say about a Windows record.
+        return False, "logsource_mismatch"
     if product == "linux" and service in LINUX_SERVICE_ARTIFACT_TYPES:
         artifact_type = str(_get_nested_value(document, "artifact.type") or "").strip().lower()
         if artifact_type.startswith("linux_") and artifact_type not in LINUX_SERVICE_ARTIFACT_TYPES[service]:
             return False, "logsource_mismatch"
-    if service:
-        hints = SIGMA_SERVICE_CHANNEL_HINTS.get(service, [])
-        channel = _document_channel(document)
-        if hints and channel and not any(hint in channel for hint in hints):
-            return False, "logsource_mismatch"
+    channel = _document_channel(document)
+    if service and channel and not channel_matches_service(channel, service):
+        return False, "logsource_mismatch"
+    if product == "windows" and category in SIGMA_CATEGORY_SERVICE_HINTS and channel and not any(channel_matches_service(channel, hinted) for hinted in SIGMA_CATEGORY_SERVICE_HINTS[category]):
+        return False, "logsource_mismatch"
     if category:
         event_id = _document_event_id(document)
         hinted_event_ids = set(SIGMA_EVENT_ID_HINTS.get(category, []))
@@ -1339,14 +1413,21 @@ def parse_field_modifiers(field: str) -> tuple[str, str | None, set[str]]:
     parts = [part.strip() for part in str(field).split("|")]
     base = parts[0]
     match_modifier: str | None = None
+    all_values = False
     transforms: set[str] = set()
     for modifier in parts[1:]:
         if not modifier:
             continue
-        if modifier in {"contains", "startswith", "endswith", "re", "all"}:
+        if modifier == "all":
+            all_values = True
+        elif modifier in {"contains", "startswith", "endswith", "re"}:
             match_modifier = modifier if match_modifier is None else match_modifier
         else:
             transforms.add(modifier)
+    # "all" makes the list of values an AND. Kept apart from the comparison it was dropped when
+    # both were given, and "contains|all" matched a field holding any one of the values.
+    if all_values:
+        match_modifier = f"{match_modifier}|all" if match_modifier else "all"
     return base, match_modifier, transforms
 
 
@@ -1412,6 +1493,8 @@ def _match_scalar(actual_values: list[str], expected: object, modifier: str | No
     expected_values = [str(item) for item in _flatten_values(expected)]
     if modifier == "all":
         return all(_match_scalar(actual_values, item, None) for item in expected_values)
+    if modifier and modifier.endswith("|all"):
+        return all(_match_scalar(actual_values, item, modifier[: -len("|all")]) for item in expected_values)
     if modifier == "keyword":
         return any(_keyword_regex(exp).search(actual) for exp in expected_values for actual in actual_values)
     if modifier == "contains":
@@ -1433,6 +1516,14 @@ def _match_selection(selection_name: str, selection: object, document: dict, *, 
             if _match_scalar(actual_values, keywords, "keyword"):
                 return True, {selection_name: {"mapped_field": mapped_field, "expected": keywords[:5], "actual": actual_values[:1]}}, []
         return False, {}, []
+    if _is_map_list_selection(selection):
+        qualities: list[str] = []
+        for block in selection:
+            matched, fields, quality = _match_selection(selection_name, block, document)
+            qualities.extend(quality)
+            if matched:
+                return True, fields, qualities
+        return False, {}, qualities
     if not isinstance(selection, dict):
         return False, {}, [f"{selection_name} is not a valid mapping"]
     matched_fields: dict[str, object] = {}
@@ -1572,6 +1663,41 @@ def evaluate_sigma_rule(rule_data: dict, document: dict) -> dict:
     }
 
 
+def _match_compiled_clauses(clauses: list[dict], document: dict) -> tuple[bool, dict[str, object], list[str]]:
+    """Whether every clause of one compiled map matches ``document``."""
+    matched_fields: dict[str, object] = {}
+    qualities: list[str] = []
+    for clause in clauses:
+        actual_hit = False
+        modifier = str(clause.get("modifier") or "") or None
+        expected = clause.get("expected")
+        for mapped_field in clause.get("mapped_fields") or []:
+            actual_values = _stringify_values(_get_nested_value(document, str(mapped_field)))
+            if _match_scalar(actual_values, expected, modifier):
+                matched_fields[str(clause.get("sigma_field") or clause.get("base_field"))] = {
+                    "mapped_field": mapped_field,
+                    "expected": expected,
+                    "actual": actual_values[:5],
+                }
+                actual_hit = True
+                if clause.get("used_fallback"):
+                    qualities.append("sigma_field_fallback_search_text")
+                break
+        if not actual_hit:
+            alternate = _match_basename_alternate(document, str(clause.get("base_field") or ""), modifier, expected)
+            if alternate:
+                matched_fields[str(clause.get("sigma_field") or clause.get("base_field"))] = {
+                    "mapped_field": alternate[0],
+                    "expected": expected,
+                    "actual": alternate[1][:5],
+                }
+                qualities.append("sigma_image_matched_by_process_name")
+                actual_hit = True
+        if not actual_hit:
+            return False, {}, qualities
+    return True, matched_fields, qualities
+
+
 def evaluate_compiled_sigma_rule(compiled_rule: dict, document: dict) -> dict:
     logsource = dict(compiled_rule.get("sigma_logsource") or {})
     logsource_match, logsource_reason = document_matches_sigma_logsource(logsource, document)
@@ -1612,38 +1738,17 @@ def evaluate_compiled_sigma_rule(compiled_rule: dict, document: dict) -> dict:
         aggregate_quality: list[str] = []
         for selection_name in expanded:
             if selection_name not in selection_results:
-                matched_fields: dict[str, object] = {}
-                qualities: list[str] = []
-                matched = True
+                matched = False
+                matched_fields = {}
+                qualities = []
+                groups: dict[object, list[dict]] = {}
                 for clause in selections.get(selection_name) or []:
-                    actual_hit = False
-                    modifier = str(clause.get("modifier") or "") or None
-                    expected = clause.get("expected")
-                    for mapped_field in clause.get("mapped_fields") or []:
-                        actual_values = _stringify_values(_get_nested_value(document, str(mapped_field)))
-                        if _match_scalar(actual_values, expected, modifier):
-                            matched_fields[str(clause.get("sigma_field") or clause.get("base_field"))] = {
-                                "mapped_field": mapped_field,
-                                "expected": expected,
-                                "actual": actual_values[:5],
-                            }
-                            actual_hit = True
-                            if clause.get("used_fallback"):
-                                qualities.append("sigma_field_fallback_search_text")
-                            break
-                    if not actual_hit:
-                        alternate = _match_basename_alternate(document, str(clause.get("base_field") or ""), modifier, expected)
-                        if alternate:
-                            matched_fields[str(clause.get("sigma_field") or clause.get("base_field"))] = {
-                                "mapped_field": alternate[0],
-                                "expected": expected,
-                                "actual": alternate[1][:5],
-                            }
-                            qualities.append("sigma_image_matched_by_process_name")
-                            actual_hit = True
-                    if not actual_hit:
-                        matched = False
-                        matched_fields = {}
+                    groups.setdefault(clause.get("alternative"), []).append(clause)
+                for clauses in groups.values() or [[]]:
+                    group_match, group_fields, group_qualities = _match_compiled_clauses(clauses, document)
+                    qualities.extend(group_qualities)
+                    if group_match:
+                        matched, matched_fields = True, group_fields
                         break
                 selection_results[selection_name] = (matched, matched_fields, qualities)
             matched, fields, quality = selection_results[selection_name]
@@ -1682,11 +1787,14 @@ def build_sigma_query(rule_data: dict) -> dict:
     detection = dict(rule_data.get("detection") or {})
     should: list[dict] = []
     for selection_name, selection in detection.items():
-        if selection_name == "condition" or not isinstance(selection, dict):
+        if selection_name == "condition":
             continue
-        for sigma_field, expected in selection.items():
+        # A list of maps is an OR of its maps: each one can bring the candidates.
+        for sigma_field, expected in ((field, value) for block in _iter_selection_blocks(selection) for field, value in block.items()):
             mapped_fields, _ = _mapped_sigma_fields(str(sigma_field))
-            _, modifier = _split_field_and_modifier(str(sigma_field))
+            _, modifier, _ = parse_field_modifiers(str(sigma_field))
+            if modifier and modifier.endswith("|all"):
+                modifier = modifier[: -len("|all")]
             values = [str(item) for item in _flatten_values(expected)]
             for mapped_field in mapped_fields:
                 if modifier is None and len(values) == 1:
@@ -1736,6 +1844,9 @@ def build_sigma_query_from_compiled(compiled_rule: dict) -> dict:
         for clause in clauses or []:
             mapped_fields = [str(item) for item in (clause.get("mapped_fields") or [])]
             modifier = str(clause.get("modifier") or "") or None
+            if modifier and modifier.endswith("|all"):
+                # The candidate query is a superset: any one of the values; the exact test needs them all.
+                modifier = modifier[: -len("|all")]
             values = [str(item) for item in _flatten_values(clause.get("expected"))]
             if modifier == "keyword":
                 # One superset clause per keyword, kept out of the 50-clause cap below:
