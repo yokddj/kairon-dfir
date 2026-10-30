@@ -596,6 +596,31 @@ describe("EvidenceDetail minimal processing UX", () => {
     expect(await screen.findByText("Stored file missing.")).toBeInTheDocument();
   });
 
+  it("lists archive members that are evidence of their own kind and were not processed", async () => {
+    setupMinimalEvidenceDetail({
+      evidence: {
+        metadata_json: {
+          ...evidencePayload.metadata_json,
+          bundled_evidence: [
+            { path: "HOST-memory.dmp", kind: "memory_dump", label: "Memory image", size_bytes: 4_000_000_000 },
+            { path: "HOST-capture.pcap", kind: "pcap", label: "Packet capture", size_bytes: 20_000_000 },
+          ],
+        },
+      },
+    });
+    renderPage();
+    const banner = await screen.findByTestId("evidence-bundled-unprocessed");
+    expect(banner).toHaveTextContent("HOST-memory.dmp");
+    expect(banner).toHaveTextContent("Packet capture");
+    expect(banner).toHaveTextContent("packet captures cannot be analysed yet");
+  });
+
+  it("shows no unprocessed-members notice for a plain collection", async () => {
+    renderPage();
+    await screen.findAllByText(/Evidence/);
+    expect(screen.queryByTestId("evidence-bundled-unprocessed")).not.toBeInTheDocument();
+  });
+
   it("shows active progress at the top with live run counters", async () => {
     setupMinimalEvidenceDetail({
       evidence: {
