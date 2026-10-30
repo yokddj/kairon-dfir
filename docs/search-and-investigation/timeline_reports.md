@@ -116,6 +116,7 @@ Sections with no matching data (Microsoft Defender or SRUM in a Linux case, an e
 - process chains
 - suspicious command history: an overview table and one detail block per command; one execution seen by several sources is reported once with all of them
 - Defender, email, MOTW, SRUM, startup and persistence where the case has them
+- Lateral Movement: remote logons between machines (the Lateral Movement view without machine, anonymous and built-in accounts), with source, target, account, method, successes and failures; limited to the report's host filter. Left out of the export when there are none
 - Memory Analysis (only when the case has memory images): per image the system and capture time, the analyses run with their item counts, and the Find Evil triage with the processes the analyst marked suspicious or important
 - deduplicated IOCs
 - recommendations and limitations
