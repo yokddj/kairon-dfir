@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -208,6 +208,19 @@ describe("CaseReportsPage", () => {
         }),
       ),
     );
+  });
+
+  it("offers findings with events as process chains, as the findings list reports them", async () => {
+    // The list endpoint returns counts (event_count, process_entity_id), not the id lists.
+    listFindingsMock.mockResolvedValue([
+      { id: "finding-2", title: "LSASS dumped with comsvcs", severity: "high", status: "confirmed", risk_score: 90, event_count: 3 },
+      { id: "finding-3", title: "Note without events", severity: "low", status: "confirmed", risk_score: 0, event_count: 0 },
+    ]);
+    renderPage();
+    const heading = await screen.findByText("Process chains");
+    const panel = heading.parentElement as HTMLElement;
+    expect(await within(panel).findByText("LSASS dumped with comsvcs")).toBeInTheDocument();
+    expect(within(panel).queryByText("Note without events")).not.toBeInTheDocument();
   });
 
   it("offers AI drafting only when AI is enabled", async () => {
