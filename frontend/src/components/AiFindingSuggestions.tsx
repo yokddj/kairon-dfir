@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api, type AiFindingSuggestion, type AiFindingSuggestions as Suggestions } from "../api/client";
+import { api, type AiFindingSuggestion } from "../api/client";
 
 const LEAD_KINDS: Record<string, string> = {
   detection: "rule detections",
@@ -14,6 +14,12 @@ const LEAD_KINDS: Record<string, string> = {
 function utc(value: string | null): string {
   return value ? value.replace("T", " ").replace(/\.\d+Z$|Z$/, "") : "";
 }
+
+function clock(value: string | null): string {
+  return value ? utc(value).slice(11, 16) : "";
+}
+
+const ACTIVE = new Set(["queued", "running"]);
 
 function phaseLabel(phase: string | null): string | null {
   return phase ? phase.replace(/_/g, " ") : null;
@@ -91,14 +97,23 @@ export default function AiFindingSuggestions({ caseId }: { caseId: string }) {
   const queryClient = useQueryClient();
   const aiStatusQuery = useQuery({ queryKey: ["ai-status"], queryFn: api.getAiStatus, staleTime: 60_000 });
   const [consentOpen, setConsentOpen] = useState(false);
-  const [result, setResult] = useState<Suggestions | null>(null);
   const [states, setStates] = useState<Record<number, "saving" | "accepted" | "dismissed">>({});
   const [errors, setErrors] = useState<Record<number, string>>({});
 
+  // The job runs in the worker; the last result stays until the next run.
+  const jobQuery = useQuery({
+    queryKey: ["ai-finding-suggestions", caseId],
+    queryFn: () => api.getFindingSuggestions(caseId),
+    enabled: Boolean(caseId && aiStatusQuery.data?.enabled),
+    refetchInterval: (query) => (ACTIVE.has(query.state.data?.job?.status ?? "") ? 5000 : false),
+  });
+  const job = jobQuery.data?.job ?? null;
+  const active = ACTIVE.has(job?.status ?? "");
+
   const suggest = useMutation({
-    mutationFn: () => api.suggestFindingsWithAi(caseId),
+    mutationFn: () => api.startFindingSuggestions(caseId),
     onSuccess: (data) => {
-      setResult(data);
+      queryClient.setQueryData(["ai-finding-suggestions", caseId], data);
       setStates({});
       setErrors({});
       setConsentOpen(false);
@@ -124,6 +139,7 @@ export default function AiFindingSuggestions({ caseId }: { caseId: string }) {
 
   const status = aiStatusQuery.data;
   if (!status?.enabled) return null;
+  const result = job?.status === "completed" ? job.result : null;
   const visible = (result?.suggestions ?? []).map((suggestion, index) => ({ suggestion, index })).filter(({ index }) => states[index] !== "dismissed");
   const leadSummary = result
     ? Object.entries(result.lead_counts).map(([kind, count]) => `${count} ${LEAD_KINDS[kind] ?? kind}`).join(", ")
@@ -141,10 +157,10 @@ export default function AiFindingSuggestions({ caseId }: { caseId: string }) {
         <button
           type="button"
           onClick={() => setConsentOpen(true)}
-          disabled={suggest.isPending}
+          disabled={suggest.isPending || active}
           className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent disabled:opacity-60"
         >
-          {suggest.isPending ? "Suggesting..." : result ? "Suggest again" : "Suggest findings"}
+          {active ? "Suggesting..." : result ? "Suggest again" : "Suggest findings"}
         </button>
       </div>
 
@@ -167,9 +183,20 @@ export default function AiFindingSuggestions({ caseId }: { caseId: string }) {
         </div>
       ) : null}
 
-      {suggest.isPending ? <p className="mt-4 text-sm text-muted">Waiting for the model. A local model can take several minutes.</p> : null}
+      {active ? (
+        <p className="mt-4 text-sm text-muted" data-testid="ai-suggestions-progress">
+          {job?.status === "queued"
+            ? "Queued: it starts when the worker is free (an evidence being processed goes first)."
+            : `Waiting for the model since ${clock(job?.started_at ?? null)} UTC. A local model can take several minutes; you can leave this page and come back.`}
+        </p>
+      ) : null}
       {suggest.error instanceof Error ? (
         <p className="mt-4 rounded-2xl border border-rose-400/30 bg-rose-500/10 p-3 text-sm text-rose-200">{suggest.error.message}</p>
+      ) : null}
+      {job?.status === "failed" ? (
+        <p className="mt-4 rounded-2xl border border-rose-400/30 bg-rose-500/10 p-3 text-sm text-rose-200" data-testid="ai-suggestions-error">
+          {job.error || "The suggestions failed."}
+        </p>
       ) : null}
 
       {result ? (
@@ -178,6 +205,7 @@ export default function AiFindingSuggestions({ caseId }: { caseId: string }) {
             {result.suggestions.length} suggestion{result.suggestions.length === 1 ? "" : "s"} from {leadSummary || "no leads"}
             {" · "}
             {result.provenance.provider} ({result.provenance.model})
+            {job?.finished_at ? ` · ${utc(job.finished_at)} UTC` : ""}
             {result.dropped ? ` · ${result.dropped} left out: they cited no lead` : ""}
           </p>
           {result.unavailable_sources.length ? (
@@ -189,7 +217,7 @@ export default function AiFindingSuggestions({ caseId }: { caseId: string }) {
                 <SuggestionCard
                   key={index}
                   suggestion={suggestion}
-                  state={states[index] ?? "open"}
+                  state={states[index] ?? (suggestion.created_finding_id ? "accepted" : "open")}
                   error={errors[index] || null}
                   onAccept={() => void accept(index, suggestion)}
                   onDismiss={() => setStates((prev) => ({ ...prev, [index]: "dismissed" }))}

@@ -154,14 +154,12 @@ class _SuggestingProvider:
         yield StreamEvent(type="text", text='"description": "tool.exe dump ran on ws-01 [L1]."}]}\n```')
 
 
-def test_endpoint_sends_leads_without_their_links_and_creates_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_suggesting_sends_leads_without_their_links_and_creates_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     db = _configured_db(monkeypatch)
     monkeypatch.setattr(report_draft, "build_provider", _SuggestingProvider)
     existing = SimpleNamespace(title="Known finding", severity=SimpleNamespace(value="high"), mitre=["T1078"])
     monkeypatch.setattr(finding_suggestions, "collect_leads", lambda _db, _case: (_leads(), [existing], []))
-    response = _client(db).post("/api/cases/case-1/ai/finding-suggestions")
-    assert response.status_code == 200, response.text
-    body = response.json()
+    body = finding_suggestions.suggest_findings(db, "case-1")
     assert [item["title"] for item in body["suggestions"]] == ["Tool run on ws-01"]
     assert body["suggestions"][0]["issues"] == [] and body["dropped"] == 0
     assert body["lead_counts"] == {"command": 1, "lateral": 1, "detection": 1}
@@ -173,11 +171,11 @@ def test_endpoint_sends_leads_without_their_links_and_creates_nothing(monkeypatc
     assert _SuggestingProvider.seen["max_tokens"] == report_draft.DRAFT_MIN_TOKENS
 
 
-def test_endpoint_refuses_without_leads_or_ai(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_suggesting_refuses_without_leads_or_ai(monkeypatch: pytest.MonkeyPatch) -> None:
     db = _configured_db(monkeypatch)
     monkeypatch.setattr(finding_suggestions, "collect_leads", lambda _db, _case: ([], [], []))
-    response = _client(db).post("/api/cases/case-1/ai/finding-suggestions")
-    assert response.status_code == 409 and "no open leads" in response.json()["detail"]
+    with pytest.raises(finding_suggestions.FindingSuggestionsUnavailable, match="no open leads"):
+        finding_suggestions.suggest_findings(db, "case-1")
     from app.services.ai import config as ai_config
 
     ai_config.update_general(db, enabled=False)

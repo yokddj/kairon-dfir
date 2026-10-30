@@ -72,7 +72,7 @@ class _DraftingProvider:
         yield StreamEvent(type="text", text='203.0.113.7 [F1].", "attack_narrative": "", "recommendations": "", "limitations": ""}')
 
 
-def test_endpoint_drafts_from_curated_material_only(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_drafting_uses_curated_material_only(monkeypatch: pytest.MonkeyPatch) -> None:
     db = _configured_db(monkeypatch)
     monkeypatch.setattr(report_draft, "build_provider", _DraftingProvider)
     requested = {}
@@ -82,9 +82,7 @@ def test_endpoint_drafts_from_curated_material_only(monkeypatch: pytest.MonkeyPa
         return {"sections": [{"id": "raw"}], "ai_context": MATERIAL}
 
     monkeypatch.setattr(report_service, "build_case_report_preview", fake_preview)
-    response = _client(db).post("/api/cases/case-1/reports/report-1/ai-draft")
-    assert response.status_code == 200, response.text
-    body = response.json()
+    body = report_draft.draft_report_narrative(db, "case-1", "report-1")
     assert requested == {"case_id": "case-1", "report_id": "report-1", "collect_ai_context": True}
     assert body["draft"]["executive_summary"] == "Payload fetched from 203.0.113.7 [F1]."
     assert body["validation"]["ok"] is True
@@ -117,18 +115,22 @@ def test_drafting_raises_the_token_limit_and_explains_truncation(monkeypatch: py
     db = _configured_db(monkeypatch)
     monkeypatch.setattr(report_draft, "build_provider", _ThinkingProvider)
     monkeypatch.setattr(report_service, "build_case_report_preview", lambda *_a, **_k: {"ai_context": MATERIAL})
-    response = _client(db).post("/api/cases/case-1/reports/report-1/ai-draft")
-    assert response.status_code == 502
+    with pytest.raises(report_draft.ProviderError) as raised:
+        report_draft.draft_report_narrative(db, "case-1", "report-1")
     assert _ThinkingProvider.seen_max_tokens == report_draft.DRAFT_MIN_TOKENS
-    detail = response.json()["detail"]
+    detail = str(raised.value)
     assert "token limit" in detail and "wrote nothing" in detail and "Max tokens" in detail
 
 
-def test_endpoint_refuses_when_ai_is_off_or_there_is_nothing_to_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_drafting_refuses_when_ai_is_off_or_there_is_nothing_to_draft(monkeypatch: pytest.MonkeyPatch) -> None:
     db = _configured_db(monkeypatch)
     monkeypatch.setattr(report_service, "build_case_report_preview", lambda *_a, **_k: {"ai_context": {"findings": [], "timeline": []}})
-    assert _client(db).post("/api/cases/case-1/reports/report-1/ai-draft").status_code == 409
+    with pytest.raises(report_draft.ReportDraftUnavailable):
+        report_draft.draft_report_narrative(db, "case-1", "report-1")
     ai_config.update_general(db, enabled=False)
+    with pytest.raises(report_draft.ReportDraftUnavailable, match="not enabled"):
+        report_draft.draft_report_narrative(db, "case-1", "report-1")
+    # Starting a job checks the same thing before queueing anything.
     response = _client(db).post("/api/cases/case-1/reports/report-1/ai-draft")
     assert response.status_code == 409 and "not enabled" in response.json()["detail"]
     assert _client(db).post("/api/cases/other/reports/report-1/ai-draft").status_code == 404

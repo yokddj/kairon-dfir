@@ -4028,6 +4028,20 @@ export type AiFindingSuggestion = {
   issues: { kind: "unknown_citation" | "unsupported_fact"; value: string }[];
   /** Ready to send to createFinding; links come from the leads. */
   finding: Partial<Finding>;
+  /** Set when this suggestion was already turned into a finding. */
+  created_finding_id?: string | null;
+};
+
+/** A background AI job (report draft or finding suggestions) and, once done, its result. */
+export type AiJob<T> = {
+  id: string;
+  kind: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  result: T | null;
 };
 
 export type AiFindingSuggestions = {
@@ -8229,10 +8243,14 @@ export const api = {
   getCaseReport: (caseId: string, reportId: string) => request<CaseReport>(`/cases/${caseId}/reports/${reportId}`),
   updateCaseReport: (caseId: string, reportId: string, payload: Partial<CaseReport>) =>
     request<CaseReport>(`/cases/${caseId}/reports/${reportId}`, { method: "PATCH", body: JSON.stringify(payload) }),
-  draftCaseReportWithAi: (caseId: string, reportId: string) =>
-    request<AiReportDraft>(`/cases/${caseId}/reports/${reportId}/ai-draft`, { method: "POST" }),
-  suggestFindingsWithAi: (caseId: string) =>
-    request<AiFindingSuggestions>(`/cases/${caseId}/ai/finding-suggestions`, { method: "POST" }),
+  startCaseReportAiDraft: (caseId: string, reportId: string) =>
+    request<{ job: AiJob<AiReportDraft> }>(`/cases/${caseId}/reports/${reportId}/ai-draft`, { method: "POST" }),
+  getCaseReportAiDraft: (caseId: string, reportId: string) =>
+    request<{ job: AiJob<AiReportDraft> | null }>(`/cases/${caseId}/reports/${reportId}/ai-draft`),
+  startFindingSuggestions: (caseId: string) =>
+    request<{ job: AiJob<AiFindingSuggestions> }>(`/cases/${caseId}/ai/finding-suggestions`, { method: "POST" }),
+  getFindingSuggestions: (caseId: string) =>
+    request<{ job: AiJob<AiFindingSuggestions> | null }>(`/cases/${caseId}/ai/finding-suggestions`),
   getCaseReportPreview: (caseId: string, reportId: string) => request<CaseReportPreview>(`/cases/${caseId}/reports/${reportId}/preview`),
   exportCaseReport: async (caseId: string, reportId: string, format: "markdown" | "pdf" = "markdown") => {
     const path = format === "markdown" ? `/reports/${reportId}/download?format=markdown` : `/cases/${caseId}/reports/${reportId}/export?format=${format}`;

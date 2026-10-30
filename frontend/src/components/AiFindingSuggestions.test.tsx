@@ -6,13 +6,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import AiFindingSuggestions from "./AiFindingSuggestions";
 
 const getAiStatusMock = vi.fn();
-const suggestMock = vi.fn();
+const startMock = vi.fn();
+const getJobMock = vi.fn();
 const createFindingMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
     getAiStatus: (...args: unknown[]) => getAiStatusMock(...args),
-    suggestFindingsWithAi: (...args: unknown[]) => suggestMock(...args),
+    startFindingSuggestions: (...args: unknown[]) => startMock(...args),
+    getFindingSuggestions: (...args: unknown[]) => getJobMock(...args),
     createFinding: (...args: unknown[]) => createFindingMock(...args),
   },
 }));
@@ -48,6 +50,10 @@ const RESULT = {
   provenance: { provider: "Ollama (local)", model: "qwen", hosting: "local", generated_at: "", prompt_version: "v1" },
 };
 
+function job(status: string, result: unknown = null, extra: Record<string, unknown> = {}) {
+  return { job: { id: "job-1", kind: "ai_finding_suggestions", status, created_at: null, started_at: "2026-01-10T09:00:00Z", finished_at: "2026-01-10T09:05:00Z", error: null, result, ...extra } };
+}
+
 function renderPanel() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
@@ -60,7 +66,9 @@ function renderPanel() {
 describe("AiFindingSuggestions", () => {
   beforeEach(() => {
     getAiStatusMock.mockReset();
-    suggestMock.mockReset();
+    startMock.mockReset();
+    getJobMock.mockReset();
+    getJobMock.mockResolvedValue({ job: null });
     createFindingMock.mockReset();
   });
 
@@ -73,7 +81,7 @@ describe("AiFindingSuggestions", () => {
 
   it("asks before sending, then creates only the accepted suggestion", async () => {
     getAiStatusMock.mockResolvedValue({ enabled: true, provider: "openai", label: "OpenAI", model: "gpt", hosting: "cloud" });
-    suggestMock.mockResolvedValue(RESULT);
+    startMock.mockResolvedValue(job("completed", RESULT));
     createFindingMock.mockResolvedValue({ id: "finding-1" });
     const user = userEvent.setup();
     renderPanel();
@@ -81,7 +89,7 @@ describe("AiFindingSuggestions", () => {
     await user.click(await screen.findByRole("button", { name: "Suggest findings" }));
     const dialog = screen.getByRole("dialog", { name: "Suggest findings with AI" });
     expect(within(dialog).getByText(/not local/)).toBeInTheDocument();
-    expect(suggestMock).not.toHaveBeenCalled();
+    expect(startMock).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Send and suggest" }));
 
     expect(await screen.findAllByTestId("ai-suggestion")).toHaveLength(2);
@@ -96,5 +104,28 @@ describe("AiFindingSuggestions", () => {
     await waitFor(() => expect(createFindingMock).toHaveBeenCalledWith("case-1", RESULT.suggestions[0].finding));
     expect(await within(first).findByText("Finding created")).toBeInTheDocument();
     expect(createFindingMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the last result after a reload, with suggestions already created marked", async () => {
+    getAiStatusMock.mockResolvedValue({ enabled: true, provider: "ollama", label: "Ollama", model: "qwen", hosting: "local" });
+    const result = { ...RESULT, suggestions: [{ ...RESULT.suggestions[0], created_finding_id: "finding-9" }, RESULT.suggestions[1]] };
+    getJobMock.mockResolvedValue(job("completed", result));
+    renderPanel();
+    const cards = await screen.findAllByTestId("ai-suggestion");
+    expect(within(cards[0]).getByText("Finding created")).toBeInTheDocument();
+    expect(within(cards[1]).getByRole("button", { name: "Create finding" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Suggest again" })).toBeInTheDocument();
+  });
+
+  it("shows a running job and a failed one", async () => {
+    getAiStatusMock.mockResolvedValue({ enabled: true, provider: "ollama", label: "Ollama", model: "qwen", hosting: "local" });
+    getJobMock.mockResolvedValueOnce(job("running"));
+    const { unmount } = renderPanel();
+    expect(await screen.findByTestId("ai-suggestions-progress")).toHaveTextContent(/leave this page/i);
+    expect(screen.getByRole("button", { name: "Suggesting..." })).toBeDisabled();
+    unmount();
+    getJobMock.mockResolvedValue(job("failed", null, { error: "The model reached its token limit." }));
+    renderPanel();
+    expect(await screen.findByTestId("ai-suggestions-error")).toHaveTextContent(/token limit/);
   });
 });

@@ -126,6 +126,7 @@ export default function CaseReportsPage() {
     setAiDraft(null);
     setNotesBeforeAiDraft(null);
     setAiConsentOpen(false);
+    setPendingDraftJobId(null);
   }, [selectedReportId]);
 
   const createDraft = useMutation({
@@ -194,23 +195,42 @@ export default function CaseReportsPage() {
     },
   });
 
+  // Drafting runs as a background job: the page polls it, and the last draft
+  // of each report stays available until the next one.
+  const [pendingDraftJobId, setPendingDraftJobId] = useState<string | null>(null);
+  const aiDraftJobQuery = useQuery({
+    queryKey: ["report-ai-draft", caseId, selectedReportId],
+    queryFn: () => api.getCaseReportAiDraft(caseId, selectedReportId),
+    enabled: Boolean(caseId && selectedReportId && aiStatusQuery.data?.enabled),
+    refetchInterval: (query) => (["queued", "running"].includes(query.state.data?.job?.status ?? "") ? 5000 : false),
+  });
+  const aiDraftJob = aiDraftJobQuery.data?.job ?? null;
+  const aiDraftActive = ["queued", "running"].includes(aiDraftJob?.status ?? "");
+
+  function applyAiDraft(result: AiReportDraft) {
+    setNotesBeforeAiDraft({
+      executive_summary: executiveNote,
+      attack_narrative: narrativeNote,
+      recommendations: recommendationsNote,
+      limitations: limitationsNote,
+    });
+    setExecutiveNote(result.draft.executive_summary);
+    setNarrativeNote(result.draft.attack_narrative);
+    setRecommendationsNote(result.draft.recommendations);
+    setLimitationsNote(result.draft.limitations);
+    setAiDraft(result);
+    setStatusTone("default");
+    setStatusMessage("AI draft ready. Review and edit it, then Save draft to use it.");
+  }
+
   const draftWithAi = useMutation({
-    mutationFn: () => api.draftCaseReportWithAi(caseId, selectedReportId),
-    onSuccess: (result) => {
-      setNotesBeforeAiDraft({
-        executive_summary: executiveNote,
-        attack_narrative: narrativeNote,
-        recommendations: recommendationsNote,
-        limitations: limitationsNote,
-      });
-      setExecutiveNote(result.draft.executive_summary);
-      setNarrativeNote(result.draft.attack_narrative);
-      setRecommendationsNote(result.draft.recommendations);
-      setLimitationsNote(result.draft.limitations);
-      setAiDraft(result);
+    mutationFn: () => api.startCaseReportAiDraft(caseId, selectedReportId),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["report-ai-draft", caseId, selectedReportId], data);
+      setPendingDraftJobId(data.job.id);
       setAiConsentOpen(false);
       setStatusTone("default");
-      setStatusMessage("AI draft ready. Review and edit it, then Save draft to use it.");
+      setStatusMessage("Drafting with AI. A local model can take several minutes; you can leave this page and come back.");
     },
     onError: (error) => {
       setAiConsentOpen(false);
@@ -218,6 +238,19 @@ export default function CaseReportsPage() {
       setStatusMessage(error instanceof Error ? error.message : "The AI draft failed.");
     },
   });
+
+  useEffect(() => {
+    if (!aiDraftJob || aiDraftJob.id !== pendingDraftJobId) return;
+    if (aiDraftJob.status === "completed" && aiDraftJob.result) {
+      setPendingDraftJobId(null);
+      applyAiDraft(aiDraftJob.result);
+    } else if (aiDraftJob.status === "failed" || aiDraftJob.status === "cancelled") {
+      setPendingDraftJobId(null);
+      setStatusTone("error");
+      setStatusMessage(aiDraftJob.error || "The AI draft failed.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiDraftJob, pendingDraftJobId]);
 
   function discardAiDraft() {
     if (notesBeforeAiDraft) {
@@ -636,10 +669,21 @@ export default function CaseReportsPage() {
                         <button
                           type="button"
                           onClick={() => setAiConsentOpen(true)}
-                          disabled={draftWithAi.isPending}
+                          disabled={draftWithAi.isPending || aiDraftActive}
                           className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent disabled:opacity-60"
                         >
-                          {draftWithAi.isPending ? "Drafting..." : "Draft with AI"}
+                          {aiDraftActive ? (aiDraftJob?.status === "queued" ? "Draft queued..." : "Drafting...") : "Draft with AI"}
+                        </button>
+                      ) : null}
+                      {!aiDraft && !aiDraftActive && aiDraftJob?.status === "completed" && aiDraftJob.result && aiDraftJob.id !== pendingDraftJobId
+                        && (currentReport.metadata_json?.ai_provenance as AiReportProvenance | undefined)?.generated_at !== aiDraftJob.result.provenance.generated_at ? (
+                        <button
+                          type="button"
+                          onClick={() => aiDraftJob.result && applyAiDraft(aiDraftJob.result)}
+                          className="rounded-2xl border border-accent/40 bg-abyss/80 px-4 py-2 text-sm text-accent"
+                          data-testid="load-ai-draft"
+                        >
+                          Load AI draft ({(aiDraftJob.finished_at ?? "").replace("T", " ").slice(0, 16)} UTC)
                         </button>
                       ) : null}
                       {aiDraft ? (

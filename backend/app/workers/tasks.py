@@ -756,6 +756,21 @@ def enqueue_semi_auto_analysis(job_run_id: str) -> str:
     return job.id
 
 
+def enqueue_ai_job(job_run_id: str, timeout_seconds: int) -> str:
+    job = analysis_queue.enqueue("app.workers.tasks.run_ai_job", job_run_id, job_timeout=timeout_seconds)
+    return job.id
+
+
+def run_ai_job(job_run_id: str) -> None:
+    from app.services.ai.jobs import run_ai_job as run
+
+    db: Session = SessionLocal()
+    try:
+        run(db, job_run_id)
+    finally:
+        db.close()
+
+
 def enqueue_memory_metadata_scan(memory_scan_run_id: str) -> str:
     timeout = _memory_scan_job_timeout(memory_scan_run_id)
     queue = memory_queue if settings.memory_execution_mode == "dedicated_worker" else analysis_queue

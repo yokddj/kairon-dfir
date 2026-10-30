@@ -29,7 +29,7 @@ from app.services.ai.config import (
 )
 from app.services.ai.config import delete_provider as delete_provider_config
 from app.services.ai.crypto import CredentialCryptoError, open_sealed
-from app.services.ai.finding_suggestions import suggest_findings
+from app.services.ai.jobs import FINDING_SUGGESTIONS, REPORT_DRAFT, latest_ai_job, serialize_job, start_ai_job
 from app.services.ai.nl_query import translate_natural_language_query
 from app.services.ai.history import (
     append_turn,
@@ -39,7 +39,7 @@ from app.services.ai.history import (
     start_or_resume,
 )
 from app.services.ai.providers import ProviderError, build_provider
-from app.services.ai.report_draft import ReportDraftUnavailable, ai_draft_status, draft_report_narrative, provider_error_text
+from app.services.ai.report_draft import ReportDraftUnavailable, ai_draft_status
 from app.services.audit import log_audit
 from app.services.auth_dependencies import get_current_user, get_effective_case_role, get_optional_user
 
@@ -203,44 +203,67 @@ def get_ai_status(db: Session = Depends(get_db)) -> dict:
     return status if status["enabled"] else {"enabled": False, "provider": None, "model": None, "hosting": None}
 
 
-@router.post("/api/cases/{case_id}/reports/{report_id}/ai-draft")
+def _check_case_access(db: Session, case_id: str, user: User | None) -> None:
+    if db.get(Case, case_id) is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    if user is not None and get_effective_case_role(user, case_id, db) is None:
+        raise HTTPException(status_code=403, detail="Access denied to this case")
+
+
+@router.post("/api/cases/{case_id}/reports/{report_id}/ai-draft", status_code=202)
 def draft_case_report_with_ai(
     case_id: str,
     report_id: str,
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ) -> dict:
-    """Draft the report's narrative from its curated material. Nothing is saved."""
-    if db.get(Case, case_id) is None:
-        raise HTTPException(status_code=404, detail="Case not found")
-    if user is not None and get_effective_case_role(user, case_id, db) is None:
-        raise HTTPException(status_code=403, detail="Access denied to this case")
+    """Start drafting the report's narrative from its curated material, as a
+    background job. Nothing is saved to the report."""
+    _check_case_access(db, case_id, user)
     try:
-        return draft_report_narrative(db, case_id, report_id)
+        job = start_ai_job(db, case_id, REPORT_DRAFT, report_id=report_id)
     except ReportDraftUnavailable as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ProviderError as exc:
-        raise HTTPException(status_code=502, detail=provider_error_text(exc)) from exc
+    return {"job": serialize_job(db, job)}
 
 
-@router.post("/api/cases/{case_id}/ai/finding-suggestions")
+@router.get("/api/cases/{case_id}/reports/{report_id}/ai-draft")
+def get_case_report_ai_draft(
+    case_id: str,
+    report_id: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+) -> dict:
+    """The latest draft job of this report: its state, and the draft once done."""
+    _check_case_access(db, case_id, user)
+    return {"job": latest_ai_job(db, case_id, REPORT_DRAFT, report_id=report_id)}
+
+
+@router.post("/api/cases/{case_id}/ai/finding-suggestions", status_code=202)
 def suggest_case_findings_with_ai(
     case_id: str,
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ) -> dict:
-    """Findings the AI proposes from the case's open leads. Nothing is created:
-    the analyst accepts each suggestion through the normal finding creation."""
-    if db.get(Case, case_id) is None:
-        raise HTTPException(status_code=404, detail="Case not found")
-    if user is not None and get_effective_case_role(user, case_id, db) is None:
-        raise HTTPException(status_code=403, detail="Access denied to this case")
+    """Start proposing findings from the case's open leads, as a background job.
+    Nothing is created: the analyst accepts each suggestion."""
+    _check_case_access(db, case_id, user)
     try:
-        return suggest_findings(db, case_id)
+        job = start_ai_job(db, case_id, FINDING_SUGGESTIONS)
     except ReportDraftUnavailable as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ProviderError as exc:
-        raise HTTPException(status_code=502, detail=provider_error_text(exc)) from exc
+    return {"job": serialize_job(db, job)}
+
+
+@router.get("/api/cases/{case_id}/ai/finding-suggestions")
+def get_case_finding_suggestions(
+    case_id: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+) -> dict:
+    """The latest suggestions job of this case: its state, and the suggestions once done."""
+    _check_case_access(db, case_id, user)
+    return {"job": latest_ai_job(db, case_id, FINDING_SUGGESTIONS)}
 
 
 def _sse(payload: dict) -> str:
