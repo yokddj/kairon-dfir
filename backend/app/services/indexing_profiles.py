@@ -10,17 +10,24 @@ ACTIVE_STATUSES = {"queued", "running", "processing", "pending"}
 
 def _discovered_source_paths(metadata: dict[str, Any]) -> list[str]:
     paths: list[str] = []
+    ingest_plan = metadata.get("ingest_plan") or {}
     for container in (
-        (metadata.get("ingest_plan") or {}).get("disabled_candidates") or [],
+        ingest_plan.get("disabled_candidates") or [],
+        # A file the core ingest selected (UsrClass.dat for RECmd, say) is still a source for these steps.
+        ingest_plan.get("selected_candidates") or [],
         (metadata.get("velociraptor_discovery") or {}).get("candidates") or [],
         metadata.get("raw_artifacts") or [],
         (metadata.get("manifest") or {}).get("artifacts") or [],
+        metadata.get("folder_entries") or [],
+        metadata.get("tree") or [],
     ):
         for entry in container if isinstance(container, list) else []:
+            value = entry if isinstance(entry, str) else ""
             if isinstance(entry, dict):
-                value = str(entry.get("source_path") or entry.get("relative_path") or entry.get("path") or entry.get("name") or "").strip()
-                if value:
-                    paths.append(value.replace("\\", "/").lower())
+                value = str(entry.get("source_path") or entry.get("relative_path") or entry.get("path") or entry.get("name") or "")
+            value = value.strip()
+            if value:
+                paths.append(value.replace("\\", "/").lower())
     return paths
 
 

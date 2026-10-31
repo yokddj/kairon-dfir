@@ -86,6 +86,13 @@ def test_recommended_plan_offers_srum_and_shellbags_when_discovered():
     assert _by_id(done)["shellbags"]["status"] == "completed"
 
 
+def test_plan_reads_sources_the_core_ingest_selected_or_listed():
+    selected = {**_metadata(), "ingest_plan": {"selected_candidates": [{"source_path": "x_0_DC/C/Users/admin/AppData/Local/Microsoft/Windows/UsrClass.dat"}]}}
+    listed = {**_metadata(), "tree": ["x_0_DC/C/Windows/System32/sru/SRUDB.dat"]}
+    assert "shellbags" in _by_id(build_indexing_plan(profile="recommended", metadata=selected, mft_diagnostic=_mft(), indexed_docs=12))
+    assert "srum" in _by_id(build_indexing_plan(profile="recommended", metadata=listed, mft_diagnostic=_mft(), indexed_docs=12))
+
+
 def test_service_profile_hives_do_not_offer_shellbags():
     metadata = {**_metadata(), "velociraptor_discovery": {"candidates": [{"source_path": "C:/Windows/ServiceProfiles/NetworkService/NTUSER.DAT"}]}}
     assert "shellbags" not in _by_id(build_indexing_plan(profile="recommended", metadata=metadata, mft_diagnostic=_mft(), indexed_docs=12))
