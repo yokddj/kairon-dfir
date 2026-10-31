@@ -23,6 +23,7 @@
 
 ### Fixed
 
+- Raw collections: selected Windows notification databases and network candidates (WLAN profile XML, `hosts`) were extracted and then never parsed, because no artifact mapping existed for their category. Both are mapped now, and a supported candidate without a mapping is logged instead of dropped silently.
 - Collections that name the volume as a folder (`C/Users/...`, as KAPE and AD1 repacks do) or wrap the tree in their own folders (`challenge/Users/...`) got no user from artifact paths: path normalization now finds the Windows tree by its layout (`Windows\System32`, `Users\<name>\AppData`...) and takes a one-letter folder before it as the drive.
 - Artifact Views: MOTW and email artifact details open in the side panel, like event details, instead of below the whole table.
 - Files extracted from a ZIP, AD1 image or 7z entry kept the extraction time as their modification time, so artifacts dated by their file's mtime when they carry no time of their own (PowerShell scripts, Jump Lists, scheduled task XML...) landed on the timeline at the moment of processing. Extracted copies now get the time the archive recorded (the UTC extended timestamp when present). Evidence processed before needs **Re-index evidence**.
