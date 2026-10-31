@@ -1613,7 +1613,7 @@ function formatReportStatus(status: string | null | undefined) {
             <h2 className="mt-2 break-words text-3xl font-semibold">{data?.original_filename}</h2>
             <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted">
               <span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${minimalStatusLabel === "Ready" ? "border-mint/30 bg-mint/10 text-mint" : minimalStatusLabel === "Completed with errors" ? "border-danger/30 bg-danger/10 text-danger" : minimalStatusLabel === "Ready with warnings" ? "border-amber/30 bg-amber/10 text-amber" : "border-accent/30 bg-accent/10 text-accent"}`}>{minimalStatusLabel}</span>
-              <span>Host: <span className="text-ink">{data?.provided_host || data?.detected_host || "-"}</span></span>
+              <span>Host: <span className="text-ink">{assignedHost?.display_name || data?.provided_host || data?.detected_host || "-"}</span></span>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -2108,7 +2108,7 @@ function formatReportStatus(status: string | null | undefined) {
               This removes the evidence record, parsed artifacts and indexed documents for this evidence. Original uploaded archive removal depends on storage policy.
             </p>
             <div className="mt-4 grid gap-2 text-sm text-muted">
-              <p>Host: <span className="text-ink">{data?.provided_host || data?.detected_host || "-"}</span></p>
+              <p>Host: <span className="text-ink">{assignedHost?.display_name || data?.provided_host || data?.detected_host || "-"}</span></p>
               <p>Indexed docs: <span className="text-ink">{indexedDocumentsTotal.toLocaleString()}</span></p>
             </div>
             <label className="mt-5 block text-sm text-muted">

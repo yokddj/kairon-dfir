@@ -21,6 +21,8 @@ from app.models.case_host_alias import CaseHostAlias
 from app.models.case_host_identity_audit import CaseHostIdentityAudit
 from app.models.evidence import Evidence
 from app.models.finding import Finding
+from app.models.host_fact import HostFact
+from app.models.host_user_fact import HostUserFact
 
 logger = logging.getLogger(__name__)
 
@@ -904,9 +906,24 @@ def _ensure_primary_alias(host: CaseHost) -> None:
         host.display_name = host.aliases[0].alias
 
 
-def _delete_empty_host(db: Session, host: CaseHost) -> None:
+def _delete_empty_host(db: Session, host: CaseHost, merged_into: CaseHost) -> None:
+    """Drop a host whose last alias was merged away. Everything that pointed
+    at it now points at the host it was merged into: assigned evidence,
+    findings, host facts and the history. AssignmentHistory has no ON DELETE
+    rule, so without this Postgres refused the merge; the SET NULL ones would
+    have left the evidence unassigned."""
     if host.aliases:
         return
+    db.flush()
+    target = merged_into.id
+    db.query(Evidence).filter(Evidence.host_id == host.id).update({"host_id": target}, synchronize_session=False)
+    db.query(Finding).filter(Finding.linked_host_id == host.id).update({"linked_host_id": target}, synchronize_session=False)
+    db.query(Finding).filter(Finding.primary_host_id == host.id).update({"primary_host_id": target}, synchronize_session=False)
+    db.query(HostFact).filter(HostFact.host_id == host.id).update({"host_id": target}, synchronize_session=False)
+    db.query(HostUserFact).filter(HostUserFact.host_id == host.id).update({"host_id": target}, synchronize_session=False)
+    db.query(AssignmentHistory).filter(AssignmentHistory.previous_host_id == host.id).update({"previous_host_id": target}, synchronize_session=False)
+    db.query(AssignmentHistory).filter(AssignmentHistory.new_host_id == host.id).update({"new_host_id": target}, synchronize_session=False)
+    db.query(CaseHostIdentityAudit).filter(CaseHostIdentityAudit.case_host_id == host.id).update({"case_host_id": target}, synchronize_session=False)
     db.delete(host)
 
 
@@ -955,7 +972,7 @@ def merge_hosts(
             previous_host.confidence = "manual"
             _ensure_primary_alias(previous_host)
             if not previous_host.aliases:
-                _delete_empty_host(db, previous_host)
+                _delete_empty_host(db, previous_host, host)
     host.source = "manual"
     host.confidence = "manual"
     _ensure_primary_alias(host)

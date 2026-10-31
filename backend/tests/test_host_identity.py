@@ -582,3 +582,32 @@ def test_host_attribution_snapshot_does_not_cache_explicit_subsets(monkeypatch) 
     host_identity._host_attribution_snapshot(db, CASE_ID, evidences=[], findings=[])
 
     assert calls["count"] == 2, "explicit evidences/findings subsets must not be cached"
+
+
+def test_merge_moves_evidence_and_history_off_the_host_it_drops(monkeypatch) -> None:
+    # An invented upload name merged with the detected one: the dropped
+    # host's assignment history blocked the delete (FK without ON DELETE)
+    # and its evidence would have been left unassigned.
+    from app.models.assignment_history import AssignmentHistory
+
+    engine = create_engine("sqlite:///:memory:", future=True)
+    event.listen(engine, "connect", lambda connection, _record: connection.execute("PRAGMA foreign_keys=ON"))
+    Base.metadata.create_all(bind=engine)
+    db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)()
+    db.add(Case(id=CASE_ID, name="Case Alpha"))
+    db.commit()
+    monkeypatch.setattr(host_identity, "_observed_host_counts", lambda _db, _case_id: {})
+    invented, _ = host_identity.create_manual_case_host(db, CASE_ID, "kraken")
+    real, _ = host_identity.create_manual_case_host(db, CASE_ID, "desktop-mg4uprr")
+    _add_evidence(db, EVIDENCE_ID, provided_host="kraken", host_id=real["id"])
+    db.flush()
+    db.add(AssignmentHistory(evidence_id=EVIDENCE_ID, case_id=CASE_ID, previous_host_id=invented["id"], new_host_id=real["id"], actor="analyst", method="manual"))
+    db.commit()
+
+    host_identity.merge_hosts(db, CASE_ID, invented["id"], ["desktop-mg4uprr"], reason="same endpoint")
+
+    db.expire_all()
+    assert db.get(CaseHost, real["id"]) is None
+    assert db.get(Evidence, EVIDENCE_ID).host_id == invented["id"]
+    history = db.query(AssignmentHistory).one()
+    assert (history.previous_host_id, history.new_host_id) == (invented["id"], invented["id"])
