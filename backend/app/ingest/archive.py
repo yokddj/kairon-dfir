@@ -1,6 +1,8 @@
 import errno
 import json
 import logging
+import os
+from datetime import datetime, timezone
 import shutil
 import subprocess
 import tempfile
@@ -165,6 +167,46 @@ def should_ignore_path(path: Path, *, size: int | None = None, is_dir: bool = Fa
     return False, None
 
 
+_ZIP_UNIX_TIME_EXTRA = 0x5455
+_DOS_EPOCH = (1980, 1, 1, 0, 0, 0)
+
+
+def zip_member_mtime(member: zipfile.ZipInfo) -> float | None:
+    """The modification time a ZIP recorded for a member, as epoch seconds.
+
+    The extended-timestamp extra field (Info-ZIP, macOS, 7-Zip) holds it in
+    UTC; otherwise the DOS time, which has no zone, is taken as UTC. The DOS
+    epoch itself means "not recorded"."""
+    extra = member.extra or b""
+    offset = 0
+    while offset + 4 <= len(extra):
+        tag = int.from_bytes(extra[offset:offset + 2], "little")
+        size = int.from_bytes(extra[offset + 2:offset + 4], "little")
+        body = extra[offset + 4:offset + 4 + size]
+        if tag == _ZIP_UNIX_TIME_EXTRA and len(body) >= 5 and body[0] & 1:
+            return float(int.from_bytes(body[1:5], "little", signed=True))
+        offset += 4 + size
+    if tuple(member.date_time) == _DOS_EPOCH:
+        return None
+    try:
+        return datetime(*member.date_time, tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def restore_mtime(path: Path, mtime: float | None) -> None:
+    """Give an extracted copy the time its archive recorded instead of the
+    extraction time: parsers fall back to a file's mtime when the artifact
+    has no time of its own, and a copy dated "now" puts it on the timeline
+    at the moment of processing."""
+    if mtime is None:
+        return
+    try:
+        os.utime(path, (mtime, mtime))
+    except (OSError, OverflowError, ValueError):
+        pass
+
+
 def _validate_path(dest_dir: Path, member_name: str) -> Path:
     target = dest_dir / member_name
     if Path(member_name).is_absolute():
@@ -220,6 +262,7 @@ def _safe_members_zip(archive: zipfile.ZipFile, dest_dir: Path, progress_cb: Cal
         target.parent.mkdir(parents=True, exist_ok=True)
         with archive.open(member) as src, target.open("wb") as dst:
             shutil.copyfileobj(src, dst)
+        restore_mtime(target, zip_member_mtime(member))
         manifest_entries.append(
             {
                 "path": member.filename,
@@ -347,7 +390,11 @@ def _zip_needs_seven_zip(source: Path) -> bool:
 def _extract_ad1(source: Path, dest_dir: Path, progress_cb: Callable[[dict], None] | None) -> tuple[list[str], list[dict]]:
     """An AD1 logical image nested in a collection (e.g. a ZIP holding one
     .ad1): its live files are written out like an archive's members."""
-    from app.ingest.ad1_image import AD1ImageError, iter_ad1_files, open_ad1
+    from app.ingest.ad1_image import AD1ImageError, entry_mtime, iter_ad1_files, open_ad1
+
+    def _ad1_mtime(entry) -> float | None:
+        value = entry_mtime(entry)
+        return value.timestamp() if value else None
 
     try:
         files = list(iter_ad1_files(open_ad1(source)))
@@ -368,6 +415,7 @@ def _extract_ad1(source: Path, dest_dir: Path, progress_cb: Callable[[dict], Non
             try:
                 with entry.open() as src, target.open("wb") as dst:
                     shutil.copyfileobj(src, dst, 1024 * 1024)
+                restore_mtime(target, _ad1_mtime(entry))
                 record["local_path"] = str(target)
             except OSError as exc:
                 if _is_disk_space_error(exc):

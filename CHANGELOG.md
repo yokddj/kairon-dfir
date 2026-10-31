@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- Files extracted from a ZIP, AD1 image or 7z entry kept the extraction time as their modification time, so artifacts dated by their file's mtime when they carry no time of their own (PowerShell scripts, Jump Lists, scheduled task XML...) landed on the timeline at the moment of processing. Extracted copies now get the time the archive recorded (the UTC extended timestamp when present). Evidence processed before needs **Re-index evidence**.
 - Merging hosts failed with a server error when the host being merged away had ever been assigned to an evidence (its assignment history pointed at it). The evidence, findings, host facts and history of that host now move to the host kept; before, the evidence would also have been left unassigned.
 - The evidence page header shows the assigned host instead of the name typed at upload.
 - A resumable upload could end in "Inspection failed: This upload session is busy": the last chunk queues a background preflight and the wizard also finalizes, and whichever lost the lock failed. The wizard's finalize now waits for the background inspection and reuses its report; the background job steps aside when the wizard got there first.
