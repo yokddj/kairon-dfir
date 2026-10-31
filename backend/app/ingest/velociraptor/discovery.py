@@ -211,6 +211,38 @@ def _parse_browser_candidate(entry: ContainerEntry, entry_map: dict[str, Contain
     )
 
 
+def _parse_notification_db_candidate(entry: ContainerEntry, entry_map: dict[str, ContainerEntry], *, container_path: str, container_type: str) -> VelociraptorEvidenceCandidate | None:
+    """The push notification database (app.ingest.windows_ui.wpndatabase),
+    read together with its -wal/-shm, where recent notifications live."""
+    rel = entry.path
+    if Path(rel).name.lower() != "wpndatabase.db":
+        return None
+    normalized = normalize_velociraptor_path(rel)
+    companions = [f"{rel}{suffix}" for suffix in ("-wal", "-shm") if f"{rel}{suffix}".lower() in entry_map]
+    user = extract_user_from_path(normalized)
+    return VelociraptorEvidenceCandidate(
+        id=_candidate_id("windows_ui", rel),
+        category="windows_ui",
+        artifact_type="windows_ui",
+        parser_status="ready",
+        display_name=f"Windows notifications - {user or 'unknown-user'}",
+        original_path=rel,
+        local_path=entry.local_path or "",
+        normalized_windows_path=normalized,
+        user=user,
+        parser="windows_notifications",
+        size=entry.size,
+        mtime=entry.mtime,
+        confidence="high",
+        supported=True,
+        reason=None,
+        warnings=[] if companions else ["wpndatabase.db WAL/SHM not found; recent notifications may be missing."],
+        companion_files=companions,
+        container_type=container_type,
+        container_path=container_path,
+    )
+
+
 def _parse_scheduled_task_candidate(entry: ContainerEntry, *, container_path: str, container_type: str) -> VelociraptorEvidenceCandidate | None:
     path_obj = Path(entry.path)
     normalized = normalize_velociraptor_path(entry.path)
@@ -1743,6 +1775,12 @@ def discover_velociraptor_evidences(root_path: Path | EvidenceContainer, progres
         if entry.ignored:
             if progress_cb and (total_files_scanned == total_files or total_files_scanned % 200 == 0):
                 progress_cb({"files_scanned": total_files_scanned, "total_files": total_files, "candidates": len(candidates), "current_path": entry.path})
+            continue
+        notification_candidate = _parse_notification_db_candidate(entry, entry_map, container_path=container_location, container_type=container.type)
+        if notification_candidate:
+            candidates.append(notification_candidate)
+            counters["notification_db_count"] += 1
+            seen_paths.add(notification_candidate.original_path)
             continue
         browser_candidate = _parse_browser_candidate(entry, entry_map, container_path=container_location, container_type=container.type)
         if browser_candidate:

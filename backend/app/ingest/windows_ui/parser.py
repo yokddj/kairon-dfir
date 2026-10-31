@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.ingest.eztools.base import ensure_csv_field_limit
 from app.ingest.windows_ui.helpers import canonicalize_header, clean_value, is_windows_ui_raw_candidate
+from app.ingest.windows_ui.wpndatabase import WPNDATABASE_NAME, is_wpndatabase, parse_wpndatabase
 
 
 def _read_structured_rows(path: Path) -> list[dict]:
@@ -62,6 +63,11 @@ def _infer_parser_name(path: Path, headers: set[str], sample_row: dict | None = 
 def parse_windows_ui_artifact_file(path: Path, artifact_meta: dict) -> tuple[list[dict], dict]:
     parser_name = str(artifact_meta.get("parser") or "").lower()
     source_path = str(artifact_meta.get("source_path") or path)
+    if is_wpndatabase(path):
+        return parse_wpndatabase(path, source_path=source_path)
+    if path.name.lower().startswith(f"{WPNDATABASE_NAME}-"):
+        # -wal/-shm are read together with the database itself.
+        return [], {"records_read": 0, "records_parsed": 0, "records_failed": 0, "warnings": ["wpndatabase_companion_read_with_database"], "parser_errors": []}
     if parser_name == "windows_ui_generic_raw" or is_windows_ui_raw_candidate(path):
         row = {
             "EventType": "ui_artifact_observed",
