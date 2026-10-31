@@ -135,7 +135,8 @@ def test_syslog_format_infers_year_and_flags_it():
 def test_syslog_future_month_rolls_back_a_year():
     now = datetime.now(tz=timezone.utc)
     future = (now.replace(day=1) + __import__("datetime").timedelta(days=40)).strftime("%b")
-    row = parse_generic_log(f"{future}  1 00:00:00 h p[1]: m\n{future}  1 00:00:01 h p[1]: m")[0]
+    # Day 15 of next month: always beyond the one-day clock-skew allowance, even on the 31st.
+    row = parse_generic_log(f"{future} 15 00:00:00 h p[1]: m\n{future} 15 00:00:01 h p[1]: m")[0]
     assert datetime.fromisoformat(row["timestamp"]) <= now
 
 

@@ -12,10 +12,13 @@ import time
 from app.core.config import get_settings
 from app.core.storage import build_evidence_root, evidence_staging_dir, sanitize_relative_path
 from app.ingest.normalizer import normalize_file
+from app.ingest.raw_parsers.srum_esedb import SRUM_ESEDB_BACKEND, write_srum_csvs
 
 
 SRUMECMD_BACKEND_CSV = "srumecmd_csv"
 SRUM_ARTIFACT_TYPE = "srum"
+# Every artifact.parser a SRUM run can index under; re-runs clear all of them.
+SRUM_PARSERS = (SRUMECMD_BACKEND_CSV, SRUM_ESEDB_BACKEND)
 
 
 def _srumecmd_dll_path() -> Path:
@@ -33,6 +36,32 @@ def _srumecmd_command() -> list[str] | None:
         if binary:
             return [binary]
     return None
+
+
+def _detect_native_backend() -> dict:
+    result = {"backend": SRUM_ESEDB_BACKEND, "available": False, "path": "dissect.esedb", "version": "", "error": None}
+    try:
+        from importlib.metadata import version
+
+        import dissect.esedb  # noqa: F401
+
+        result["available"] = True
+        result["version"] = f"dissect.esedb {version('dissect.esedb')}"
+    except Exception as exc:  # noqa: BLE001
+        result["error"] = f"dissect.esedb not available: {exc}"
+    return result
+
+
+@lru_cache(maxsize=1)
+def detect_srum_backend() -> dict:
+    """SrumECmd where it can run (Windows); otherwise the native ESE reader."""
+    tool = detect_srumecmd_backend()
+    if tool.get("available"):
+        return tool
+    native = _detect_native_backend()
+    if native.get("available"):
+        return native
+    return {**tool, "error": f"{tool.get('error')}; {native.get('error')}"}
 
 
 @lru_cache(maxsize=1)
@@ -137,7 +166,7 @@ def find_srum_databases(case_id: str, evidence_id: str, metadata: dict) -> list[
     return sorted(found.values(), key=lambda item: str(item.get("source_path") or ""))
 
 
-def _extract_srum_from_archive(case_id: str, evidence_id: str, source_path: str) -> Path | None:
+def _extract_from_archive(case_id: str, evidence_id: str, source_path: str, file_name: str) -> Path | None:
     root = build_evidence_root(case_id, evidence_id)
     archive_dir = root / "original"
     archives = sorted(path for path in archive_dir.glob("*") if path.is_file() and path.suffix.lower() in {".7z", ".zip"})
@@ -146,17 +175,47 @@ def _extract_srum_from_archive(case_id: str, evidence_id: str, source_path: str)
     digest = hashlib.sha1(source_path.encode("utf-8", "ignore")).hexdigest()[:16]
     output_dir = root / "derived" / "srumecmd" / "sources" / digest
     output_dir.mkdir(parents=True, exist_ok=True)
-    target = output_dir / "SRUDB.dat"
+    target = output_dir / file_name
     if target.is_file():
         return target
     for archive in archives:
         result = subprocess.run(["7z", "e", str(archive), source_path, f"-o{output_dir}", "-y"], capture_output=True, text=True, timeout=600, check=False)
         if result.returncode == 0:
-            extracted = next((path for path in output_dir.iterdir() if path.is_file() and path.name.lower() == "srudb.dat"), None)
+            extracted = next((path for path in output_dir.iterdir() if path.is_file() and path.name.lower() == file_name.lower()), None)
             if extracted:
                 if extracted != target:
                     extracted.rename(target)
                 return target
+    return None
+
+
+def _extract_srum_from_archive(case_id: str, evidence_id: str, source_path: str) -> Path | None:
+    return _extract_from_archive(case_id, evidence_id, source_path, "SRUDB.dat")
+
+
+def _child_case_insensitive(directory: Path, name: str) -> Path | None:
+    if not directory.is_dir():
+        return None
+    return next((path for path in directory.iterdir() if path.name.lower() == name.lower()), None)
+
+
+def _software_hive_for(case_id: str, evidence_id: str, source_path: str, local_path: Path) -> Path | None:
+    """The SOFTWARE hive collected next to SRUDB.dat (System32/config), used
+    only to name user SIDs. Absent is fine: SIDs are still indexed."""
+    config_dir = _child_case_insensitive(local_path.parent.parent, "config")
+    if config_dir:
+        hive = _child_case_insensitive(config_dir, "SOFTWARE")
+        if hive and hive.is_file():
+            return hive
+    normalized = source_path.replace("\\", "/")
+    if "/" not in normalized:
+        return None
+    wanted = normalized.rsplit("/", 2)[0].lower() + "/config/software"
+    root = build_evidence_root(case_id, evidence_id)
+    for archive in sorted(path for path in (root / "original").glob("*") if path.is_file() and path.suffix.lower() in {".7z", ".zip"}):
+        match = next((entry for entry in _archive_paths(archive) if entry.replace("\\", "/").lower() == wanted), None)
+        if match:
+            return _extract_from_archive(case_id, evidence_id, match, "SOFTWARE")
     return None
 
 
@@ -187,11 +246,13 @@ def iter_srumecmd_batches(
     artifact_meta: dict,
     batch_size: int,
 ) -> tuple[list[dict], dict]:
-    backend = detect_srumecmd_backend()
+    backend = detect_srum_backend()
     if not backend.get("available"):
-        raise RuntimeError(str(backend.get("error") or "SrumECmd backend is not available"))
+        raise RuntimeError(str(backend.get("error") or "SRUM backend is not available"))
+    parser = str(backend.get("backend") or SRUMECMD_BACKEND_CSV)
+    native = parser == SRUM_ESEDB_BACKEND
     root = build_evidence_root(case_id, evidence_id)
-    output_root = root / "derived" / "srumecmd" / "csv"
+    output_root = root / "derived" / ("srum_esedb" if native else "srumecmd") / "csv"
     output_root.mkdir(parents=True, exist_ok=True)
     sources = find_srum_databases(case_id, evidence_id, artifact_meta)
     started = time.perf_counter()
@@ -215,30 +276,44 @@ def iter_srumecmd_batches(
         csv_dir = output_root / digest
         csv_dir.mkdir(parents=True, exist_ok=True)
         if not _csv_outputs(csv_dir):
-            result = _run_srumecmd_csv(Path(local_path), csv_dir)
-            if result.returncode != 0 or not _csv_outputs(csv_dir):
-                sources_failed += 1
-                errors.append({"source_path": source_path, "error": (result.stderr or result.stdout or f"exit_{result.returncode}")[:1000]})
-                continue
+            if native:
+                try:
+                    native_result = write_srum_csvs(Path(local_path), csv_dir, software_hive=_software_hive_for(case_id, evidence_id, source_path, Path(local_path)))
+                except Exception as exc:  # noqa: BLE001
+                    native_result = {"tables": {}, "errors": [{"error": str(exc)[:1000]}]}
+                errors.extend({"source_path": source_path, **item} for item in native_result.get("errors") or [])
+                if not any((native_result.get("tables") or {}).values()):
+                    for stale in _csv_outputs(csv_dir):
+                        stale.unlink()
+                    sources_failed += 1
+                    if not native_result.get("errors"):
+                        errors.append({"source_path": source_path, "error": "srum_database_has_no_records"})
+                    continue
+            else:
+                result = _run_srumecmd_csv(Path(local_path), csv_dir)
+                if result.returncode != 0 or not _csv_outputs(csv_dir):
+                    sources_failed += 1
+                    errors.append({"source_path": source_path, "error": (result.stderr or result.stdout or f"exit_{result.returncode}")[:1000]})
+                    continue
         sources_parsed += 1
         for csv_path in _csv_outputs(csv_dir):
             meta = {
                 **artifact_meta,
                 "name": f"SRUM - {csv_path.stem}",
                 "source_path": source_path,
-                "parser": SRUMECMD_BACKEND_CSV,
+                "parser": parser,
                 "artifact_type": SRUM_ARTIFACT_TYPE,
-                "source_tool": "srumecmd",
+                "source_tool": parser if native else "srumecmd",
             }
             docs = normalize_file(case_id, evidence_id, artifact_id, csv_path, meta)
             for document in docs:
                 artifact = document.setdefault("artifact", {})
                 artifact["type"] = SRUM_ARTIFACT_TYPE
-                artifact["parser"] = SRUMECMD_BACKEND_CSV
+                artifact["parser"] = parser
                 artifact["name"] = artifact.get("name") or "SRUM"
                 artifact["source_path"] = source_path
                 document["source_file"] = source_path
-                document["source_tool"] = "srumecmd"
+                document["source_tool"] = parser if native else "srumecmd"
                 srum = document.get("srum") if isinstance(document.get("srum"), dict) else {}
                 table = str(srum.get("table") or srum.get("artifact_type") or csv_path.stem or "unknown")
                 tables[table] += 1
@@ -250,7 +325,7 @@ def iter_srumecmd_batches(
                 batch.append(document)
                 if len(batch) >= batch_size:
                     yield batch, {
-                        "backend": SRUMECMD_BACKEND_CSV,
+                        "backend": parser,
                         "backend_version": backend.get("version") or "",
                         "sources_total": len(sources),
                         "sources_parsed": sources_parsed,
@@ -263,7 +338,7 @@ def iter_srumecmd_batches(
                     }
                     batch = []
     yield batch, {
-        "backend": SRUMECMD_BACKEND_CSV,
+        "backend": parser,
         "backend_version": backend.get("version") or "",
         "sources_total": len(sources),
         "sources_parsed": sources_parsed,

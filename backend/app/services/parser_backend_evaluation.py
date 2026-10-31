@@ -378,12 +378,12 @@ def build_windows_ez_tools_worker_feasibility(tool_status: dict[str, dict[str, A
             },
         },
         "srum_decision": {
-            "recommended_backend": "windows_worker",
-            "reason": "SrumECmd is installed, but raw SRUDB.dat parsing requires Windows ESE libraries and fails on Linux. Keep SRUM as tooling_missing until a Windows parser worker is configured.",
+            "recommended_backend": "linux_local",
+            "reason": "SrumECmd refuses to run outside Windows (it loads esent.dll). Raw SRUDB.dat is read natively with dissect.esedb into SrumECmd-shaped CSV; output was compared with SrumECmd on the same tables.",
         },
         "shellbags_decision": {
-            "recommended_backend": "defer",
-            "reason": "SBECmd/ShellBagsExplorer are not installed in the Linux image. Keep RECmd-derived user activity where available, then validate SBECmd on Linux or route it through the same Windows worker if it requires Windows.",
+            "recommended_backend": "linux_local",
+            "reason": "SBECmd is plain .NET and runs on the Linux worker; raw UsrClass.dat/NTUSER.DAT are parsed with it (transaction logs staged next to the hive).",
         },
     }
 

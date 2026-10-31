@@ -1332,7 +1332,9 @@ def ensure_case_index(case_id: str) -> str:
                                 "user_sid": {"type": "keyword"},
                                 "interface_luid": {"type": "keyword"},
                                 "interface_guid": {"type": "keyword"},
+                                "interface_type": {"type": "keyword"},
                                 "interface_profile": {"type": "keyword"},
+                                "exe_description": {"type": "keyword"},
                                 "bytes_sent": {"type": "long", "ignore_malformed": True},
                                 "bytes_received": {"type": "long", "ignore_malformed": True},
                                 "bytes_total": {"type": "long", "ignore_malformed": True},
@@ -1827,6 +1829,12 @@ def ensure_case_index(case_id: str) -> str:
                         },
                         "backend_variant": {"type": "keyword"},
                         "parser_backend": {"type": "keyword"},
+                        "srum": {
+                            "properties": {
+                                "interface_type": {"type": "keyword"},
+                                "exe_description": {"type": "keyword"},
+                            }
+                        },
                         "host": {
                             "properties": {
                                 "aliases": {"type": "keyword"},

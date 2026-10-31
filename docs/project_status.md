@@ -43,8 +43,6 @@ per-parser status [artifacts/parser-coverage.md](artifacts/parser-coverage.md).
 
 ## Not available
 
-- Raw SRUM (`SRUDB.dat`) and raw Shellbags hive parsing; their EZ Tools CSV
-  output is supported.
 - Outlook OST/PST parsing.
 - Per-case access control and multi-tenant isolation.
 - A Windows parser worker for Windows-only tools.

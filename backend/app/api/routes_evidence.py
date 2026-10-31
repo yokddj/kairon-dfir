@@ -132,7 +132,8 @@ from datetime import UTC, datetime
 from app.disk_images.service import detect_disk_image_format
 from app.services.reassignment import execute_host_reassignment, backfill_evidence_documents, invalidate_host_caches
 from app.services.reconciliation import capture_reprocess_baseline
-from app.workers.tasks import _resolve_retry_profile, enqueue_core_ez_rebuild, enqueue_defender_evtx_index, enqueue_ingest, enqueue_mft_full_index, enqueue_mft_summary_index, enqueue_problematic_artifact_retry, enqueue_recmd_user_activity_index, enqueue_registry_persistence_summary_index, enqueue_srum_index
+from app.ingest.raw_parsers.srumecmd_backend import detect_srum_backend
+from app.workers.tasks import _resolve_retry_profile, enqueue_core_ez_rebuild, enqueue_defender_evtx_index, enqueue_ingest, enqueue_mft_full_index, enqueue_mft_summary_index, enqueue_problematic_artifact_retry, enqueue_recmd_user_activity_index, enqueue_registry_persistence_summary_index, enqueue_shellbags_index, enqueue_srum_index
 
 
 router = APIRouter(tags=["evidences"])
@@ -4342,6 +4343,22 @@ def _enqueue_indexing_plan_steps(item: Evidence, steps: list[dict[str, Any]], *,
                 depends_on=previous_job,
                 job_timeout=timeout,
             )
+        elif endpoint == "srum-index":
+            job = ingest_queue.enqueue(
+                "app.workers.tasks.index_srum_for_evidence",
+                item.id,
+                force,
+                depends_on=previous_job,
+                job_timeout=timeout,
+            )
+        elif endpoint == "shellbags-index":
+            job = ingest_queue.enqueue(
+                "app.workers.tasks.index_shellbags_for_evidence",
+                item.id,
+                force,
+                depends_on=previous_job,
+                job_timeout=timeout,
+            )
         if job is None:
             continue
         previous_job = job
@@ -4750,13 +4767,14 @@ def index_evidence_srum(evidence_id: str, payload: SrumIndexRequest | None = Non
     if not item:
         raise HTTPException(status_code=404, detail="Evidence not found")
     run_id = enqueue_srum_index(item.id, force=bool(payload.force if payload else False))
+    backend = str(detect_srum_backend().get("backend") or "srumecmd_csv")
     metadata = dict(item.metadata_json or {})
     runs = list(metadata.get("srum_runs") or [])
     runs.append(
         {
             "run_id": run_id,
             "status": "queued",
-            "backend": "srumecmd_csv",
+            "backend": backend,
             "mode": "srum",
             "force": bool(payload.force if payload else False),
             "queued_at": _utcnow_iso(),
@@ -4768,7 +4786,26 @@ def index_evidence_srum(evidence_id: str, payload: SrumIndexRequest | None = Non
     item.metadata_json = metadata
     flag_modified(item, "metadata_json")
     db.commit()
-    return {"accepted": True, "run_id": run_id, "evidence_id": item.id, "status": "queued", "backend": "srumecmd_csv", "mode": "srum"}
+    return {"accepted": True, "run_id": run_id, "evidence_id": item.id, "status": "queued", "backend": backend, "mode": "srum"}
+
+
+@router.post("/api/evidences/{evidence_id}/shellbags-index")
+def index_evidence_shellbags(evidence_id: str, payload: SrumIndexRequest | None = None, db: Session = Depends(get_db)) -> dict:
+    item = db.get(Evidence, evidence_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    force = bool(payload.force if payload else False)
+    run_id = enqueue_shellbags_index(item.id, force=force)
+    metadata = dict(item.metadata_json or {})
+    runs = list(metadata.get("shellbags_runs") or [])
+    runs.append({"run_id": run_id, "status": "queued", "backend": "sbecmd_csv", "mode": "shellbags", "force": force, "queued_at": _utcnow_iso()})
+    metadata["shellbags_runs"] = runs[-10:]
+    metadata["shellbags"] = runs[-1]
+    metadata["shellbags_status"] = "queued"
+    item.metadata_json = metadata
+    flag_modified(item, "metadata_json")
+    db.commit()
+    return {"accepted": True, "run_id": run_id, "evidence_id": item.id, "status": "queued", "backend": "sbecmd_csv", "mode": "shellbags"}
 
 
 @router.post("/api/evidences/{evidence_id}/core-ez-rebuild/{artifact_type}")

@@ -8,6 +8,38 @@ INDEXING_PROFILES = {"recommended", "fast", "advanced_custom"}
 ACTIVE_STATUSES = {"queued", "running", "processing", "pending"}
 
 
+def _discovered_source_paths(metadata: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    for container in (
+        (metadata.get("ingest_plan") or {}).get("disabled_candidates") or [],
+        (metadata.get("velociraptor_discovery") or {}).get("candidates") or [],
+        metadata.get("raw_artifacts") or [],
+        (metadata.get("manifest") or {}).get("artifacts") or [],
+    ):
+        for entry in container if isinstance(container, list) else []:
+            if isinstance(entry, dict):
+                value = str(entry.get("source_path") or entry.get("relative_path") or entry.get("path") or entry.get("name") or "").strip()
+                if value:
+                    paths.append(value.replace("\\", "/").lower())
+    return paths
+
+
+def srum_source_candidates(metadata: dict[str, Any]) -> list[str]:
+    """SRUDB.dat paths discovery recorded (same rule as the SRUM backend)."""
+    return [path for path in _discovered_source_paths(metadata) if path.endswith("srudb.dat")]
+
+
+def user_hive_candidates(metadata: dict[str, Any]) -> list[str]:
+    """Per-profile NTUSER.DAT / UsrClass.dat paths (same rule as the RECmd and SBECmd backends)."""
+    return [
+        path
+        for path in _discovered_source_paths(metadata)
+        if "/users/" in path
+        and "/windows/serviceprofiles/" not in path
+        and (path.endswith("/ntuser.dat") or path.endswith("/appdata/local/microsoft/windows/usrclass.dat"))
+    ]
+
+
 def normalize_indexing_profile(value: object | None) -> str:
     profile = str(value or "recommended").strip().lower()
     return profile if profile in INDEXING_PROFILES else "recommended"
@@ -165,10 +197,37 @@ def build_indexing_plan(
         )
     )
 
+    # Only offered when discovery saw the source, so a Linux or memory evidence does not list them.
+    if srum_source_candidates(metadata):
+        srum_status = _status(metadata, "srum_status")
+        srum_count = int(metadata.get("srum_records_indexed") or 0)
+        steps.append(
+            _step(
+                "srum",
+                "SRUM",
+                category="network_activity",
+                status="completed" if srum_count > 0 else srum_status if srum_status in ACTIVE_STATUSES else "ready",
+                reason="SRUDB.dat: per-application network usage, connections and resource use, read natively from the ESE database.",
+                endpoint="srum-index",
+            )
+        )
+    if user_hive_candidates(metadata):
+        shellbags_status = _status(metadata, "shellbags_status")
+        shellbags_count = int(metadata.get("shellbags_records_indexed") or 0)
+        steps.append(
+            _step(
+                "shellbags",
+                "Shellbags",
+                category="user_activity",
+                status="completed" if shellbags_count > 0 else shellbags_status if shellbags_status in ACTIVE_STATUSES else "ready",
+                reason="SBECmd over UsrClass.dat and NTUSER.DAT: folders each user browsed, including removable and network locations.",
+                endpoint="shellbags-index",
+            )
+        )
+
     steps.append(_step("motw", "MOTW / Zone.Identifier", category="downloaded_files", status="derived", reason="Derived from indexed MFT ADS and Sysmon Event ID 15; no separate parser run is required."))
     steps.append(_step("startup_persistence", "Startup & Persistence", category="derived", status="derived", reason="Derived view from scheduled tasks, services, registry events, Defender config and command evidence."))
 
-    excluded.append({"name": "SRUM", "reason": "Requires Windows parser worker / Windows ESE libraries."})
     excluded.extend(
         [
             {"name": "Sigma rules", "reason": "Run selected rules or Sigma Smoke after indexing."},
@@ -179,7 +238,7 @@ def build_indexing_plan(
 
     if profile_name == "advanced_custom":
         for item in steps:
-            if item["id"] in {"mft_full", "user_activity", "defender"}:
+            if item["id"] in {"mft_full", "user_activity", "defender", "srum", "shellbags"}:
                 item["status"] = "advanced_available" if item["status"] == "ready" else item["status"]
         excluded = [{"name": "Automatic execution", "reason": "Advanced custom exposes individual actions instead of running a bundle."}]
 

@@ -41,7 +41,7 @@ def _by_id(plan):
     return {item["id"]: item for item in plan["steps"]}
 
 
-def test_recommended_plan_contains_investigation_steps_and_excludes_rules_reports_srum():
+def test_recommended_plan_contains_investigation_steps_and_excludes_rules_reports():
     plan = build_indexing_plan(profile="recommended", metadata=_metadata(), mft_diagnostic=_mft(), indexed_docs=12)
     steps = _by_id(plan)
 
@@ -55,8 +55,40 @@ def test_recommended_plan_contains_investigation_steps_and_excludes_rules_report
     excluded = {item["name"]: item["reason"] for item in plan["excluded"]}
     assert "Sigma rules" in excluded
     assert "Reports" in excluded
-    assert "SRUM" in excluded
-    assert "Windows parser worker" in excluded["SRUM"]
+    assert "SRUM" not in excluded
+    # Without discovered sources the plan does not offer SRUM or Shellbags at all.
+    assert "srum" not in steps
+    assert "shellbags" not in steps
+
+
+def test_recommended_plan_offers_srum_and_shellbags_when_discovered():
+    metadata = {
+        **_metadata(),
+        "velociraptor_discovery": {
+            "candidates": [
+                {"artifact_type": "srum_raw", "source_path": "uploads/auto/C%3A/Windows/System32/sru/SRUDB.dat"},
+                {"artifact_type": "registry_hive_raw", "source_path": "uploads/auto/C%3A/Users/alice/AppData/Local/Microsoft/Windows/UsrClass.dat"},
+                {"artifact_type": "registry_hive_raw", "source_path": "uploads/auto/C%3A/Windows/ServiceProfiles/LocalService/NTUSER.DAT"},
+            ]
+        },
+    }
+    plan = build_indexing_plan(profile="recommended", metadata=metadata, mft_diagnostic=_mft(), indexed_docs=12)
+    steps = _by_id(plan)
+
+    assert steps["srum"]["status"] == "ready"
+    assert steps["srum"]["endpoint"] == "srum-index"
+    assert steps["shellbags"]["status"] == "ready"
+    assert steps["shellbags"]["endpoint"] == "shellbags-index"
+    assert {"srum", "shellbags"} <= {item["id"] for item in plan["runnable_steps"]}
+
+    done = build_indexing_plan(profile="recommended", metadata={**metadata, "srum_records_indexed": 40, "shellbags_records_indexed": 7}, mft_diagnostic=_mft(), indexed_docs=12)
+    assert _by_id(done)["srum"]["status"] == "completed"
+    assert _by_id(done)["shellbags"]["status"] == "completed"
+
+
+def test_service_profile_hives_do_not_offer_shellbags():
+    metadata = {**_metadata(), "velociraptor_discovery": {"candidates": [{"source_path": "C:/Windows/ServiceProfiles/NetworkService/NTUSER.DAT"}]}}
+    assert "shellbags" not in _by_id(build_indexing_plan(profile="recommended", metadata=metadata, mft_diagnostic=_mft(), indexed_docs=12))
 
 
 def test_fast_plan_downgrades_full_mft():
