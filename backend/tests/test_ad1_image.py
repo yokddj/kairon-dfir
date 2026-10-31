@@ -170,6 +170,26 @@ def test_integrity_check_hashes_the_ad1_not_the_repack(tmp_path):
     assert evidence.integrity_status == EvidenceIntegrityStatus.verified
 
 
+class _FakeSession:
+    def __init__(self, case):
+        self.case = case
+        self.evidence = None
+
+    def get(self, model, key):
+        from app.models.case import Case
+
+        return self.case if model is Case and key == self.case.id else None
+
+    def add(self, value):
+        self.evidence = value
+
+    def commit(self):
+        return None
+
+    def refresh(self, _value):
+        return None
+
+
 def _upload_ad1(monkeypatch, tmp_path, opener):
     from fastapi import UploadFile
 
@@ -177,7 +197,6 @@ def _upload_ad1(monkeypatch, tmp_path, opener):
     from app.core.config import get_settings
     from app.core.storage import build_evidence_root
     from app.models.case import Case
-    from tests.test_evidence_storage import FakeSession
 
     monkeypatch.setattr(get_settings(), "backend_data_dir", tmp_path / "data")
     stored = build_evidence_root("case-1", "ev-1") / "original" / "alice.ad1"
@@ -188,7 +207,7 @@ def _upload_ad1(monkeypatch, tmp_path, opener):
     monkeypatch.setattr(routes_evidence, "find_duplicate_evidence", lambda *args, **kwargs: None)
     monkeypatch.setattr(routes_evidence, "log_activity", lambda *args, **kwargs: None)
     monkeypatch.setattr(routes_evidence, "enqueue_ingest", lambda *_args, **_kwargs: None)
-    db = FakeSession(case=Case(id="case-1", name="Case 1"))
+    db = _FakeSession(Case(id="case-1", name="Case 1"))
     upload = UploadFile(filename="alice.ad1", file=SimpleNamespace())
     return stored, routes_evidence.upload_evidence("case-1", upload, False, None, "raw", "single_file", db)
 
