@@ -74,6 +74,10 @@ def _score_windows_ui(parser_name: str, row: dict, file_path: str | None) -> tup
         if _is_unc_or_removable(file_path):
             reasons.append("Thumbnail source path on removable drive or network share")
             risk = max(risk, 50)
+    elif parser_name == "windows_notifications" and str(first_nonempty(row, "EventType") or "") == "notification_app_registered":
+        # An app registering for notifications says nothing about what it later
+        # showed: a security app's name is not a security warning.
+        pass
     elif parser_name == "windows_notifications":
         title = str(first_nonempty(row, "Title", "NotificationTitle") or "").lower()
         body = str(first_nonempty(row, "Body", "BodyPreview", "PayloadPreview") or "").lower()
