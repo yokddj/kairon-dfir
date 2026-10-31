@@ -94,3 +94,41 @@ def test_collection_paths_find_the_windows_volume():
     assert normalize_velociraptor_path("challenge/Users/bob/NTUSER.DAT") == "C:\\Users\\bob\\NTUSER.DAT"
     assert normalize_velociraptor_path("E/Windows/Prefetch/A.pf") == "E:\\Windows\\Prefetch\\A.pf"
     assert normalize_velociraptor_path("random/Users/notes.txt") == "random\\Users\\notes.txt"
+
+
+def test_discovered_notification_database_becomes_a_parsed_artifact(tmp_path):
+    import zipfile
+
+    from app.ingest.velociraptor import discover_velociraptor_evidences, open_evidence_container
+    from app.ingest.velociraptor.discovery import list_velociraptor_artifacts
+
+    path, connection = _database(tmp_path / "db")
+    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    connection.close()
+    archive = tmp_path / "collection.zip"
+    base = "C/Users/alice/AppData/Local/Microsoft/Windows/Notifications"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.write(path, f"{base}/wpndatabase.db")
+        handle.writestr(f"{base}/wpndatabase.db-wal", b"")
+    candidates = [item for item in discover_velociraptor_evidences(open_evidence_container(archive)).as_dict()["candidates"] if item["category"] == "windows_ui"]
+    assert [(item["parser"], item["user"], item["companion_files"]) for item in candidates] == [("windows_notifications", "alice", [f"{base}/wpndatabase.db-wal"])]
+    artifacts = list_velociraptor_artifacts(tmp_path, candidates)
+    assert [(item["artifact_type"], item["parser"]) for item in artifacts if item.get("velociraptor_category") == "windows_ui"] == [("windows_ui", "windows_notifications")]
+
+
+def test_every_supported_discovery_category_is_mapped_to_a_parser(tmp_path):
+    """A supported candidate whose category list_velociraptor_artifacts does not
+    map is extracted and then never parsed."""
+    import re
+
+    from app.ingest.velociraptor import discovery
+    from app.ingest.velociraptor.discovery import list_velociraptor_artifacts
+
+    source = Path(discovery.__file__).read_text(encoding="utf-8")
+    created = set(re.findall(r'category="([a-z_]+)"', source))
+    # Only ever created unsupported (inventory of raw files no parser reads).
+    inventory_only = {"other", "filesystem", "execution_artifact", "network_activity"}
+    for category in sorted(created - inventory_only):
+        candidate = {"supported": True, "category": category, "original_path": "C/x/file", "local_path": str(tmp_path / "file"), "parser": "p", "artifact_type": category}
+        mapped = [item for item in list_velociraptor_artifacts(tmp_path, [candidate]) if item.get("velociraptor_category") == category]
+        assert mapped, f"category {category!r} is not mapped"

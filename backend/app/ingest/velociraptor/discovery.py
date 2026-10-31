@@ -2,6 +2,7 @@ from collections.abc import Callable
 from collections import Counter
 from datetime import UTC, datetime
 import hashlib
+import logging
 import re
 from pathlib import Path
 
@@ -27,6 +28,8 @@ from app.ingest.wmi.helpers import looks_like_wmi_artifact
 from app.ingest.velociraptor.models import VelociraptorDiscoveryResult, VelociraptorEvidenceCandidate
 from app.ingest.velociraptor.path_utils import normalize_velociraptor_path, relative_display_path
 from app.ingest.velociraptor.zip_inventory import ContainerEntry, EvidenceContainer, inventory_summary, open_evidence_container
+
+logger = logging.getLogger(__name__)
 
 
 RAW_UPLOAD_PATTERNS: list[tuple[str, str, str]] = [
@@ -2203,6 +2206,31 @@ def list_velociraptor_artifacts(root: Path, selected_candidates: list[dict] | No
                         "user": candidate.get("user"),
                     }
                 )
+            elif candidate.get("category") == "network":
+                artifacts.append(
+                    {
+                        **common,
+                        "artifact_type": "network",
+                        "parser": candidate.get("parser") or "network_csv",
+                        "profile": "network_activity",
+                        "source_tool": "velociraptor_raw",
+                        "source_format": Path(source_path).suffix.lower().lstrip(".") or "raw",
+                        "network_artifact_type": candidate.get("artifact_type"),
+                        "user": candidate.get("user"),
+                    }
+                )
+            elif candidate.get("category") == "windows_ui":
+                artifacts.append(
+                    {
+                        **common,
+                        "artifact_type": "windows_ui",
+                        "parser": candidate.get("parser") or "windows_ui_generic_raw",
+                        "profile": "user_activity",
+                        "source_tool": "native_windows_ui",
+                        "source_format": "sqlite",
+                        "user": candidate.get("user"),
+                    }
+                )
             elif candidate.get("category") == "email":
                 artifacts.append(
                     {
@@ -2453,4 +2481,8 @@ def list_velociraptor_artifacts(root: Path, selected_candidates: list[dict] | No
                         "user": candidate.get("user"),
                     }
                 )
+            else:
+                # A supported candidate with no mapping here would be extracted and
+                # then silently never parsed.
+                logger.warning("Selected candidate category %r has no artifact mapping: %s", candidate.get("category"), source_path)
     return artifacts
