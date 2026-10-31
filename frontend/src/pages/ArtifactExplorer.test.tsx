@@ -668,6 +668,8 @@ describe("ArtifactExplorer", () => {
     expect(screen.getByText("https://file.io/sample.iso")).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]);
     expect(await screen.findByText("MOTW detail")).toBeInTheDocument();
+    // Opens beside the table (side drawer), not appended below it.
+    expect(screen.getByTestId("responsive-detail-panel")).toHaveTextContent("MOTW detail");
     expect(screen.getByText("downloaded_executable_script_archive_or_iso")).toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: /Find this file/i }).length).toBeGreaterThan(0);
     expect(screen.getByRole("link", { name: /View activity around this time/i })).toBeInTheDocument();
@@ -697,6 +699,7 @@ describe("ArtifactExplorer", () => {
     expect(screen.getByText(/Related downloads\/MOTW: 1/i)).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]);
     expect(await screen.findByText("Email artifact detail")).toBeInTheDocument();
+    expect(screen.getByTestId("responsive-detail-panel")).toHaveTextContent("Email artifact detail");
     expect(screen.getAllByText(/Message content is not parsed in this version/i).length).toBeGreaterThan(0);
     expect(screen.getByText("mail_store_detected")).toBeInTheDocument();
     expect(screen.getByText("Zone.Identifier HostUrl or ReferrerUrl points to an explicit webmail/mail domain.")).toBeInTheDocument();

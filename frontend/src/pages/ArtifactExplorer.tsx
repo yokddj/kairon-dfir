@@ -382,17 +382,14 @@ function MotwArtifactView({
           </div>
         ) : null}
       </section>
-      {selectedItem ? (
-        <section className="rounded-[28px] border border-line bg-panel/70 p-5">
-          <div className="flex items-start justify-between gap-4">
+      <ResponsiveDetailPanel open={Boolean(selectedItem)} onClose={() => onSelectItem(null)} heading="MOTW detail">
+        {selectedItem ? (
+          <div>
             <div>
-              <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">MOTW detail</p>
-              <h3 className="mt-1 text-xl font-semibold">{selectedItem.file_name || selectedItem.file_path}</h3>
-              <p className="mt-2 text-sm text-muted">{selectedItem.file_path || "Base file path unavailable."}</p>
-              <p className="mt-1 text-xs text-muted">{selectedItem.zone_identifier_path}</p>
+                <h3 className="text-xl font-semibold">{selectedItem.file_name || selectedItem.file_path}</h3>
+                <p className="mt-2 text-sm text-muted">{selectedItem.file_path || "Base file path unavailable."}</p>
+                <p className="mt-1 text-xs text-muted">{selectedItem.zone_identifier_path}</p>
             </div>
-            <button type="button" onClick={() => onSelectItem(null)} className="rounded-lg border border-line px-3 py-2 text-sm text-muted">Close</button>
-          </div>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">Zone:</span> {selectedItem.zone_id ?? "-"} {selectedItem.zone_name}</div>
             <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">Timestamp:</span> {selectedItem.timestamp ? formatTimestamp(selectedItem.timestamp, effectiveTimezone) : "-"}</div>
@@ -422,8 +419,9 @@ function MotwArtifactView({
           <div className="mt-5">
             <IndicatorResolutionPanel data={indicatorData} />
           </div>
-        </section>
-      ) : null}
+          </div>
+        ) : null}
+      </ResponsiveDetailPanel>
     </div>
   );
 }
@@ -563,16 +561,13 @@ function EmailArtifactsView({
           </div>
         ) : null}
       </section>
-      {selectedItem ? (
-        <section className="rounded-[28px] border border-line bg-panel/70 p-5">
-          <div className="flex items-start justify-between gap-4">
+      <ResponsiveDetailPanel open={Boolean(selectedItem)} onClose={() => onSelectItem(null)} heading="Email artifact detail">
+        {selectedItem ? (
+          <div>
             <div>
-              <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Email artifact detail</p>
-              <h3 className="mt-1 text-xl font-semibold">{selectedItem.account_hint || selectedItem.file_name || selectedItem.url || selectedItem.email_artifact_type}</h3>
-              <p className="mt-2 text-sm text-muted">{selectedItem.file_path || selectedItem.url || "No file path or URL captured."}</p>
+                <h3 className="text-xl font-semibold">{selectedItem.account_hint || selectedItem.file_name || selectedItem.url || selectedItem.email_artifact_type}</h3>
+                <p className="mt-2 text-sm text-muted">{selectedItem.file_path || selectedItem.url || "No file path or URL captured."}</p>
             </div>
-            <button type="button" onClick={() => onSelectItem(null)} className="rounded-lg border border-line px-3 py-2 text-sm text-muted">Close</button>
-          </div>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">Type:</span> {selectedItem.email_artifact_type}</div>
             <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">Client:</span> {selectedItem.client || "-"}</div>
@@ -632,8 +627,9 @@ function EmailArtifactsView({
           <div className="mt-5">
             <IndicatorResolutionPanel data={indicatorData} />
           </div>
-        </section>
-      ) : null}
+          </div>
+        ) : null}
+      </ResponsiveDetailPanel>
     </div>
   );
 }

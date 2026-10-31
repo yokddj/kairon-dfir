@@ -22,6 +22,7 @@
 
 ### Fixed
 
+- Artifact Views: MOTW and email artifact details open in the side panel, like event details, instead of below the whole table.
 - Files extracted from a ZIP, AD1 image or 7z entry kept the extraction time as their modification time, so artifacts dated by their file's mtime when they carry no time of their own (PowerShell scripts, Jump Lists, scheduled task XML...) landed on the timeline at the moment of processing. Extracted copies now get the time the archive recorded (the UTC extended timestamp when present). Evidence processed before needs **Re-index evidence**.
 - Merging hosts failed with a server error when the host being merged away had ever been assigned to an evidence (its assignment history pointed at it). The evidence, findings, host facts and history of that host now move to the host kept; before, the evidence would also have been left unassigned.
 - The evidence page header shows the assigned host instead of the name typed at upload.
