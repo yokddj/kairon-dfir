@@ -110,7 +110,9 @@ class _Tree:
         self.files: dict[str, dict[str, Any]] = {}
         self.children: dict[str, set[str]] = {"/": set()}
         for entry in container.list_entries():
-            if entry.is_dir or entry.ignored:
+            # Files ingestion skips (empty, desktop.ini, Thumbs.db...) are
+            # still part of what was collected, so they are listed here.
+            if entry.is_dir:
                 continue
             path = "/" + entry.path.replace("\\", "/").strip("/")
             meta = metadata.get(entry.path) or {}
