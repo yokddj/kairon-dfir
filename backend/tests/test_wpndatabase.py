@@ -87,6 +87,9 @@ def test_notifications_become_windows_ui_events(tmp_path):
     assert firewall["risk_score"] >= 70
     assert firewall["event"]["timeline_include"] is True
     assert notes["Mon"]["notification"]["body_preview"] == "Board meeting | Room 4"
+    registrations = [doc for doc in documents if doc["event"]["type"] == "notification_app_registered"]
+    # Registering a security app is not a security warning.
+    assert registrations and all(doc["risk_score"] < 50 and not doc["event"]["timeline_include"] for doc in registrations)
 
 
 def test_collection_paths_find_the_windows_volume():
