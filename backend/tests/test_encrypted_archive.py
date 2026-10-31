@@ -90,7 +90,7 @@ def test_zip_holding_one_ad1_is_unwrapped_and_repacked(tmp_path, monkeypatch, en
     assert single_ad1_member(archive) == "Evidence/alice.ad1"
     seen = {}
 
-    def fake_convert(image, zip_target, progress_cb=None):
+    def fake_convert(image, zip_target, progress_cb=None, metadata_path=None):
         seen["image"] = image.read_bytes()
         with zipfile.ZipFile(zip_target, "w") as handle:
             handle.writestr("C/Users/alice/NTUSER.DAT", b"regf")

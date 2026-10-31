@@ -23,6 +23,7 @@ from app.core.config import get_settings
 from app.disk_images.registry import ewf_series_members
 from app.models.disk_image import DiskImage, DiskVolume, OSInstallation
 from app.models.evidence import Evidence
+from app.services import collection_file_explorer as collections
 
 
 ARCHIVE_PASSWORD = "infected"
@@ -55,7 +56,23 @@ def _unavailable_reason(evidence: Evidence, disk_image: DiskImage) -> str | None
     return None
 
 
+def _collection(db: Session, evidence: Evidence) -> bool:
+    """Not a disk image, but a collection the archive listing can show
+    (app.services.collection_file_explorer)."""
+    has_image = db.query(DiskImage.id).filter(DiskImage.evidence_id == evidence.id).first() is not None
+    return not has_image and collections.is_collection(evidence)
+
+
+def _from_collection(call):
+    try:
+        return call()
+    except collections.CollectionExplorerError as exc:
+        raise DiskFileExplorerError(exc.status_code, exc.code, exc.message) from exc
+
+
 def list_volumes(db: Session, evidence: Evidence) -> dict[str, Any]:
+    if _collection(db, evidence):
+        return _from_collection(lambda: collections.list_volumes(evidence, ARCHIVE_PASSWORD))
     disk_image = _image_for(db, evidence)
     reason = _unavailable_reason(evidence, disk_image)
     volumes = db.query(DiskVolume).filter(DiskVolume.disk_image_id == disk_image.id).order_by(DiskVolume.partition_index).all()
@@ -140,11 +157,15 @@ def _run_helper(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_directory(db: Session, evidence: Evidence, volume_id: str, *, path: str | None, inode: int | None) -> dict[str, Any]:
+    if _collection(db, evidence):
+        return _from_collection(lambda: collections.list_directory(evidence, volume_id, path=_normalize_path(path), max_entries=get_settings().disk_file_browser_max_entries))
     request = {**_volume_request(db, evidence, volume_id), "op": "list", "path": _normalize_path(path), "inode": inode, "max_entries": get_settings().disk_file_browser_max_entries}
     return _run_helper(request)
 
 
 def find_files(db: Session, evidence: Evidence, volume_id: str, *, pattern: str, path: str | None, include_deleted: bool) -> dict[str, Any]:
+    if _collection(db, evidence):
+        return _from_collection(lambda: collections.find_files(evidence, volume_id, pattern=pattern, path=_normalize_path(path)))
     request = {**_volume_request(db, evidence, volume_id), "op": "find", "pattern": pattern, "path": _normalize_path(path), "inode": None, "include_deleted": include_deleted, "max_results": 500}
     return _run_helper(request)
 
@@ -163,31 +184,40 @@ def export_files(db: Session, evidence: Evidence, volume_id: str, *, items: list
     if not items:
         raise DiskFileExplorerError(422, "nothing_selected", "Select at least one file or folder.")
     settings = get_settings()
-    base_request = _volume_request(db, evidence, volume_id)
+    collection = _collection(db, evidence)
+    base_request = None if collection else _volume_request(db, evidence, volume_id)
+    cleaned = [_clean_item(item) for item in items]
     work_dir = Path(tempfile.mkdtemp(prefix="disk-export-", dir=_temp_root()))
     try:
         content_dir = work_dir / "content"
         content_dir.mkdir()
-        response = _run_helper({
-            **base_request,
-            "op": "export",
-            "items": [_clean_item(item) for item in items],
-            "include_deleted": include_deleted,
-            "output_dir": str(content_dir),
-            "max_bytes": settings.disk_file_export_max_bytes,
-            "max_files": settings.disk_file_export_max_files,
-        })
-        disk_image = _image_for(db, evidence)
-        volume = db.get(DiskVolume, volume_id)
-        summary = {
-            "evidence_id": evidence.id,
-            "case_id": evidence.case_id,
-            "image": disk_image.original_filename,
-            "image_sha256": disk_image.sha256,
-            "volume": {"id": volume_id, "partition_index": volume.partition_index, "filesystem_type": volume.filesystem_type, "label": volume.label},
-            "files": response.get("manifest") or [],
-            "truncated": bool(response.get("truncated")),
-        }
+        if collection:
+            response = _from_collection(lambda: collections.export_into(
+                evidence, volume_id, items=cleaned, output_dir=content_dir,
+                max_bytes=settings.disk_file_export_max_bytes, max_files=settings.disk_file_export_max_files,
+            ))
+            summary = {"evidence_id": evidence.id, "case_id": evidence.case_id, "image": evidence.original_filename, "image_sha256": evidence.sha256,
+                       "volume": {"id": volume_id, "filesystem_type": "collection"}}
+        else:
+            response = _run_helper({
+                **base_request,
+                "op": "export",
+                "items": cleaned,
+                "include_deleted": include_deleted,
+                "output_dir": str(content_dir),
+                "max_bytes": settings.disk_file_export_max_bytes,
+                "max_files": settings.disk_file_export_max_files,
+            })
+            disk_image = _image_for(db, evidence)
+            volume = db.get(DiskVolume, volume_id)
+            summary = {
+                "evidence_id": evidence.id,
+                "case_id": evidence.case_id,
+                "image": disk_image.original_filename,
+                "image_sha256": disk_image.sha256,
+                "volume": {"id": volume_id, "partition_index": volume.partition_index, "filesystem_type": volume.filesystem_type, "label": volume.label},
+            }
+        summary.update({"files": response.get("manifest") or [], "truncated": bool(response.get("truncated"))})
         (content_dir / "kairon-export.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
         archive = work_dir / "export.zip"
         completed = subprocess.run(

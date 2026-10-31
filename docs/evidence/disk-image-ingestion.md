@@ -377,6 +377,21 @@ If EWF is recognized but not processed, verify that:
 - **Limits:** `DISK_FILE_EXPORT_MAX_BYTES` (2 GiB), `DISK_FILE_EXPORT_MAX_FILES` (5000) and `DISK_FILE_BROWSER_MAX_ENTRIES` (10 000 entries per directory).
 - **Not included:** carving of unallocated space.
 
+### Collections
+
+The same page browses a collection evidence: a ZIP/7z/TAR archive, an uploaded
+folder or an AD1 logical image (`app/services/collection_file_explorer.py`). A
+collection holds copies of files, not a filesystem, so it is shown as one volume
+built from the archive listing, with no inodes or deleted entries. Find and export
+work as for a disk (same password-protected ZIP and `kairon-export.json`).
+
+For an AD1 image the columns show what FTK recorded at acquisition, kept at
+registration in `derived/ad1_metadata.json`: created, modified, accessed and MFT
+changed times, owner (SID on hover), hidden/system attributes, and the MD5 (SHA1 on
+hover). An export compares the MD5 of the bytes it wrote with FTK's and notes a
+difference in the manifest. For other collections only the archive's modification
+time is known.
+
 ## Known limitations
 
 - VMDK/VHD/VHDX/QCOW/QCOW2/VDI still use a controlled `qemu-img convert` temporary export to RAW instead of direct filesystem access (EWF no longer does -- see the Read-only access section above).

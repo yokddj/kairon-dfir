@@ -29,6 +29,11 @@ from app.ingest.encrypted_archive import ArchivePasswordError, decrypt_zip, is_e
 SOURCE_DIR_NAME = "source"
 
 
+def ad1_metadata_path(evidence_root: Path) -> Path:
+    """FTK's per-file metadata for an AD1 upload (app.ingest.ad1_image.write_ad1_metadata)."""
+    return Path(evidence_root) / "derived" / "ad1_metadata.json"
+
+
 class ContainerPrepError(RuntimeError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -84,7 +89,7 @@ def prepare_upload_container(stored_path: Path, sha256: str | None, *, archive_p
         if working.suffix.lower() == AD1_SUFFIX and has_ad1_signature(working):
             image = working
             working = original_dir / f"{image.stem}.zip"
-            summary = convert_ad1_to_zip(image, working)
+            summary = convert_ad1_to_zip(image, working, metadata_path=ad1_metadata_path(original_dir.parent))
             if image != source:
                 image.unlink(missing_ok=True)
             if not summary["files"]:

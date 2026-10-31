@@ -124,4 +124,30 @@ describe("diskFileRouteForEvent", () => {
   it("gives nothing for an event that did not come from a disk image", () => {
     expect(diskFileRouteForEvent({ case_id: "case-1", evidence_id: "ev-1", source_file: "Security.evtx", artifact: { original_source_path: "Security.evtx" } })).toBe("");
   });
+
+  it("shows a collection as one volume with what the AD1 recorded", async () => {
+    getDiskFileVolumes.mockResolvedValue({
+      evidence_id: "ev-1",
+      format: "ad1",
+      kind: "collection",
+      image_name: "alice.ad1",
+      archive_password: "infected",
+      volumes: [{ id: "collection", partition_index: 0, filesystem_type: "AD1 logical image", length_bytes: 2048, browsable: true, unavailable_reason: null, installations: [], file_count: 2 }],
+    });
+    listDiskFiles.mockResolvedValue({
+      path: "/C/Users/alice",
+      inode: null,
+      total: 1,
+      truncated: false,
+      entries: [entry("NTUSER.DAT", { path: "/C/Users/alice/NTUSER.DAT", inode: null, uid: null, gid: null, owner: "alice", md5: "067094ba65896df16cae71ae0f8e2ad0", attributes: ["hidden", "archive"] })],
+    });
+    renderPage("/cases/case-1/evidence/ev-1/files?path=/C/Users/alice");
+    const [row] = await screen.findAllByTestId("disk-file-row");
+    expect(screen.getByText("Collection files")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Volume" })).toHaveTextContent("AD1 logical image · 2 files");
+    expect(within(row).getByText("alice")).toBeInTheDocument();
+    expect(within(row).getByText("067094ba65896df16cae71ae0f8e2ad0")).toBeInTheDocument();
+    expect(within(row).getByText("hidden")).toBeInTheDocument();
+    expect(screen.queryByText(/Show deleted entries/)).not.toBeInTheDocument();
+  });
 });
