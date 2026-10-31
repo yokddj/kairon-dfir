@@ -185,6 +185,7 @@ def normalize_windows_ui_row(document: dict, row: dict, artifact_meta: dict) -> 
     document["event"]["message"] = {
         "thumbnail_observed": f"Thumbnail observed for {file_name or file_path or '-'}",
         "notification_observed": f"Notification observed: {notification_title or file_name or '-'}",
+        "notification_app_registered": f"Notification app registered: {clean_value(first_nonempty(row, 'AppId')) or '-'}",
         "activity_history_observed": f"Activity history observed: {activity_display or file_name or '-'}",
         "search_index_entry_observed": f"Windows Search indexed entry observed: {file_name or indexed_path or '-'}",
         "event_transcript_observed": f"Event transcript observed: {file_name or activity_display or '-'}",

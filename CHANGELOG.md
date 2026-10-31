@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Windows notifications** (`wpndatabase.db`): toast, tile and badge notifications with the sending app, title, body text, launch target and arrival time, and each app registered to send notifications. Read with the database's WAL on a scratch copy. Discovery lists it in raw collections with its `-wal`/`-shm`; before, it was only an inventory entry. See [docs/artifacts/windows_notifications.md](docs/artifacts/windows_notifications.md).
 - **Browse files** for collections (ZIP/7z/TAR archives, uploaded folders, AD1 logical images): the disk file explorer shows the collection as one volume, with find and password-protected export. For AD1 images, the NTFS times, MD5/SHA1, owner and attributes FTK recorded at acquisition are shown and exports are checked against FTK's MD5.
 - **AD1 logical images** (FTK Imager folder and custom-content images) can be uploaded, alone or as the only file of a ZIP. Preflight lists their files in place and registration repacks them into a ZIP that goes through the normal collection pipeline (discovery, hives, SRUM, Shellbags, LNK, Jump Lists, browsers...); the `.ad1` stays the hashed original. Multi-segment and ADCRYPT-encrypted images are rejected with that reason.
 - **Folder uploads** from the evidence wizard are packed into one uncompressed ZIP in the browser and sent through the resumable upload, like any archive. Before, the whole folder went in one request: refused unless the experimental folder upload was enabled, limited to 2,000 files and 2 GB, and cut off by the proxy above 2 GB.
@@ -22,6 +23,7 @@
 
 ### Fixed
 
+- Collections that name the volume as a folder (`C/Users/...`, as KAPE and AD1 repacks do) or wrap the tree in their own folders (`challenge/Users/...`) got no user from artifact paths: path normalization now finds the Windows tree by its layout (`Windows\System32`, `Users\<name>\AppData`...) and takes a one-letter folder before it as the drive.
 - Artifact Views: MOTW and email artifact details open in the side panel, like event details, instead of below the whole table.
 - Files extracted from a ZIP, AD1 image or 7z entry kept the extraction time as their modification time, so artifacts dated by their file's mtime when they carry no time of their own (PowerShell scripts, Jump Lists, scheduled task XML...) landed on the timeline at the moment of processing. Extracted copies now get the time the archive recorded (the UTC extended timestamp when present). Evidence processed before needs **Re-index evidence**.
 - Merging hosts failed with a server error when the host being merged away had ever been assigned to an evidence (its assignment history pointed at it). The evidence, findings, host facts and history of that host now move to the host kept; before, the evidence would also have been left unassigned.
