@@ -10,6 +10,7 @@ from shutil import which
 from zipfile import ZipFile
 
 from app.core.storage import ensure_within_directory, sanitize_relative_path
+from app.ingest.ad1_image import AD1_SUFFIX, entry_mtime, iter_ad1_files, open_ad1
 from app.ingest.archive import should_ignore_path
 
 SEVEN_ZIP_CONTAINER_SUFFIXES: tuple[tuple[str, ...], ...] = (
@@ -89,7 +90,7 @@ def _matches_suffix_parts(path: Path, suffix_parts: tuple[str, ...]) -> bool:
 
 def is_supported_archive_container(path: Path) -> bool:
     source = Path(path)
-    if source.suffix.lower() == ".zip":
+    if source.suffix.lower() in {".zip", AD1_SUFFIX}:
         return True
     return any(_matches_suffix_parts(source, suffix_parts) for suffix_parts in SEVEN_ZIP_CONTAINER_SUFFIXES)
 
@@ -414,12 +415,76 @@ class SevenZipEvidenceContainer(EvidenceContainer):
         return results
 
 
+class AD1EvidenceContainer(EvidenceContainer):
+    """An AD1 logical image read in place (preflight, classification).
+    Registration repacks it into a ZIP; see app.ingest.ad1_image."""
+
+    def __init__(self, image_path: Path):
+        self.image_path = Path(image_path)
+        self.type = "ad1"
+        self._image = None
+        self._entries: list[ContainerEntry] | None = None
+        self._files: dict[str, object] = {}
+
+    def _open(self):
+        if self._image is None:
+            self._image = open_ad1(self.image_path)
+        return self._image
+
+    def list_entries(self) -> list[ContainerEntry]:
+        if self._entries is not None:
+            return self._entries
+        entries: list[ContainerEntry] = []
+        for path, entry in iter_ad1_files(self._open()):
+            size = int(entry.size or 0)
+            ignored, reason = should_ignore_path(Path(path), size=size, is_dir=False)
+            mtime = entry_mtime(entry)
+            self._files[path] = entry
+            entries.append(
+                ContainerEntry(
+                    path=path,
+                    size=size,
+                    compressed_size=None,
+                    mtime=mtime.isoformat() if mtime else None,
+                    is_dir=False,
+                    ignored=ignored,
+                    reason=reason,
+                    container_type="ad1",
+                    local_path=None,
+                )
+            )
+        self._entries = entries
+        return entries
+
+    def _entry(self, path: str):
+        self.list_entries()
+        entry = self._files.get(path)
+        if entry is None:
+            raise FileNotFoundError(f"{path} is not in {self.image_path.name}")
+        return entry
+
+    def open_entry(self, path: str):
+        return self._entry(path).open()
+
+    def extract_entry(self, path: str, destination: Path) -> Path:
+        destination.mkdir(parents=True, exist_ok=True)
+        relative = sanitize_relative_path(path)
+        target = destination / relative
+        ensure_within_directory(destination, target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with self.open_entry(path) as src, target.open("wb") as dst:
+            shutil.copyfileobj(src, dst, 1024 * 1024)
+        return target
+
+
 def open_evidence_container(source: Path) -> EvidenceContainer:
     source = Path(source)
     if source.is_dir():
         return DirectoryEvidenceContainer(source)
     if source.suffix.lower() == ".zip":
         return ZipEvidenceContainer(source)
+    if source.suffix.lower() == AD1_SUFFIX:
+        return AD1EvidenceContainer(source)
     if any(_matches_suffix_parts(source, suffix_parts) for suffix_parts in SEVEN_ZIP_CONTAINER_SUFFIXES):
         return SevenZipEvidenceContainer(source)
     raise ValueError(f"Unsupported Velociraptor container type: {source}")

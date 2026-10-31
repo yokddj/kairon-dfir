@@ -10,6 +10,7 @@ click==8.4.2
 croniter==6.2.3
 dissect.cstruct==4.7
 dissect.esedb==3.18
+dissect.evidence==3.13
 dissect.util==3.24
 enum-compat==0.0.3
 Events==0.5

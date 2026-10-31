@@ -4,6 +4,7 @@
 
 ### Added
 
+- **AD1 logical images** (FTK Imager folder and custom-content images) can be uploaded. Preflight lists their files in place and registration repacks them into a ZIP that goes through the normal collection pipeline (discovery, hives, SRUM, Shellbags, LNK, Jump Lists, browsers...); the `.ad1` stays the hashed original. Multi-segment and ADCRYPT-encrypted images are rejected with that reason.
 - Built-in detection **Possible mass file encryption**: five or more data files that reappear with one appended extension (`Memo.docx` -> `Memo.docx.enc`) within ten minutes on one host, the mark ransomware leaves when it encrypts in place. Reads any indexed file event with a name (MFT and USN from disk, the MFT MemProcFS recovers from memory), at the end of an evidence's ingest and after a memory image's timeline is indexed. Extensions Windows and applications append themselves (`.lnk`, `.crdownload`, `.tmp`, `.bak`...) do not count.
 - Raw **SRUM** (`SRUDB.dat`) is parsed on the Linux worker. SrumECmd refuses to run outside Windows, so the database is read natively with `dissect.esedb` into SrumECmd's tables and columns (network usage, network connections, application resource use, app timeline, energy, push notifications, vfuprov); compared with SrumECmd's output for the same machine. User SIDs are named from the `SOFTWARE` hive's ProfileList when it was collected.
 - Raw **Shellbags**: SBECmd now ships in the image and parses each profile's `UsrClass.dat` and `NTUSER.DAT` (with their transaction logs) on the Linux worker.

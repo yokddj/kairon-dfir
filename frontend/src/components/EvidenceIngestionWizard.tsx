@@ -47,7 +47,7 @@ const OVERRIDE_OPTIONS: Array<{ value: ForcedRoute; label: string }> = [
 // derived from the API response, since this only decides which upload
 // call to make, not authoritative eligibility (the server re-validates
 // unconditionally at session creation).
-const SUPPORTED_ARCHIVE_SUFFIX_GROUPS: string[][] = [[".zip"], [".7z"], [".tar", ".gz"], [".tar"], [".gz"], [".xz"]];
+const SUPPORTED_ARCHIVE_SUFFIX_GROUPS: string[][] = [[".zip"], [".ad1"], [".7z"], [".tar", ".gz"], [".tar"], [".gz"], [".xz"]];
 
 function isSupportedArchiveFilename(filename: string): boolean {
   const parts = filename.toLowerCase().split(".");

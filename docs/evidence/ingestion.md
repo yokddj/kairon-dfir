@@ -3,12 +3,33 @@
 ## What Happens When You Upload a File or Folder
 
 1. The evidence is saved to disk.
-2. If it's ZIP/7z, it's extracted.
+2. If it's ZIP/7z, it's extracted. An AD1 logical image is repacked into a ZIP first
+   (see [AD1 logical images](#ad1-logical-images)).
 3. The structure is walked and artifacts are detected.
 4. Each artifact is classified by type and parser.
 5. The normalizer generates common events.
 6. The events are indexed in OpenSearch.
 7. The evidence manifest and platform activity are updated.
+
+## AD1 Logical Images
+
+An `.ad1` from FTK Imager (a folder or custom-content image) holds files, not a
+filesystem, so it is handled as a collection, not as a disk image:
+
+- Preflight lists its files in place with `dissect.evidence`.
+- At registration the live files are repacked into a ZIP next to the original;
+  discovery, selected extraction and the raw hive, SRUM and `$MFT` steps read that
+  ZIP like any uploaded collection. The `.ad1` keeps the evidence hash and is what
+  the integrity check verifies.
+- Paths are rebased on the source volume: FTK names the image after where it was
+  taken (`C:\NONAME [NTFS]\[root]\Users\alice`); the partition label and `[root]`
+  are dropped, so files read `C/Users/alice/NTUSER.DAT`.
+- Deleted entries (no reliable content) and reparse points are skipped. FTK stores
+  an empty `$I30` index twin next to some files; the copy with content is kept.
+  Files whose content cannot be decompressed are listed in
+  `metadata_json.ad1_image.failed`.
+- Not supported: multi-segment images (`.ad1` + `.ad2`...) and ADCRYPT-encrypted
+  images. Both are rejected at upload with that reason.
 
 ## How the Evidence Type Is Detected
 

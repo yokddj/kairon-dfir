@@ -172,7 +172,7 @@ def test_archive_session_uses_original_filename_as_canonical_name(tmp_path, monk
     assert memory_upload.canonical_relative_path.endswith("/original/Case-Collection.tar.gz")
 
 
-@pytest.mark.parametrize("filename", ["evidence.zip", "evidence.7z", "evidence.tar", "evidence.tar.gz", "evidence.gz", "evidence.xz"])
+@pytest.mark.parametrize("filename", ["evidence.zip", "evidence.ad1", "evidence.7z", "evidence.tar", "evidence.tar.gz", "evidence.gz", "evidence.xz"])
 def test_archive_session_accepts_every_supported_extension(tmp_path, monkeypatch, filename):
     _configure(monkeypatch, tmp_path)
     db = _db()

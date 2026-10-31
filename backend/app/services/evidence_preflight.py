@@ -227,7 +227,7 @@ _BLOCKING_CHECK_LABELS = {
     "Within virtual disk chain limit",
 }
 
-_CONTAINER_LABELS = {"zip": "ZIP archive", "7z": "7-Zip archive", "directory": "Folder"}
+_CONTAINER_LABELS = {"zip": "ZIP archive", "7z": "7-Zip archive", "ad1": "AD1 logical image", "directory": "Folder"}
 
 
 def _duration_bucket(seconds: int | None) -> str | None:

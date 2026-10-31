@@ -2,6 +2,7 @@ import json
 import logging
 from pathlib import Path
 import re
+import shutil
 from typing import Any
 from uuid import uuid4
 
@@ -43,6 +44,7 @@ from app.core.storage import (
     save_upload,
     sha256_file,
 )
+from app.ingest.ad1_image import AD1ImageError, convert_ad1_to_zip, is_ad1_image
 from app.ingest.detector import detect_evidence_type
 from app.ingest.evidence_classifier import EvidenceCategory, get_evidence_classifier
 from app.ingest.velociraptor import discover_velociraptor_evidences, open_evidence_container
@@ -2266,6 +2268,10 @@ def upload_evidence(
     duplicate = find_duplicate_evidence(db, case_id=case_id, sha256=uploaded_sha256)
     if duplicate is not None:
         raise HTTPException(status_code=409, detail=duplicate_evidence_error_detail(duplicate))
+    ad1_image: dict | None = None
+    original_stored_path = stored_path
+    if is_ad1_image(stored_path):
+        stored_path, ad1_image = _repack_ad1_upload(stored_path, uploaded_sha256)
     raw_collection = False
     folder_entries: list[dict] = []
     file_count: int | None = None
@@ -2309,7 +2315,7 @@ def upload_evidence(
         case_id=case_id,
         original_filename=display_name,
         stored_path=str(stored_path),
-        original_path=str(stored_path),
+        original_path=str(original_stored_path),
         storage_mode=EvidenceStorageMode.uploaded,
         is_external=False,
         copy_to_storage=True,
@@ -2357,6 +2363,8 @@ def upload_evidence(
         else _initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform, "evtx_profile": normalized_evtx_profile}),
         error_log={},
     )
+    if ad1_image:
+        evidence.metadata_json = {**(evidence.metadata_json or {}), "ad1_image": ad1_image}
     db.add(evidence)
     _record_upload_custody_events(db, evidence, actor_user_id=_current_user_id(current_user))
     if host_resolution.host_id:
@@ -2595,6 +2603,22 @@ def list_case_disk_image_installations(case_id: str, db: Session = Depends(get_d
             )
         )
     return summaries
+
+
+def _repack_ad1_upload(image_path: Path, image_sha256: str | None) -> tuple[Path, dict]:
+    """An uploaded AD1 logical image is repacked into a ZIP beside it, which
+    becomes the evidence's working container; the .ad1 stays the hashed
+    original (see app.ingest.ad1_image)."""
+    target = image_path.with_name(f"{image_path.stem}.zip")
+    try:
+        summary = convert_ad1_to_zip(image_path, target)
+    except AD1ImageError as exc:
+        shutil.rmtree(image_path.parent.parent, ignore_errors=True)
+        raise HTTPException(status_code=400, detail={"error_code": exc.code, "code": exc.code, "message": exc.message}) from exc
+    if not summary["files"]:
+        shutil.rmtree(image_path.parent.parent, ignore_errors=True)
+        raise HTTPException(status_code=400, detail={"error_code": "ad1_empty", "code": "ad1_empty", "message": f"{image_path.name} contains no readable files."})
+    return target, {**summary, "path": str(image_path), "sha256": image_sha256}
 
 
 @router.post("/api/cases/{case_id}/evidences/upload-folder", response_model=EvidenceRead, status_code=status.HTTP_201_CREATED)
