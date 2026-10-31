@@ -12,7 +12,7 @@
 ### Changed
 
 - Shellbags: the drive or UNC path is derived from SBECmd's shell-namespace path (`Desktop\This PC\C:\Users` -> `C:\Users`, `...\Computers and Devices\srv01\srv01\share` -> `\\srv01\share`), so network shares, user folders and suspicious folders are recognised; folders browsed on the RDP client's drive (`\\tsclient\...`) are tagged `rdp_client_drive`.
-- SRUM leads are raised only on network-usage rows and match tool names on the application name; OneDrive, Dropbox and Google Drive are context (`cloud_sync`), an AppData executable alone is a low-risk lead and the Defender platform folder is not user-writable.
+- SRUM leads are raised only on network-usage rows and match tool names on the application name; OneDrive, Dropbox and Google Drive are context (`cloud_sync`), an AppData executable alone is a low-risk lead, the Defender platform folder is not user-writable and Delivery Optimization (`DoSvc`) uploading updates is not a volume lead.
 - Memory: the event log records and Amcache entries MemProcFS recovers are normalized like their EVTX and Amcache copies from disk (tags, risk, user, process and Defender detection fields) and get the built-in detections disk evidence gets; Sigma's Windows rules now run on them too (the engine only accepted EVTX documents as Windows event logs). A memory-only case therefore gets detections, and with them leads for **Suggest findings with AI**, instead of only the antivirus records Find Evil lists. The memory index (processes, Find Evil, network) still does not reach Detections. NTFS records are not put through the MFT normalizer, which flags every program under AppData; a Prefetch file seen being created in the MFT in memory is recorded as a program run.
 
 ### Fixed
