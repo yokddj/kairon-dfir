@@ -538,9 +538,34 @@ const UPLOAD_BLOB_DEFAULT_TIMEOUT_MS = 300_000;
 // connection that has gone silently dead after a large transfer.
 const UPLOAD_BLOB_STALL_INACTIVITY_MS = 20_000;
 
+// Chunks up to this size are read into memory before sending. Sending a
+// File slice lets the browser stream it from disk while the request is open;
+// when it cannot read the file then (moved, lost permission, Safari dropping
+// a slice of a large file), the request just fails as a network error.
+// Reading first sends bytes the browser already holds and turns a read
+// failure into a message that says so.
+const UPLOAD_BLOB_BUFFER_MAX_BYTES = 256 * 1024 * 1024;
+
+async function readUploadBody(blob: Blob): Promise<Blob | ArrayBuffer> {
+  if (blob.size > UPLOAD_BLOB_BUFFER_MAX_BYTES || typeof blob.arrayBuffer !== "function") return blob;
+  try {
+    return await blob.arrayBuffer();
+  } catch (readError) {
+    const name = (blob as File).name ? ` "${(blob as File).name}"` : "";
+    const detail = readError as { name?: string; message?: string } | null;
+    const reason = detail?.message ? ` (${detail.name || "Error"}: ${detail.message})` : "";
+    const error = new Error(
+      `The browser could not read the selected file${name}${reason}. It may have been moved, renamed or changed since it was selected. Select it again to resume the upload.`,
+    ) as UploadAttemptError;
+    error.nonRetryable = true;
+    throw error;
+  }
+}
+
 export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBlobOptions): Promise<T> {
   let lastError: UploadAttemptError | unknown;
   let lastRetryable = false;
+  const rawBody = options?.multipart ? blob : await readUploadBody(blob);
   for (const baseUrl of API_BASE_URLS) {
     const url = `${baseUrl}${path}`;
 
@@ -606,7 +631,7 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
               form.append(options.multipart.fieldName, blob, options.multipart.filename);
               return form;
             })()
-          : blob;
+          : rawBody;
         xhr.open(options?.method ?? "PUT", url, true);
         xhr.setRequestHeader("Accept", "application/json");
         xhr.setRequestHeader("Cache-Control", "no-store");
@@ -4523,6 +4548,7 @@ export type PreflightClassification = {
   filesystems: string[];
   installations: number | null;
   expected_parsers: string[];
+  password_protected?: boolean;
   warnings: PreflightWarning[];
   volume_diagnostics: PreflightVolumeDiagnostic[];
 };
@@ -7580,6 +7606,7 @@ export const api = {
       ingest_mode?: IngestMode;
       forced_evidence_kind?: "disk_image" | "memory_dump" | "collection" | "archive" | "unknown" | null;
       full_csv_tables?: boolean;
+      archive_password?: string;
     },
   ) => request<Evidence>(`/cases/${caseId}/evidence-uploads/${sessionId}/promote`, { method: "POST", body: JSON.stringify(payload) }),
   cancelEvidenceUploadSession: (caseId: string, sessionId: string) =>

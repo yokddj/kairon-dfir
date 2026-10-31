@@ -10,7 +10,7 @@ stamps ``MemoryUpload.metadata_json["workflow"] = "archive"`` once, and
 ``finalize_memory_upload_session`` reads that key to pick the handler.
 
 Scope: a single uploaded file whose extension is one of
-``.zip .7z .tar .tar.gz .gz .xz`` (see
+``.zip .ad1 .7z .tar .tar.gz .gz .xz`` (see
 ``app.services.memory.upload_sessions._allowed_archive_extension``, enforced
 at session creation so an unsupported archive is rejected before any bytes
 transfer). Folder uploads, server-path ingestion, multi-file uploads, and

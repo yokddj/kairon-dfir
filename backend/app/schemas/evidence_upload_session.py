@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.evidence_preflight import PreflightReport
 
@@ -144,6 +144,8 @@ class PromoteUploadSessionRequest(BaseModel):
     evidence_intent: str | None = None
     ingest_mode: str | None = None
     forced_evidence_kind: str | None = None
+    # Used once to decrypt a password-protected ZIP at registration; never stored.
+    archive_password: str | None = Field(default=None, repr=False)
 
 
 class UnifiedResumeDetails(BaseModel):

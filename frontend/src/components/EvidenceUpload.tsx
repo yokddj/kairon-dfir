@@ -344,7 +344,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   function openPrimaryFilePicker() {
     if (uploading) return;
     setFileIntent(null);
-    setFileAccept(".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz,.evtx,.raw,.mem,.dmp,.dump,.bin,.img,.vmem,.lime,.aff4,.pf,.lnk,.reg,.dat,.db,.sqlite,.csv,.json,.jsonl,.log,.txt,.eml,.mbox,.pst,.ost,.xml");
+    setFileAccept(".zip,.ad1,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz,.evtx,.raw,.mem,.dmp,.dump,.bin,.img,.vmem,.lime,.aff4,.pf,.lnk,.reg,.dat,.db,.sqlite,.csv,.json,.jsonl,.log,.txt,.eml,.mbox,.pst,.ost,.xml");
     setFileInputMultiple(false);
     fileInputRef.current?.click();
   }
@@ -717,7 +717,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         <div className="rounded-3xl border border-line bg-panel/70 p-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Recommended method</p>
           <p className="mt-3 text-sm text-muted">Upload a RAW evidence archive. The backend may automatically detect known collection layouts and, if it does not, it will fall back to generic archive ingest.</p>
-          <button type="button" disabled={uploading} onClick={() => openFilePicker("raw_archive", ".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz")} className="mt-4 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
+          <button type="button" disabled={uploading} onClick={() => openFilePicker("raw_archive", ".zip,.ad1,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz")} className="mt-4 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
             Upload RAW evidence archive
           </button>
         </div>
@@ -728,7 +728,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         <div className="rounded-3xl border border-line bg-panel/70 p-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Recommended method</p>
           <p className="mt-3 text-sm text-muted">Upload a parsed evidence archive and process it as structured evidence.</p>
-          <button type="button" disabled={uploading} onClick={() => openFilePicker("parsed_archive", ".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz")} className="mt-4 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
+          <button type="button" disabled={uploading} onClick={() => openFilePicker("parsed_archive", ".zip,.ad1,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz")} className="mt-4 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
             Upload parsed evidence archive
           </button>
         </div>

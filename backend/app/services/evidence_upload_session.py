@@ -1051,6 +1051,7 @@ def promote_upload_session(
     evidence_intent: str | None = None,
     ingest_mode: str | None = None,
     forced_evidence_kind: str | None = None,
+    archive_password: str | None = None,
 ) -> Evidence:
     """The shared bridge from a staged legacy session to a real Evidence
     row -- one function serving four architecturally distinct intake
@@ -1086,6 +1087,7 @@ def promote_upload_session(
     """
     from app.api.routes_evidence import RegisterPathRequest, _actor_label, _current_user_id, register_evidence_path, upload_disk_image, upload_evidence, upload_evidence_folder
     from app.models.evidence import EvidenceType
+    from app.ingest.encrypted_archive import ArchivePasswordError, check_zip_password
     from app.services.host_resolution import assign_evidence_host as service_assign_evidence_host, resolve_host
     from app.services.memory.upload_sessions import create_memory_upload_session_from_staged_file, finalize_memory_upload_session
 
@@ -1260,6 +1262,12 @@ def promote_upload_session(
                     # or older client) preserves exactly today's behavior:
                     # "raw" intent, upload_evidence's own full-forensic
                     # ingest_mode default.
+                    # Checked before upload_evidence takes the staged file, so a
+                    # missing or wrong password leaves the session to retry.
+                    try:
+                        check_zip_password(staged_path, archive_password)
+                    except ArchivePasswordError as exc:
+                        raise UploadSessionError(exc.code, exc.message) from exc
                     evidence = upload_evidence(
                         case_id,
                         upload,
@@ -1274,6 +1282,7 @@ def promote_upload_session(
                         evtx_profile=evtx_profile,
                         memory_authorization_acknowledged=memory_authorization_acknowledged,
                         memory_upload_id=None,
+                        archive_password=archive_password,
                         db=db,
                         current_user=current_user,
                     )

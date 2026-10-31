@@ -2,6 +2,7 @@ import json
 import logging
 from pathlib import Path
 import re
+import shutil
 from typing import Any
 from uuid import uuid4
 
@@ -69,6 +70,7 @@ from app.services.evidence_runs import (
     upsert_ingest_run,
 )
 from app.services.auth_dependencies import get_optional_user
+from app.services.evidence_container_prep import ContainerPrepError, prepare_upload_container
 from app.services.evidence_integrity import build_evidence_integrity_payload, build_evidence_manifest, duplicate_evidence_error_detail, find_duplicate_evidence, record_evidence_event, serialize_evidence_event, verify_evidence_integrity
 from app.services.processing_queue import get_evidence_processing, get_evidence_processing_run, list_case_processing
 from app.services.ingest_benchmarks import (
@@ -2078,6 +2080,7 @@ def upload_evidence(
     evtx_profile: str | None = Form(None),
     memory_authorization_acknowledged: bool = Form(False),
     memory_upload_id: str | None = Form(None),
+    archive_password: str | None = Form(None),
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_optional_user),
 ) -> Evidence:
@@ -2094,6 +2097,8 @@ def upload_evidence(
         evtx_profile = None
     if not isinstance(memory_upload_id, str):
         memory_upload_id = None
+    if not isinstance(archive_password, str) or not archive_password:
+        archive_password = None
     if not db.get(Case, case_id):
         raise HTTPException(status_code=404, detail="Case not found")
     normalized_provided_host = _normalize_provided_host(provided_host)
@@ -2266,6 +2271,14 @@ def upload_evidence(
     duplicate = find_duplicate_evidence(db, case_id=case_id, sha256=uploaded_sha256)
     if duplicate is not None:
         raise HTTPException(status_code=409, detail=duplicate_evidence_error_detail(duplicate))
+    original_stored_path = stored_path
+    try:
+        stored_path, repacked_from = prepare_upload_container(stored_path, uploaded_sha256, archive_password=archive_password)
+    except ContainerPrepError as exc:
+        shutil.rmtree(original_stored_path.parent.parent, ignore_errors=True)
+        raise HTTPException(status_code=400, detail={"error_code": exc.code, "code": exc.code, "message": exc.message}) from exc
+    if repacked_from:
+        original_stored_path = Path(repacked_from["path"])
     raw_collection = False
     folder_entries: list[dict] = []
     file_count: int | None = None
@@ -2309,7 +2322,7 @@ def upload_evidence(
         case_id=case_id,
         original_filename=display_name,
         stored_path=str(stored_path),
-        original_path=str(stored_path),
+        original_path=str(original_stored_path),
         storage_mode=EvidenceStorageMode.uploaded,
         is_external=False,
         copy_to_storage=True,
@@ -2357,6 +2370,8 @@ def upload_evidence(
         else _initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform, "evtx_profile": normalized_evtx_profile}),
         error_log={},
     )
+    if repacked_from:
+        evidence.metadata_json = {**(evidence.metadata_json or {}), "repacked_from": repacked_from}
     db.add(evidence)
     _record_upload_custody_events(db, evidence, actor_user_id=_current_user_id(current_user))
     if host_resolution.host_id:

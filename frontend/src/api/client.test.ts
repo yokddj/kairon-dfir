@@ -244,7 +244,21 @@ describe("uploadBlob XHR transport", () => {
     const blob = new Blob(["hello world"]);
     await uploadBlob("/upload", blob);
 
-    expect(instances[0].body).toBe(blob);
+    // Read into memory first, so the browser is not streaming from disk mid-request.
+    expect(new TextDecoder().decode(instances[0].body as ArrayBuffer)).toBe("hello world");
+  });
+
+  it("reports a file the browser cannot read instead of a network error", async () => {
+    const instances = installMockXhr([{ responseText: JSON.stringify({ ok: true }) }]);
+
+    const { uploadBlob } = await import("./client");
+    const blob = new File(["data"], "challenge.zip");
+    Object.defineProperty(blob, "arrayBuffer", {
+      value: () => Promise.reject(new DOMException("The requested file could not be read", "NotReadableError")),
+    });
+
+    await expect(uploadBlob("/upload", blob)).rejects.toThrow(/could not read the selected file "challenge.zip" \(NotReadableError/);
+    expect(instances).toHaveLength(0);
   });
 
   it("sends no-store cache header", async () => {
@@ -265,7 +279,7 @@ describe("uploadBlob XHR transport", () => {
     await expect(uploadBlob("/upload", new Blob(["test"]), { signal: controller.signal })).rejects.toThrow("Upload aborted");
   });
 
-  it("stops immediately when parent aborts an in-flight XHR", async () => {
+  it("stops immediately when parent aborts while the chunk is read", async () => {
     const instances = installMockXhr([{ responseText: JSON.stringify({ ok: true }) }, { responseText: JSON.stringify({ ok: true }) }]);
     const { uploadBlob } = await import("./client");
     const controller = new AbortController();
@@ -274,7 +288,8 @@ describe("uploadBlob XHR transport", () => {
     controller.abort();
 
     await expect(promise).rejects.toThrow("Upload aborted");
-    expect(instances).toHaveLength(1);
+    // No request is opened, and no other API base URL is tried.
+    expect(instances).toHaveLength(0);
   });
 
   it("preserves Content-Type and custom headers", async () => {

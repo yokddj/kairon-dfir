@@ -8,6 +8,7 @@ import { MemoryEvidencePreparationCard } from "./memory/MemoryEvidencePreparatio
 import { MemoryInitialAnalysisAction } from "./memory/MemoryInitialAnalysisAction";
 import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
 import { memoryEvidenceRoute } from "../lib/canonicalRoutes";
+import { zipFolder } from "../lib/folderZip";
 import { hashBlob } from "../lib/sha256";
 
 type IntakeType = "disk_image" | "memory_dump" | "artifact_collection" | "folder" | "server_path";
@@ -47,7 +48,7 @@ const OVERRIDE_OPTIONS: Array<{ value: ForcedRoute; label: string }> = [
 // derived from the API response, since this only decides which upload
 // call to make, not authoritative eligibility (the server re-validates
 // unconditionally at session creation).
-const SUPPORTED_ARCHIVE_SUFFIX_GROUPS: string[][] = [[".zip"], [".7z"], [".tar", ".gz"], [".tar"], [".gz"], [".xz"]];
+const SUPPORTED_ARCHIVE_SUFFIX_GROUPS: string[][] = [[".zip"], [".ad1"], [".7z"], [".tar", ".gz"], [".tar"], [".gz"], [".xz"]];
 
 function isSupportedArchiveFilename(filename: string): boolean {
   const parts = filename.toLowerCase().split(".");
@@ -271,6 +272,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [hostSearch, setHostSearch] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [folderUploadSelected, setFolderUploadSelected] = useState(false);
+  const [folderPackProgress, setFolderPackProgress] = useState<number | null>(null);
   const [acquisitionSource, setAcquisitionSource] = useState<AcquisitionSource>("files");
   const [serverPath, setServerPath] = useState("");
   const [session, setSession] = useState<EvidenceUploadSessionRead | null>(null);
@@ -305,6 +307,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [evidenceIntent, setEvidenceIntent] = useState<EvidenceIntent>("raw");
   const [ingestMode, setIngestMode] = useState<IngestMode>("full_forensic");
   const [evtxProfile, setEvtxProfile] = useState<EvtxProfile>("full");
+  // Per preflight token; sent once with promote to decrypt a password-protected ZIP, never stored.
+  const [archivePasswords, setArchivePasswords] = useState<Record<string, string>>({});
   const [fullCsvTables, setFullCsvTables] = useState(false);
   const [hashProgress, setHashProgress] = useState<number | null>(null);
   const [clientSha256, setClientSha256] = useState<string | null>(null);
@@ -431,6 +435,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setHostSearch("");
     setFiles([]);
     setFolderUploadSelected(false);
+    setFolderPackProgress(null);
     setAcquisitionSource("files");
     setServerPath("");
     setSession(null);
@@ -480,6 +485,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   function selectEvidenceFiles(selectedFiles: File[], options: { folderUpload?: boolean } = {}) {
     setAcquisitionSource("files");
     setFolderUploadSelected(Boolean(options.folderUpload));
+    setFolderPackProgress(null);
     setFiles(selectedFiles);
     setSession(null);
     setPreflight(null);
@@ -774,8 +780,16 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       if (!requiresFolderInput && files.length === 1) {
         return uploadSingleFileResumable(files[0], onProgress);
       }
-      if (requiresFolderInput || files.length > 1) {
-        return api.createEvidenceUploadSession(caseId, { files, folderUpload: requiresFolderInput }, { declaredPlatform: platform, onProgress });
+      if (requiresFolderInput) {
+        // A folder is packed into one stored ZIP and sent like any archive:
+        // resumable 64 MB chunks, no request-size or file-count limit.
+        setFolderPackProgress(0);
+        const archive = await zipFolder(files, { onProgress: setFolderPackProgress });
+        setFolderPackProgress(1);
+        return uploadSingleFileResumable(archive, onProgress);
+      }
+      if (files.length > 1) {
+        return api.createEvidenceUploadSession(caseId, { files, folderUpload: false }, { declaredPlatform: platform, onProgress });
       }
       return api.createEvidenceUploadSession(caseId, { file: files[0] }, { declaredPlatform: platform, clientSha256: clientSha256 ?? undefined, onProgress });
     },
@@ -1014,6 +1028,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
             ingest_mode: ingestMode,
             evtx_profile: evtxProfile,
             full_csv_tables: fullCsvTables && item.preflight.classification.category !== "memory_dump",
+            archive_password: item.preflight.classification.password_protected ? archivePasswords[item.preflight.token] : undefined,
           });
           lastEvidence = evidence;
           if (evidence.evidence_type === "memory_dump") memoryEvidences.push(evidence);
@@ -1046,6 +1061,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
           ingest_mode: ingestMode,
           evtx_profile: evtxProfile,
           full_csv_tables: fullCsvTables && preflight?.classification.category !== "memory_dump",
+          archive_password: preflight?.classification.password_protected ? archivePasswords[preflight.token] : undefined,
         });
         promotedRef.current = true;
         promotedEvidenceRef.current = evidence;
@@ -1133,7 +1149,9 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     const detected = routeForCategory(report.classification.category);
     return forced && detected && forced !== detected && [forced, detected].includes("disk_image") && [forced, detected].includes("memory_dump") && !wrongRouteAccepted[report.token];
   });
-  const canStartProcessing = !startMutation.isPending && hostAssignmentBlockingReason === null && !overrideBlocking && !wrongRouteBlocking;
+  const passwordProtectedReports = ingestablePreflightReports.filter((report) => report.classification.password_protected);
+  const passwordMissing = passwordProtectedReports.some((report) => !archivePasswords[report.token]);
+  const canStartProcessing = !startMutation.isPending && hostAssignmentBlockingReason === null && !overrideBlocking && !wrongRouteBlocking && !passwordMissing;
   const selectedHostName = hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE
     ? caseHosts.find((h) => h.id === hostChoice)?.display_name || "Selected host"
     : null;
@@ -1494,6 +1512,12 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                   </>
                 ) : (
                   <div className="mt-4 space-y-2">
+                    {requiresFolderInput && folderPackProgress !== null ? (
+                      <div className={`rounded-xl border px-3 py-2 ${folderPackProgress === 1 ? "border-mint/30 bg-mint/10 text-mint" : "border-accent/30 bg-accent/10 text-accent"}`} data-testid="folder-pack-progress">
+                        {folderPackProgress === 1 ? "Done:" : "Active:"} Packing folder into one archive {Math.round(folderPackProgress * 100)}%
+                        <div className="mt-2 h-1.5 rounded-full bg-abyss"><div className="h-1.5 rounded-full bg-accent transition-all" style={{ width: `${Math.max(5, Math.round(folderPackProgress * 100))}%` }} /></div>
+                      </div>
+                    ) : null}
                     {!requiresPathInput ? (
                       <div className={`rounded-xl border px-3 py-2 ${uploadProgress === 1 ? "border-mint/30 bg-mint/10 text-mint" : inspectionState === "uploading" || inspectionState === "finalizing_upload" ? "border-accent/30 bg-accent/10 text-accent" : "border-line text-muted"}`}>
                         {uploadProgress === 1 ? "Done:" : inspectionState === "uploading" || inspectionState === "finalizing_upload" ? "Active:" : "Queued:"} Uploading evidence{uploadProgress !== null ? ` ${Math.round(uploadProgress * 100)}%` : ""}
@@ -1804,6 +1828,28 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
               </div>
             ) : readyToProcess ? (
               <p className="mt-4 text-sm font-semibold text-mint">Ready to process</p>
+            ) : null}
+
+            {passwordProtectedReports.length ? (
+              <div className="mt-4 rounded-2xl border border-amber/40 bg-amber/10 p-4" data-testid="archive-password-panel">
+                <p className="text-sm font-semibold text-ink">Password-protected archive</p>
+                <p className="mt-1 text-xs text-muted">Kairon decrypts it once when processing starts and does not store the password.</p>
+                <div className="mt-3 grid gap-2">
+                  {passwordProtectedReports.map((report) => (
+                    <label key={report.token} className="text-xs text-muted">
+                      {report.original_filename}
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={archivePasswords[report.token] ?? ""}
+                        onChange={(event) => setArchivePasswords((current) => ({ ...current, [report.token]: event.target.value }))}
+                        className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink"
+                        data-testid={`archive-password-${report.token}`}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
             ) : null}
 
             <details className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen((event.target as HTMLDetailsElement).open)}>

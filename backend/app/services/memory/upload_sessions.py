@@ -321,6 +321,7 @@ def _disk_image_extension(filename: str) -> str:
 # app.ingest.archive.extract_archive's asynchronous extraction time.
 _ARCHIVE_SUFFIX_GROUPS: tuple[tuple[str, ...], ...] = (
     (".zip",),
+    (".ad1",),
     (".7z",),
     (".tar", ".gz"),
     (".tar",),
@@ -336,7 +337,7 @@ def _allowed_archive_extension(filename: str) -> str:
             return "".join(group)
     raise MemoryUploadSessionError(
         "MEMORY_UPLOAD_INVALID_EXTENSION",
-        "Unsupported archive extension. Supported: .zip, .7z, .tar, .tar.gz, .gz, .xz.",
+        "Unsupported archive extension. Supported: .zip, .ad1, .7z, .tar, .tar.gz, .gz, .xz.",
     )
 
 

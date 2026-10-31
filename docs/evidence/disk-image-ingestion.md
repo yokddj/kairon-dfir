@@ -18,11 +18,11 @@ Implemented now:
 - Windows and Linux installation detection
 - Reuse of existing Windows/Linux artifact discovery, parsers, normalizers, indexing, search and timeline
 
-Prepared but not supported yet:
+Prepared but not supported yet (AD1 logical images are supported as collections, see
+[ingestion](ingestion.md#ad1-logical-images)):
 
 - AFF/AFF4
 - L01
-- AD1
 - RAID
 - APFS/HFS+
 - BitLocker unlock
