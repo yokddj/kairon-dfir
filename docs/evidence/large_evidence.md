@@ -14,8 +14,9 @@ Recommended packaging:
 
 For large folders or full extractions:
 
-- avoid direct browser folder upload
-- compress the folder to `ZIP/TAR/7z`
+- select the folder in the evidence wizard (it is packed into one ZIP in the browser
+  and sent in resumable chunks, see below)
+- or compress the folder to `ZIP/TAR/7z`
 - or use `Server-mounted path`
 
 Detection of the specific tooling is automatic. The user does not need to choose whether the archive came from a particular tool.
@@ -84,17 +85,20 @@ Solutions:
 
 ## Browser Folder Upload
 
-Browser folder upload is not the primary forensic flow:
+The evidence wizard's **Select Folder** packs the folder into one uncompressed ZIP in
+the browser (`frontend/src/lib/folderZip.ts`, ZIP64 when it passes 4 GB or 65,535
+files) and sends it through the same resumable upload as any archive: 64 MB chunks,
+retries, preflight. Nothing is copied in the browser; each file is read once to
+compute its CRC-32 and again as its chunk is sent. On the server it is an ordinary
+ZIP whose root is the folder, so it has no request-size or file-count limit.
 
-- it can omit metadata or behave inconsistently depending on the browser
-- it degrades with many thousands of files
-- it is not a good option for large collections or acquired evidence
+The older multipart folder routes (`POST /api/cases/{id}/evidences/upload-folder`,
+the Velociraptor folder discovery) still send every file in one request and stay
+behind `BACKEND_ENABLE_EXPERIMENTAL_FOLDER_UPLOAD` with their file-count and size
+limits.
 
-Recommendation:
-
-- compress first to `ZIP/TAR/7z`
-- or use `Server-mounted path`
-- only use folder upload if the deployment enabled it as an experimental option
+An interrupted folder upload cannot be resumed after a page reload: the browser
+cannot reopen the folder by itself, so it has to be selected and sent again.
 
 ## What Is and Isn't Deleted When Removing Evidence
 
