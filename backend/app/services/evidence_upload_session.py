@@ -395,7 +395,7 @@ async def _append_resumable_upload_chunk_stream_locked(
     return session
 
 
-def finalize_resumable_upload_session(db: Session, session: EvidenceUploadSession) -> tuple[EvidenceUploadSession, PreflightReport]:
+def finalize_resumable_upload_session(db: Session, session: EvidenceUploadSession, *, wait_seconds: float = 0) -> tuple[EvidenceUploadSession, PreflightReport]:
     # Finalize can be triggered twice for the same session - once
     # synchronously by the client's POST .../finalize, and once
     # asynchronously by the background preflight job enqueued when the
@@ -403,9 +403,15 @@ def finalize_resumable_upload_session(db: Session, session: EvidenceUploadSessio
     # lock both callers could pass the status guard below concurrently and
     # both hash + preflight the same staged file, racing on the same
     # session row and scratch directory.
+    # The client waits (wait_seconds) rather than failing with "busy" when
+    # the background job got there first, and then takes the report that
+    # job stored instead of inspecting the same file again.
     try:
-        with redis_upload_lock(f"kairon:evidence_upload:{session.id}:finalize"):
+        with redis_upload_lock(f"kairon:evidence_upload:{session.id}:finalize", wait_seconds=wait_seconds):
             db.refresh(session)
+            cached = (session.metadata_json or {}).get("preflight_report")
+            if wait_seconds and cached and session.status == EvidenceUploadSessionStatus.staged.value:
+                return session, PreflightReport.model_validate(cached)
             return _finalize_resumable_upload_session_locked(db, session)
     except UploadLockUnavailableError as exc:
         raise UploadSessionError("session_lock_unavailable", str(exc)) from exc
@@ -442,7 +448,7 @@ def _finalize_resumable_upload_session_locked(db: Session, session: EvidenceUplo
 
     if session.status == EvidenceUploadSessionStatus.staged.value:
         report = run_preflight(Path(session.staged_path), token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch", on_stage=_advance_operation_stage)
-        session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete"}
+        session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete", "preflight_report": report.model_dump(mode="json")}
         session.failure_message = None
         _touch_upload_session(session)
         db.add(session)
@@ -482,7 +488,7 @@ def _finalize_resumable_upload_session_locked(db: Session, session: EvidenceUplo
         report = run_preflight(path, token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch", on_stage=_advance_operation_stage)
     _advance_operation_stage("preparing_evidence")
     session.status = EvidenceUploadSessionStatus.staged.value
-    session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete"}
+    session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete", "preflight_report": report.model_dump(mode="json")}
     session.failure_message = None
     with timed_phase("finalize.persist_preflight_result", session_id=session.id):
         _touch_upload_session(session)

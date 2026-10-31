@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- A resumable upload could end in "Inspection failed: This upload session is busy": the last chunk queues a background preflight and the wizard also finalizes, and whichever lost the lock failed. The wizard's finalize now waits for the background inspection and reuses its report; the background job steps aside when the wizard got there first.
 - SrumECmd CSVs: the application was taken from `AppId`, which is an index, so every row was named by a number and no SRUM rule could match; Network Connections rows were an unknown table dated in year 2059+ (`ConnectedTime` is seconds, not a date); App Timeline and vfuprov rows were filed as resource usage; Push Notifications were read as a notification store.
 - Shellbags: every folder under "This PC" / "My Computer" was classified as a Control Panel item, while real Control Panel items (`ControlPanelHome`) were not.
 - Defender's 1116 (malware detected) got the generic "High-risk event" built-in detection instead of **Defender High Severity Detection** and its sibling rules.
