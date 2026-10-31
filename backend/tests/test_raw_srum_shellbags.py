@@ -230,6 +230,12 @@ def test_srum_unattributed_rows_raise_no_volume_lead() -> None:
     assert "high_upload" not in doc["tags"]
 
 
+def test_srum_delivery_optimization_upload_is_not_a_lead() -> None:
+    doc = _srum_doc(_base_row(ExeInfo="DoSvc", BytesSent=str(300 * 1024 * 1024), BytesReceived="1000"), "NetworkUsages")
+    assert "high_upload" not in doc["tags"]
+    assert doc["risk_score"] < 40
+
+
 def test_srum_push_notifications_stay_srum(tmp_path: Path) -> None:
     path = tmp_path / "SRUM_PushNotifications.csv"
     path.write_text("Id,Timestamp,ExeInfo,ExeInfoDescription,ExeTimestamp,SidType,Sid,UserName,UserId,AppId,NetworkType,NotificationType,PayloadSize\n1,2026-03-28 11:57:00,Contoso.App,,,UnknownOrUserSid,,,2,1,0,1,120\n", encoding="utf-8")

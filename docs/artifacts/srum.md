@@ -67,6 +67,7 @@ application ran, not that it used the network):
 - high or upload-heavy outbound volume.
 
 Rows SRUM could not attribute to an application (an empty `SruDbIdMapTable` entry)
+and Delivery Optimization (`DoSvc`, which uploads updates to other machines by design)
 raise no volume lead. Sync clients (OneDrive, Dropbox, Google Drive) are tagged
 `cloud_sync` only.
 

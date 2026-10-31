@@ -633,6 +633,8 @@ SRUM_FILE_TRANSFER_HINTS = {"rclone", "winscp", "filezilla", "megasync"}
 SRUM_CLOUD_SYNC_HINTS = {"onedrive", "dropbox", "googledrive", "google drive"}
 SRUM_LOLBIN_NETWORK_HINTS = {"powershell.exe", "pwsh.exe", "cmd.exe", "certutil.exe", "bitsadmin.exe", "mshta.exe", "rundll32.exe", "regsvr32.exe", "wscript.exe", "cscript.exe", "curl.exe", "wget.exe"}
 SRUM_HIGH_UPLOAD_THRESHOLD = 100 * 1024 * 1024
+# Delivery Optimization serves Windows and Store updates to other machines: uploading is its job.
+SRUM_PEER_UPLOAD_SERVICES = {"dosvc"}
 # Defender platform updates install under ProgramData, writable only by SYSTEM (same rule as startup_persistence).
 SRUM_DEFENDER_PLATFORM_RE = re.compile(r"\\programdata\\microsoft\\windows defender\\platform\\", re.IGNORECASE)
 
@@ -1347,7 +1349,7 @@ def _derive_srum_risk_and_reasons(
             reasons.update(path_reasons)
             risk = max(risk, 30 if total > 0 else 10)
 
-    if "missing_application" in data_quality:
+    if "missing_application" in data_quality or basename_lower in SRUM_PEER_UPLOAD_SERVICES:
         # Rows SRUM could not attribute (an empty SruDbIdMapTable entry) have nobody to raise a lead about.
         sent = 0
     if sent >= SRUM_HIGH_UPLOAD_THRESHOLD:
