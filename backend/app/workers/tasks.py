@@ -445,12 +445,16 @@ def run_evidence_upload_preflight(upload_session_id: str) -> dict:
         transition_operation,
         upsert_operation_job,
     )
-    from app.services.evidence_upload_session import finalize_resumable_upload_session
+    from app.services.evidence_upload_session import UploadSessionError, finalize_resumable_upload_session
 
     with SessionLocal() as db:
         session = db.get(EvidenceUploadSession, upload_session_id)
         if session is None:
             return {"status": "missing_session", "upload_session_id": upload_session_id}
+        if session.status not in {"created", "uploading", "interrupted"}:
+            # The client's finalize already inspected (staged) or registered
+            # (promoted) it; inspecting again would only repeat that work.
+            return {"status": "finalized_by_client", "upload_session_id": upload_session_id, "reason": session.status}
         operation = get_upload_operation(db, session)
         active = active_job_for_operation(db, operation, "preflight")
         job = active or upsert_operation_job(db, operation, job_type="preflight", dedupe_key=session.id, status="queued", commit=False)
@@ -459,7 +463,16 @@ def run_evidence_upload_preflight(upload_session_id: str) -> dict:
             transition_operation(operation, "finalizing", stage="finalizing_upload", owner="worker", force=True)
             db.add(operation)
             db.commit()
-            session, report = finalize_resumable_upload_session(db, session)
+            try:
+                session, report = finalize_resumable_upload_session(db, session)
+            except UploadSessionError as exc:
+                if exc.code not in {"session_busy", "session_not_uploading"}:
+                    raise
+                # The client's own finalize got there first (it holds the
+                # lock, or already staged/promoted the session): its result
+                # stands, so this job steps aside instead of failing it.
+                mark_operation_job_finished(db, job, status="completed", progress=100)
+                return {"status": "finalized_by_client", "upload_session_id": upload_session_id, "reason": exc.code}
             operation = get_upload_operation(db, session)
             transition_operation(operation, "waiting_user", stage="preflight_complete", owner="backend", force=True)
             upsert_operation_job(db, operation, job_type="preflight", dedupe_key=session.id, status="completed", metadata={"preflight_status": report.status}, commit=False)

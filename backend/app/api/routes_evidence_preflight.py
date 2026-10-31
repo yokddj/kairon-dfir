@@ -411,13 +411,18 @@ async def append_resumable_evidence_upload(case_id: str, session_id: str, reques
     return EvidenceUploadSessionAppendResponse(session=_session_to_read(db, session), offset=int(session.bytes_received or 0))
 
 
+# The last chunk also queues a background preflight; a client finalize that
+# lands while it runs waits for it (below nginx's 1800 s finalize timeout).
+FINALIZE_LOCK_WAIT_SECONDS = 1500
+
+
 @router.post("/{case_id}/evidence-uploads/{session_id}/finalize", response_model=EvidenceUploadSessionFinalizeResponse)
 def finalize_resumable_evidence_upload(case_id: str, session_id: str, db: Session = Depends(get_db)) -> EvidenceUploadSessionFinalizeResponse:
     with timed_phase("finalize.http_request", case_id=case_id, session_id=session_id):
         try:
             with timed_phase("finalize.get_upload_session", session_id=session_id):
                 session = get_upload_session(db, case_id, session_id)
-            session, report = finalize_resumable_upload_session(db, session)
+            session, report = finalize_resumable_upload_session(db, session, wait_seconds=FINALIZE_LOCK_WAIT_SECONDS)
         except UploadSessionError as exc:
             raise _http_from_upload_error(exc) from exc
         except Exception as exc:

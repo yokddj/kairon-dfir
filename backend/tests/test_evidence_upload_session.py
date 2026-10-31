@@ -428,6 +428,58 @@ def test_resumable_finalize_surfaces_lock_contention_as_session_busy(tmp_path, m
     assert exc.value.code == "session_busy"
 
 
+def test_waiting_finalize_takes_the_report_the_background_job_stored(tmp_path, monkeypatch):
+    # The client finalize that waited for the lock must not inspect the file
+    # a second time once the background job has staged it.
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+    zip_path = tmp_path / "collection.zip"
+    _make_zip(zip_path)
+    payload = zip_path.read_bytes()
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=len(payload))
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(payload))
+    db.refresh(session)
+    staged, first_report = finalize_resumable_upload_session(db, session)
+
+    from app.services import evidence_upload_session as evidence_upload_session_module
+
+    def no_second_inspection(*args, **kwargs):
+        raise AssertionError("preflight ran twice")
+
+    monkeypatch.setattr(evidence_upload_session_module, "run_preflight", no_second_inspection)
+    again, report = finalize_resumable_upload_session(db, staged, wait_seconds=5)
+    assert again.status == "staged"
+    assert report == first_report
+
+
+def test_upload_lock_waits_for_the_holder_when_asked(monkeypatch):
+    from app.services import upload_locks
+
+    class _Redis:
+        def __init__(self):
+            self.attempts = 0
+
+        def set(self, *args, **kwargs):
+            self.attempts += 1
+            return self.attempts >= 3
+
+        def eval(self, *args):
+            return 1
+
+    fake = _Redis()
+    monkeypatch.setattr(upload_locks.redis.Redis, "from_url", lambda url: fake)
+    monkeypatch.setattr(upload_locks, "_LOCK_WAIT_POLL_SECONDS", 0)
+    with upload_locks.redis_upload_lock("key", wait_seconds=5):
+        pass
+    assert fake.attempts == 3
+    fake.attempts = -100
+    with pytest.raises(upload_locks.UploadLockBusyError):
+        with upload_locks.redis_upload_lock("key"):
+            pass
+
+
 @pytest.mark.anyio
 async def test_resumable_stream_append_preserves_confirmed_offset_on_disconnect(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)

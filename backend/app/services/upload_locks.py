@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from contextlib import contextmanager
 from uuid import uuid4
 
@@ -22,6 +23,7 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 DEFAULT_LOCK_TTL_SECONDS = 1800
+_LOCK_WAIT_POLL_SECONDS = 0.5
 
 
 class UploadLockBusyError(RuntimeError):
@@ -33,13 +35,19 @@ class UploadLockUnavailableError(RuntimeError):
 
 
 @contextmanager
-def redis_upload_lock(key: str, *, ttl: int = DEFAULT_LOCK_TTL_SECONDS):
+def redis_upload_lock(key: str, *, ttl: int = DEFAULT_LOCK_TTL_SECONDS, wait_seconds: float = 0):
+    """``wait_seconds`` > 0 waits for a holder to finish instead of failing
+    at once with UploadLockBusyError."""
     token = str(uuid4())
     redis_conn: redis.Redis | None = None
     acquired = False
     try:
         redis_conn = redis.Redis.from_url(get_settings().redis_url)
         acquired = bool(redis_conn.set(key, token, nx=True, ex=ttl))
+        deadline = time.monotonic() + wait_seconds
+        while not acquired and time.monotonic() < deadline:
+            time.sleep(_LOCK_WAIT_POLL_SECONDS)
+            acquired = bool(redis_conn.set(key, token, nx=True, ex=ttl))
     except Exception:  # noqa: BLE001 - tests commonly run without Redis
         if "PYTEST_CURRENT_TEST" not in os.environ:
             raise UploadLockUnavailableError("Upload locking backend is unavailable. Retry later.")
