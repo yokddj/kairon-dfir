@@ -430,6 +430,8 @@ class Settings(BaseSettings):
     mftecmd_timeout_seconds: int = 0
     srumecmd_dotnet_dll: str = "/opt/eztools/SrumECmd/SrumECmd.dll"
     srumecmd_timeout_seconds: int = 0
+    sbecmd_dotnet_dll: str = "/opt/eztools/SBECmd/SBECmd.dll"
+    sbecmd_timeout_seconds: int = 0
     mft_summary_max_records: int = 10000
     mft_summary_max_seconds: int = 1800
     opensearch_java_heap: str = "2g"

@@ -40,8 +40,8 @@ The structured source of truth is [`docs/data/parser-coverage.json`](../data/par
 | Network / DNS / WLAN | partial | CSV, JSON, JSONL, TXT, XML, hosts file | Velociraptor, netsh, ipconfig | Artifact Explorer, Search, Timeline | Many outputs are configuration/context, not events. |
 | Cloud Sync | partial | CSV, JSON, JSONL, LOG, TXT, INI | KAPE, Velociraptor, manual collections | Artifact Explorer, Search, Timeline | Does not prove exfiltration by itself. |
 | WMI | partial | CSV, JSON, JSONL, EVTX, registry rows | Autoruns, Velociraptor, KAPE | Artifact Explorer, Search, Timeline, Detections | Raw WMI repository parsing is incomplete. |
-| Shellbags | partial | CSV | SBECmd output | Artifact Explorer, Search, Timeline | SBECmd CSV is parsed and indexed; direct raw `NTUSER.DAT`/`UsrClass.dat` hive decoding is not implemented. |
-| SRUM | partial | CSV, JSON, JSONL, SRUDB inventory | SrumECmd parsed output | Artifact Explorer, Search, Timeline | SrumECmd cannot run in current Linux deployment (requires Windows ESE libraries). |
+| Shellbags | supported | raw hive, CSV | SBECmd (raw `NTUSER.DAT`/`UsrClass.dat` on the Linux worker) and SBECmd output | Artifact Explorer, Search, Timeline | Shell namespace paths mapped to drive and UNC paths. |
+| SRUM | supported | raw `SRUDB.dat`, CSV, JSON, JSONL | native ESE reader (dissect.esedb) and SrumECmd output | Artifact Explorer, Search, Timeline | SrumECmd itself cannot run on Linux; the native reader writes SrumECmd's columns. |
 | Email | experimental | EML, MBOX, PST/OST inventory | manual collections, KAPE, Velociraptor | Artifact Explorer, Search | PST/OST support is inventory-oriented. |
 | Windows UI local DBs | partial | CSV, raw DB inventory | manual collections, KAPE, Velociraptor | Artifact Explorer, Search, Timeline | Many raw DB files are preserved but not fully parsed. |
 | Memory | experimental | RAW, DMP, VMEM, LIME, AFF4 | Volatility 3 optional external backend | Memory views, Process Graph, Timeline, Search, Command History, Persistence | Not in Detections or Reports. See Memory Analysis Backends below. |
@@ -61,7 +61,7 @@ Quick reference for locating the parser code and recognizing typical input filen
 | Registry | `*_RECmd_Output.csv`, RECmd Batch outputs | `backend/app/ingest/eztools/recmd.py` |
 | MFT | `*_MFTECmd_Output.csv` | `backend/app/ingest/eztools/mftecmd.py` |
 | USN Journal | CSVs of `$J`/`UsnJrnl` parsed by MFTECmd | `backend/app/ingest/eztools/mftecmd.py` |
-| SRUM | `*_SrumECmd_Output.csv`, `*NetworkUsage*.csv`, `*ApplicationResourceUsage*.csv` | `backend/app/ingest/eztools/srumecmd.py` |
+| SRUM | raw `SRUDB.dat`, `*_SrumECmd_Output.csv`, `*NetworkUsage*.csv`, `*ApplicationResourceUsage*.csv` | `backend/app/ingest/raw_parsers/srum_esedb.py`, `backend/app/ingest/eztools/srumecmd.py` |
 | Scheduled Tasks | raw Task Scheduler XML, `*ScheduledTasks*.csv`, `*TaskScheduler*.csv` | `backend/app/ingest/scheduled_tasks/*` |
 | Defender | `DetectionHistory`, `MPLog*.log`, `*Defender*.csv/json` | `backend/app/ingest/defender/*` |
 | PowerShell (non-EVTX) | `ConsoleHost_history.txt`, `PowerShell_transcript*.txt`, `*.ps1` | `backend/app/ingest/powershell/*` |
@@ -69,7 +69,7 @@ Quick reference for locating the parser code and recognizing typical input filen
 | Browser | parsed CSV/JSON, raw `History`/`places.sqlite` | `backend/app/ingest/browser/*` |
 | Amcache | `*Amcache*.csv`, `AmcacheParser_Output.csv` | normalizer: `normalize_amcache_row` |
 | Shimcache / AppCompat | `*ShimCache*.csv`, `*AppCompatCache*.csv`, `*RecentFileCache*.csv` | normalizer: `normalize_shimcache_row` |
-| Shellbags | `*_SBECmd_Output.csv`, raw hives from Velociraptor | `backend/app/ingest/shellbags/*` |
+| Shellbags | `*_SBECmd_Output.csv`, raw `NTUSER.DAT`/`UsrClass.dat` | `backend/app/ingest/raw_parsers/sbecmd_backend.py`, `backend/app/ingest/shellbags/*` |
 | USB | `setupapi.dev.log`, `*USB*.csv`, `*USBSTOR*.csv`, `*MountedDevices*.csv` | `backend/app/ingest/usb/*` |
 | BITS | `*BITS*.csv/json`, `*bitsadmin*.txt`, `qmgr*.dat`, `qmgr.db` | `backend/app/ingest/bits/*` |
 | WMI | `*WMI*.csv/json`, `OBJECTS.DATA`, `INDEX.BTR`, `MAPPING*.MAP`, WMI-Activity EVTX/CSV | `backend/app/ingest/wmi/*` |
@@ -101,7 +101,7 @@ Kairon documents compatible outputs, but does not redistribute third-party colle
 | --- | --- |
 | KAPE | Good source for EZ Tools CSV output and common Windows artifacts. Coverage depends on selected targets/modules. |
 | Velociraptor | Supported for ZIP discovery, selected artifact outputs, browser SQLite and several Windows triage outputs. |
-| Eric Zimmerman tools | EvtxECmd, MFTECmd and RECmd are primary supported parsed-output paths. LECmd, JLECmd, AmcacheParser and AppCompatCacheParser are advanced or compatible-output paths. SrumECmd and SBECmd have limitations in the current deployment. |
+| Eric Zimmerman tools | EvtxECmd, MFTECmd and RECmd are primary supported parsed-output paths. LECmd, JLECmd, AmcacheParser and AppCompatCacheParser are advanced or compatible-output paths. SBECmd runs on the Linux worker for raw hives; SrumECmd does not (raw SRUM is read natively instead). |
 | Hayabusa | Detection-style output may be recognized as EVTX/detection context when exported to compatible structured rows. It is not a replacement for raw EVTX parsing. |
 | Chainsaw | Not documented as a stable parser family. Compatible outputs may be searchable if exported as generic CSV/JSON with recognizable fields, but no first-class support is claimed. |
 | SIFT | Kairon does not integrate SIFT as a collector. Files exported from SIFT workflows may be ingested if they match supported formats. |
@@ -152,7 +152,6 @@ When interpreting Processing Queue results:
 
 - macOS artifact support is not implemented.
 - Virtual Disk Upload is not implemented.
-- Raw Shellbags hive parsing is not stable.
 - Raw SRUDB.dat parsing is not stable in the current Linux deployment.
 - Full PCAP forensics is not claimed.
 - Browser credential/cookie stores are intentionally not parsed.

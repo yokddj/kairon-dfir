@@ -9163,7 +9163,7 @@ def test_velociraptor_discovery_detects_srudb(tmp_path: Path) -> None:
     assert candidate.category == "network_activity"
     assert candidate.supported is False
     assert candidate.parser_status == "detected_not_implemented"
-    assert candidate.reason == "Detected raw SRUM database. Use the scoped SRUM action to parse with SrumECmd."
+    assert candidate.reason == "Detected raw SRUM database. Indexed by the SRUM step of recommended indexing, not by the core ingest."
 
 
 def test_srumecmd_backend_detects_srudb_from_metadata() -> None:

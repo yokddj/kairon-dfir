@@ -1831,6 +1831,9 @@ def normalize_row(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
     elif artifact_family.startswith("netscaler_"):
         detected_host = document["host"]["hostname"]
         document = normalize_netscaler_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
+    elif artifact_type == "srum":
+        # Before the filename heuristics: SRUM_PushNotifications.csv would otherwise read as a notification store.
+        document = normalize_srum_row(document, row, artifact_meta)
     elif artifact_type == "mft" or "mftecmd" in name or {"entrynumber", "sequencenumber", "parententrynumber"} <= headers:
         document = normalize_mft_row(document, row, artifact_meta)
     elif is_native_prefetch_context or "pecmd" in name or "prefetch" in name:
@@ -2371,7 +2374,10 @@ def normalize_file(case_id: str, evidence_id: str, artifact_id: str, path: Path,
             "bulk_index_errors": 0,
         }
         return documents
-    if str(artifact_meta.get("artifact_type") or "").lower() == "windows_ui" or looks_like_windows_ui_artifact(path, list(_csv_headers(path)) if path.suffix.lower() == ".csv" else None):
+    if str(artifact_meta.get("artifact_type") or "").lower() == "windows_ui" or (
+        str(artifact_meta.get("artifact_type") or "").lower() != "srum"
+        and looks_like_windows_ui_artifact(path, list(_csv_headers(path)) if path.suffix.lower() == ".csv" else None)
+    ):
         rows, ui_audit = parse_windows_ui_artifact_file(path, artifact_meta)
         documents = [normalize_row(case_id, evidence_id, artifact_id, row, {**artifact_meta, "artifact_type": "windows_ui"}) for row in rows]
         by_event_type: Counter[str] = Counter()

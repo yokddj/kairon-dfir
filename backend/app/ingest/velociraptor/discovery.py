@@ -49,7 +49,7 @@ RAW_UPLOAD_NAME_MAP: dict[str, tuple[str, str]] = {
     "web data": ("browser_raw", "custom sqlite parser / Hindsight"),
     "places.sqlite": ("browser_history_raw", "custom sqlite parser / Hindsight"),
     "cookies.sqlite": ("browser_raw", "custom sqlite parser / Hindsight"),
-    "srudb.dat": ("srum_raw", "SrumECmd"),
+    "srudb.dat": ("srum_raw", "SRUM (native ESE reader)"),
     "$mft": ("ntfs_raw", "MFTECmd / UsnJrnl2Csv"),
     "$usnjrnl": ("ntfs_raw", "MFTECmd / UsnJrnl2Csv"),
     "$logfile": ("ntfs_raw", "MFTECmd / UsnJrnl2Csv"),
@@ -551,7 +551,7 @@ def _parse_shellbags_candidate(entry: ContainerEntry, *, container_path: str, co
         mtime=entry.mtime,
         confidence="medium",
         supported=False,
-        reason="Shellbags raw hives detected. Raw hive parsing is not implemented yet. Use SBECmd parsed CSV for now.",
+        reason="Shellbags raw hive detected. Indexed by the Shellbags step (SBECmd) of recommended indexing, not by the core ingest.",
         warnings=warnings,
         container_type=container_type,
         container_path=container_path,
@@ -1495,7 +1495,7 @@ def _detect_raw_candidate(entry: ContainerEntry, entry_map: dict[str, ContainerE
             else "other"
         )
         reason = (
-            "Detected raw SRUM database. Use the scoped SRUM action to parse with SrumECmd."
+            "Detected raw SRUM database. Indexed by the SRUM step of recommended indexing, not by the core ingest."
             if artifact_type == "srum_raw"
             else f"Detected raw artifact. Planned parser: {planned_parser}."
         )
@@ -1530,7 +1530,7 @@ def _detect_raw_candidate(entry: ContainerEntry, entry_map: dict[str, ContainerE
             container_path=container_path,
         )
     if "windows\\system32\\sru\\" in normalized_lower and Path(entry.path).suffix.lower() == ".log":
-        return _raw_candidate(entry, category="network_activity", artifact_type="srum_log", reason="Detected SRUM auxiliary log file. Raw parser not implemented yet; use SrumECmd parsed CSV for now.", container_path=container_path, container_type=container_type)
+        return _raw_candidate(entry, category="network_activity", artifact_type="srum_log", reason="Detected SRUM ESE transaction log. Auxiliary to SRUDB.dat; not parsed on its own.", container_path=container_path, container_type=container_type)
     if "windows\\system32\\tasks\\" in normalize_velociraptor_path(lower_relative).lower():
         return None
     if any(token in lower_relative for token in ["defender", "scheduledtasks", "amcache", "shimcache", "srum", "wmi", "rdp"]):

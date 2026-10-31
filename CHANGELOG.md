@@ -5,13 +5,20 @@
 ### Added
 
 - Built-in detection **Possible mass file encryption**: five or more data files that reappear with one appended extension (`Memo.docx` -> `Memo.docx.enc`) within ten minutes on one host, the mark ransomware leaves when it encrypts in place. Reads any indexed file event with a name (MFT and USN from disk, the MFT MemProcFS recovers from memory), at the end of an evidence's ingest and after a memory image's timeline is indexed. Extensions Windows and applications append themselves (`.lnk`, `.crdownload`, `.tmp`, `.bak`...) do not count.
+- Raw **SRUM** (`SRUDB.dat`) is parsed on the Linux worker. SrumECmd refuses to run outside Windows, so the database is read natively with `dissect.esedb` into SrumECmd's tables and columns (network usage, network connections, application resource use, app timeline, energy, push notifications, vfuprov); compared with SrumECmd's output for the same machine. User SIDs are named from the `SOFTWARE` hive's ProfileList when it was collected.
+- Raw **Shellbags**: SBECmd now ships in the image and parses each profile's `UsrClass.dat` and `NTUSER.DAT` (with their transaction logs) on the Linux worker.
+- SRUM and Shellbags are steps of recommended indexing when discovery finds their sources, and scoped actions (`POST /api/evidences/{id}/srum-index`, `/shellbags-index`).
 
 ### Changed
 
+- Shellbags: the drive or UNC path is derived from SBECmd's shell-namespace path (`Desktop\This PC\C:\Users` -> `C:\Users`, `...\Computers and Devices\srv01\srv01\share` -> `\\srv01\share`), so network shares, user folders and suspicious folders are recognised; folders browsed on the RDP client's drive (`\\tsclient\...`) are tagged `rdp_client_drive`.
+- SRUM leads are raised only on network-usage rows and match tool names on the application name; OneDrive, Dropbox and Google Drive are context (`cloud_sync`), an AppData executable alone is a low-risk lead and the Defender platform folder is not user-writable.
 - Memory: the event log records and Amcache entries MemProcFS recovers are normalized like their EVTX and Amcache copies from disk (tags, risk, user, process and Defender detection fields) and get the built-in detections disk evidence gets; Sigma's Windows rules now run on them too (the engine only accepted EVTX documents as Windows event logs). A memory-only case therefore gets detections, and with them leads for **Suggest findings with AI**, instead of only the antivirus records Find Evil lists. The memory index (processes, Find Evil, network) still does not reach Detections. NTFS records are not put through the MFT normalizer, which flags every program under AppData; a Prefetch file seen being created in the MFT in memory is recorded as a program run.
 
 ### Fixed
 
+- SrumECmd CSVs: the application was taken from `AppId`, which is an index, so every row was named by a number and no SRUM rule could match; Network Connections rows were an unknown table dated in year 2059+ (`ConnectedTime` is seconds, not a date); App Timeline and vfuprov rows were filed as resource usage; Push Notifications were read as a notification store.
+- Shellbags: every folder under "This PC" / "My Computer" was classified as a Control Panel item, while real Control Panel items (`ControlPanelHome`) were not.
 - Defender's 1116 (malware detected) got the generic "High-risk event" built-in detection instead of **Defender High Severity Detection** and its sibling rules.
 - Terminal Services session manager records of console sessions (`Address: LOCAL`, and logoff or disconnect records that name no address) were tagged as RDP and produced "RDP activity" detections. Only a record naming a network address is remote access now.
 - Event ids 106 and 140 were tagged as scheduled-task persistence whatever wrote them; AppReadiness uses 106 for unrelated records. Now only the Task Scheduler's log counts.

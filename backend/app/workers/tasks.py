@@ -67,7 +67,8 @@ from app.ingest.raw_parsers.defender_evtx_backend import DEFENDER_EVTX_BACKEND, 
 from app.ingest.raw_parsers.mftecmd_backend import MFTECMD_BACKEND_CSV, detect_mftecmd_backend, iter_mftecmd_raw_full_batches, iter_mftecmd_raw_summary_batches
 from app.ingest.raw_parsers.recmd_backend import RECMD_BACKEND_CSV, USER_ACTIVITY_ARTIFACT_TYPES, detect_recmd_backend, iter_recmd_user_activity_batches
 from app.ingest.raw_parsers.registry_persistence_summary import PARSER_NAME as REGISTRY_PERSISTENCE_PARSER, REGISTRY_ARTIFACT_TYPE as REGISTRY_PERSISTENCE_ARTIFACT_TYPE, detect_registry_persistence_backend, iter_registry_persistence_batches
-from app.ingest.raw_parsers.srumecmd_backend import SRUMECMD_BACKEND_CSV, detect_srumecmd_backend, find_srum_databases, iter_srumecmd_batches
+from app.ingest.raw_parsers.sbecmd_backend import SBECMD_BACKEND_CSV, detect_sbecmd_backend, iter_sbecmd_batches
+from app.ingest.raw_parsers.srumecmd_backend import SRUM_PARSERS, SRUMECMD_BACKEND_CSV, detect_srum_backend, find_srum_databases, iter_srumecmd_batches
 from app.ingest.raw_parsers.evtx_parser import EvtxRawParser
 from app.ingest.eztools.mftecmd import iter_mftecmd_batches
 from app.ingest.kape import list_kape_artifacts
@@ -585,6 +586,16 @@ def enqueue_defender_evtx_index(evidence_id: str, *, force: bool = False) -> str
 def enqueue_srum_index(evidence_id: str, *, force: bool = False) -> str:
     job = ingest_queue.enqueue(
         "app.workers.tasks.index_srum_for_evidence",
+        evidence_id,
+        force,
+        job_timeout=max(int(settings.artifact_retry_job_timeout_seconds or settings.ingest_job_timeout_seconds or 0), 60),
+    )
+    return job.id
+
+
+def enqueue_shellbags_index(evidence_id: str, *, force: bool = False) -> str:
+    job = ingest_queue.enqueue(
+        "app.workers.tasks.index_shellbags_for_evidence",
         evidence_id,
         force,
         job_timeout=max(int(settings.artifact_retry_job_timeout_seconds or settings.ingest_job_timeout_seconds or 0), 60),
@@ -7958,7 +7969,7 @@ def _srum_docs_count(case_id: str, evidence_id: str) -> int:
                                 {"term": {"case_id": case_id}},
                                 {"term": {"evidence_id": evidence_id}},
                                 {"term": {"artifact.type": "srum"}},
-                                {"term": {"artifact.parser": SRUMECMD_BACKEND_CSV}},
+                                {"terms": {"artifact.parser": list(SRUM_PARSERS)}},
                             ]
                         }
                     },
@@ -7993,6 +8004,8 @@ def _update_srum_metadata(evidence_id: str, run: dict) -> None:
         metadata["srum_no_data"] = bool(run.get("no_data", False))
         metadata["srum_tooling_missing"] = bool(run.get("tooling_missing", False))
         metadata["investigation_ready"] = True
+        if run.get("status") in {"completed", "no_data", "failed", "tooling_missing"}:
+            metadata = close_indexing_plan_job(metadata, step_id="srum", status=str(run.get("status")))
         evidence.metadata_json = merge_evidence_metadata(evidence.metadata_json or {}, metadata)
         isolated_db.commit()
     finally:
@@ -8369,20 +8382,21 @@ def rebuild_core_ez_artifact_for_evidence(evidence_id: str, artifact_type: str, 
 def index_srum_for_evidence(evidence_id: str, force: bool = False) -> dict:
     run_id = f"srum-{evidence_id}-{int(time.time())}"
     started_at = utc_now().isoformat()
-    _update_srum_metadata(evidence_id, {"run_id": run_id, "status": "running", "started_at": started_at, "finished_at": None, "backend": SRUMECMD_BACKEND_CSV, "records_indexed": 0, "no_data": False})
+    backend = detect_srum_backend()
+    backend_name = str(backend.get("backend") or SRUMECMD_BACKEND_CSV)
+    _update_srum_metadata(evidence_id, {"run_id": run_id, "status": "running", "started_at": started_at, "finished_at": None, "backend": backend_name, "records_indexed": 0, "no_data": False})
     db = SessionLocal()
     try:
         evidence = db.get(Evidence, evidence_id)
         if not evidence:
             raise RuntimeError("Evidence not found")
-        backend = detect_srumecmd_backend()
         if not backend.get("available"):
             result = {
                 "run_id": run_id,
                 "status": "tooling_missing",
                 "started_at": started_at,
                 "finished_at": utc_now().isoformat(),
-                "backend": SRUMECMD_BACKEND_CSV,
+                "backend": backend_name,
                 "backend_version": "",
                 "records_indexed": 0,
                 "sources_total": len(find_srum_databases(evidence.case_id, evidence.id, dict(evidence.metadata_json or {}))),
@@ -8391,7 +8405,7 @@ def index_srum_for_evidence(evidence_id: str, force: bool = False) -> dict:
                 "tables": {},
                 "no_data": True,
                 "tooling_missing": True,
-                "error": str(backend.get("error") or "SrumECmd backend is not available"),
+                "error": str(backend.get("error") or "SRUM backend is not available"),
                 "warnings": ["srumecmd_tooling_missing"],
             }
             _update_srum_metadata(evidence_id, result)
@@ -8403,7 +8417,7 @@ def index_srum_for_evidence(evidence_id: str, force: bool = False) -> dict:
                 "status": "completed",
                 "started_at": started_at,
                 "finished_at": utc_now().isoformat(),
-                "backend": SRUMECMD_BACKEND_CSV,
+                "backend": backend_name,
                 "backend_version": backend.get("version") or "",
                 "records_indexed": existing,
                 "sources_total": int((evidence.metadata_json or {}).get("srum_sources_detected") or 0),
@@ -8428,7 +8442,7 @@ def index_srum_for_evidence(evidence_id: str, force: bool = False) -> dict:
                                     {"term": {"case_id": evidence.case_id}},
                                     {"term": {"evidence_id": evidence.id}},
                                     {"term": {"artifact.type": "srum"}},
-                                    {"term": {"artifact.parser": SRUMECMD_BACKEND_CSV}},
+                                    {"terms": {"artifact.parser": list(SRUM_PARSERS)}},
                                 ]
                             }
                         }
@@ -8439,15 +8453,16 @@ def index_srum_for_evidence(evidence_id: str, force: bool = False) -> dict:
                 logger.warning("Could not clear previous SRUM docs for evidence %s: %s", evidence.id, exc)
         artifact = (
             db.query(Artifact)
-            .filter(Artifact.evidence_id == evidence.id, Artifact.artifact_type == "srum", Artifact.parser == SRUMECMD_BACKEND_CSV)
+            .filter(Artifact.evidence_id == evidence.id, Artifact.artifact_type == "srum", Artifact.parser.in_(SRUM_PARSERS))
             .first()
         )
         if not artifact:
-            artifact = Artifact(case_id=evidence.case_id, evidence_id=evidence.id, name="SRUM", artifact_type="srum", source_path="SRUDB.dat", parser=SRUMECMD_BACKEND_CSV, status="processing", record_count=0)
+            artifact = Artifact(case_id=evidence.case_id, evidence_id=evidence.id, name="SRUM", artifact_type="srum", source_path="SRUDB.dat", parser=backend_name, status="processing", record_count=0)
             db.add(artifact)
             db.commit()
             db.refresh(artifact)
         else:
+            artifact.parser = backend_name
             artifact.status = "processing"
             db.commit()
         runtime_settings = load_runtime_settings(db)
@@ -8457,7 +8472,7 @@ def index_srum_for_evidence(evidence_id: str, force: bool = False) -> dict:
             "name": artifact.name,
             "source_path": artifact.source_path,
             "artifact_type": "srum",
-            "parser": SRUMECMD_BACKEND_CSV,
+            "parser": backend_name,
             "detected_host": str((evidence.metadata_json or {}).get("provided_host") or evidence.detected_host or "").strip() or None,
             "provided_host": str((evidence.metadata_json or {}).get("provided_host") or "").strip() or None,
             "detected_user": evidence.detected_user,
@@ -8489,7 +8504,7 @@ def index_srum_for_evidence(evidence_id: str, force: bool = False) -> dict:
                     "status": "running",
                     "started_at": started_at,
                     "finished_at": None,
-                    "backend": SRUMECMD_BACKEND_CSV,
+                    "backend": backend_name,
                     "backend_version": latest.get("backend_version") or backend.get("version") or "",
                     "records_indexed": indexed,
                     "sources_total": int(latest.get("sources_total") or 0),
@@ -8514,7 +8529,7 @@ def index_srum_for_evidence(evidence_id: str, force: bool = False) -> dict:
             "status": "completed" if indexed else "no_data",
             "started_at": started_at,
             "finished_at": utc_now().isoformat(),
-            "backend": SRUMECMD_BACKEND_CSV,
+            "backend": backend_name,
             "backend_version": latest.get("backend_version") or backend.get("version") or "",
             "records_indexed": indexed,
             "sources_total": source_total,
@@ -8534,7 +8549,179 @@ def index_srum_for_evidence(evidence_id: str, force: bool = False) -> dict:
         return result
     except Exception as exc:  # noqa: BLE001
         logger.exception("SRUM indexing failed for evidence %s", evidence_id)
-        _update_srum_metadata(evidence_id, {"run_id": run_id, "status": "failed", "started_at": started_at, "finished_at": utc_now().isoformat(), "backend": SRUMECMD_BACKEND_CSV, "error": str(exc)})
+        _update_srum_metadata(evidence_id, {"run_id": run_id, "status": "failed", "started_at": started_at, "finished_at": utc_now().isoformat(), "backend": backend_name, "error": str(exc)})
+        raise
+    finally:
+        db.close()
+
+
+def _shellbags_docs_count(case_id: str, evidence_id: str) -> int:
+    try:
+        index = get_events_index(case_id)
+        return int(
+            (
+                count_documents(
+                    index,
+                    {
+                        "bool": {
+                            "filter": [
+                                {"term": {"case_id": case_id}},
+                                {"term": {"evidence_id": evidence_id}},
+                                {"term": {"artifact.type": "shellbags"}},
+                                {"term": {"artifact.parser": SBECMD_BACKEND_CSV}},
+                            ]
+                        }
+                    },
+                ).get("count")
+                or 0
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not count Shellbags docs for evidence %s: %s", evidence_id, exc)
+        return 0
+
+
+def _update_shellbags_metadata(evidence_id: str, run: dict) -> None:
+    isolated_db = SessionLocal()
+    try:
+        evidence = isolated_db.get(Evidence, evidence_id)
+        if not evidence:
+            return
+        metadata = dict(evidence.metadata_json or {})
+        runs = [item for item in list(metadata.get("shellbags_runs") or []) if isinstance(item, dict) and str(item.get("run_id") or "") != str(run.get("run_id") or "")]
+        runs.append(run)
+        metadata["shellbags_runs"] = runs[-10:]
+        metadata["shellbags"] = dict(run)
+        metadata["shellbags_status"] = run.get("status") or metadata.get("shellbags_status")
+        metadata["shellbags_parser_version"] = run.get("backend_version") or metadata.get("shellbags_parser_version") or ""
+        metadata["shellbags_records_indexed"] = int(run.get("records_indexed") or metadata.get("shellbags_records_indexed") or 0)
+        metadata["shellbags_hives_detected"] = int(run.get("hives_total") or metadata.get("shellbags_hives_detected") or 0)
+        metadata["shellbags_tooling_missing"] = bool(run.get("tooling_missing", False))
+        metadata["investigation_ready"] = True
+        if run.get("status") in {"completed", "no_data", "failed", "tooling_missing"}:
+            metadata = close_indexing_plan_job(metadata, step_id="shellbags", status=str(run.get("status")))
+        evidence.metadata_json = merge_evidence_metadata(evidence.metadata_json or {}, metadata)
+        isolated_db.commit()
+    finally:
+        isolated_db.close()
+
+
+def index_shellbags_for_evidence(evidence_id: str, force: bool = False) -> dict:
+    run_id = f"shellbags-{evidence_id}-{int(time.time())}"
+    started_at = utc_now().isoformat()
+    _update_shellbags_metadata(evidence_id, {"run_id": run_id, "status": "running", "started_at": started_at, "finished_at": None, "backend": SBECMD_BACKEND_CSV, "records_indexed": 0})
+    db = SessionLocal()
+    try:
+        evidence = db.get(Evidence, evidence_id)
+        if not evidence:
+            raise RuntimeError("Evidence not found")
+        backend = detect_sbecmd_backend()
+        if not backend.get("available"):
+            result = {
+                "run_id": run_id,
+                "status": "tooling_missing",
+                "started_at": started_at,
+                "finished_at": utc_now().isoformat(),
+                "backend": SBECMD_BACKEND_CSV,
+                "records_indexed": 0,
+                "tooling_missing": True,
+                "error": str(backend.get("error") or "SBECmd backend is not available"),
+            }
+            _update_shellbags_metadata(evidence_id, result)
+            return result
+        existing = _shellbags_docs_count(evidence.case_id, evidence.id)
+        if existing > 0 and not force:
+            result = {"run_id": run_id, "status": "completed", "started_at": started_at, "finished_at": utc_now().isoformat(), "backend": SBECMD_BACKEND_CSV, "backend_version": backend.get("version") or "", "records_indexed": existing, "warnings": ["shellbags_already_indexed"]}
+            _update_shellbags_metadata(evidence_id, result)
+            return result
+        index_name = ensure_case_index(evidence.case_id)
+        if existing > 0:
+            try:
+                get_opensearch_client().delete_by_query(
+                    index=index_name,
+                    body={
+                        "query": {
+                            "bool": {
+                                "filter": [
+                                    {"term": {"case_id": evidence.case_id}},
+                                    {"term": {"evidence_id": evidence.id}},
+                                    {"term": {"artifact.type": "shellbags"}},
+                                    {"term": {"artifact.parser": SBECMD_BACKEND_CSV}},
+                                ]
+                            }
+                        }
+                    },
+                    params={"refresh": "true", "ignore_unavailable": "true"},
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not clear previous Shellbags docs for evidence %s: %s", evidence.id, exc)
+        artifact = db.query(Artifact).filter(Artifact.evidence_id == evidence.id, Artifact.artifact_type == "shellbags", Artifact.parser == SBECMD_BACKEND_CSV).first()
+        if not artifact:
+            artifact = Artifact(case_id=evidence.case_id, evidence_id=evidence.id, name="Shellbags", artifact_type="shellbags", source_path="UsrClass.dat / NTUSER.DAT", parser=SBECMD_BACKEND_CSV, status="processing", record_count=0)
+            db.add(artifact)
+            db.commit()
+            db.refresh(artifact)
+        else:
+            artifact.status = "processing"
+            db.commit()
+        runtime_settings = load_runtime_settings(db)
+        batch_size = max(int(runtime_settings.get("OPENSEARCH_BULK_DOCS") or settings.opensearch_bulk_docs or 1000), 1)
+        artifact_meta = {
+            **dict(evidence.metadata_json or {}),
+            "name": artifact.name,
+            "source_path": artifact.source_path,
+            "artifact_type": "shellbags",
+            "parser": SBECMD_BACKEND_CSV,
+            "detected_host": str((evidence.metadata_json or {}).get("provided_host") or evidence.detected_host or "").strip() or None,
+            "provided_host": str((evidence.metadata_json or {}).get("provided_host") or "").strip() or None,
+            "detected_user": evidence.detected_user,
+        }
+        started = time.perf_counter()
+        latest: dict = {}
+        for batch, progress in iter_sbecmd_batches(case_id=evidence.case_id, evidence_id=evidence.id, artifact_id=artifact.id, artifact_meta=artifact_meta, batch_size=batch_size):
+            latest = dict(progress)
+            if not batch:
+                continue
+            for doc in batch:
+                apply_case_host_identity(db, evidence.case_id, doc)
+            bulk_index_events_with_report(
+                evidence.case_id,
+                batch,
+                index=index_name,
+                refresh=False,
+                max_bulk_docs=batch_size,
+                max_bulk_bytes=int(runtime_settings.get("OPENSEARCH_BULK_BYTES") or settings.opensearch_bulk_bytes or 10485760),
+                apply_host_identity=False,
+                apply_fingerprint=False,
+            )
+        refresh_index(index_name, raise_on_error=False)
+        indexed = _shellbags_docs_count(evidence.case_id, evidence.id)
+        artifact.record_count = indexed
+        artifact.status = "completed" if indexed else "parsed_empty"
+        db.commit()
+        result = {
+            "run_id": run_id,
+            "status": "completed" if indexed else "no_data",
+            "started_at": started_at,
+            "finished_at": utc_now().isoformat(),
+            "backend": SBECMD_BACKEND_CSV,
+            "backend_version": latest.get("backend_version") or backend.get("version") or "",
+            "records_indexed": indexed,
+            "hives_total": int(latest.get("hives_total") or 0),
+            "hives_processed": int(latest.get("hives_processed") or 0),
+            "hives_failed": int(latest.get("hives_failed") or 0),
+            "records_by_hive": latest.get("records_by_hive") or {},
+            "errors": latest.get("errors") or [],
+            "elapsed_seconds": round(time.perf_counter() - started, 2),
+            "artifact_id": artifact.id,
+            "warnings": [] if indexed else (["shellbags_no_data"] if latest.get("hives_total") else ["user_hives_not_detected"]),
+        }
+        _update_shellbags_metadata(evidence_id, result)
+        log_activity(db, activity_type="shellbags_indexed", title="Shellbags indexed", message=f"Indexed {indexed} Shellbags records for {evidence.original_filename}", case_id=evidence.case_id, evidence_id=evidence.id, metadata=result)
+        return result
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Shellbags indexing failed for evidence %s", evidence_id)
+        _update_shellbags_metadata(evidence_id, {"run_id": run_id, "status": "failed", "started_at": started_at, "finished_at": utc_now().isoformat(), "backend": SBECMD_BACKEND_CSV, "error": str(exc)})
         raise
     finally:
         db.close()

@@ -108,8 +108,8 @@ def test_windows_worker_feasibility_records_windows_only_srum() -> None:
     assert rows["MFTECmd"]["recommended_worker"] == "linux"
     assert rows["SBECmd"]["available"] is False
     assert feasibility["windows_worker_design"]["job_model"]
-    assert feasibility["srum_decision"]["recommended_backend"] == "windows_worker"
-    assert feasibility["shellbags_decision"]["recommended_backend"] == "defer"
+    assert feasibility["srum_decision"]["recommended_backend"] == "linux_local"
+    assert feasibility["shellbags_decision"]["recommended_backend"] == "linux_local"
 
 
 def test_core_ez_tools_backend_plan_keeps_prefetch_internal_and_core_tools_advanced() -> None:

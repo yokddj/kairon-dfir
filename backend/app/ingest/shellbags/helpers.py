@@ -44,7 +44,8 @@ SHELLBAGS_HEADER_HINTS = {
 CLOUD_TOKENS = ("\\onedrive\\", "\\dropbox\\", "\\google drive\\", "\\box\\", "\\mega\\", "\\nextcloud\\")
 SUSPICIOUS_TOKENS = ("mimikatz", "rclone", "payload", "tools", "exfil", "credentials", "dump", "lsass", "anydesk", "teamviewer", "ngrok", "staging")
 USER_WRITABLE_TOKENS = ("\\downloads\\", "\\desktop\\", "\\appdata\\", "\\temp\\", "\\users\\public\\", "\\programdata\\")
-CONTROL_PANEL_TOKENS = ("control panel", "this pc", "my computer")
+# "This PC" / "My Computer" are the root every drive hangs from, not Control Panel items.
+CONTROL_PANEL_TOKENS = ("control panel",)
 UNC_RE = re.compile(r"^(?:\\\\|//)(?P<host>[^\\/]+)[\\/](?P<share>[^\\/]+)", re.IGNORECASE)
 USER_FROM_USERS_RE = re.compile(r"\\users\\(?P<user>[^\\]+)\\", re.IGNORECASE)
 
@@ -77,6 +78,35 @@ def normalize_windows_path(value: str | None) -> str | None:
     if not text:
         return None
     return text.replace("/", "\\").strip('"')
+
+
+DRIVE_SEGMENT_RE = re.compile(r"^[A-Za-z]:$")
+# Shell-namespace roots SBECmd names for the network folder. Below one sits a computer
+# item and then the "Network location" item, whose own value is \\host\share.
+NETWORK_ROOT_SEGMENTS = {"computers and devices", "network", "my network places"}
+# Reserved host name of drives an RDP client redirects into the session.
+RDP_CLIENT_DRIVE_HOST = "tsclient"
+
+
+def filesystem_path_from_shell_path(path: str | None) -> str | None:
+    """SBECmd's AbsolutePath walks the shell namespace ("Desktop\\This PC\\C:\\Users",
+    "Desktop\\Computers and Devices\\srv01\\srv01\\share\\dir"). The filesystem path
+    starts at the drive letter or the network location; namespace-only items
+    (known folders, GUIDs, devices) have none."""
+    normalized = normalize_windows_path(path)
+    if not normalized:
+        return None
+    if normalized.startswith("\\\\"):
+        return normalized
+    segments = [segment for segment in normalized.split("\\") if segment]
+    for index, segment in enumerate(segments):
+        if segment.lower() in NETWORK_ROOT_SEGMENTS and index + 1 < len(segments):
+            rest = segments[index + 2 :] or segments[index + 1 : index + 2]
+            return "\\\\" + "\\".join(rest)
+        if DRIVE_SEGMENT_RE.match(segment):
+            rest = segments[index + 1 :]
+            return "\\".join([segment, *rest]) if rest else f"{segment}\\"
+    return None
 
 
 def basename_windows(path: str | None) -> str | None:
@@ -159,8 +189,20 @@ def classify_shellbag_path(path: str | None, row: dict) -> dict:
         tags.add("network_path")
         reasons.append("Shellbag references network share")
         risk = max(risk, 30)
+        if share_host.lower() == RDP_CLIENT_DRIVE_HOST:
+            # The RDP client's own disk, browsed from inside the session: a classic transfer channel.
+            tags.add("rdp_client_drive")
+            reasons.append("Shellbag references a drive redirected from the RDP client (\\\\tsclient)")
+            risk = max(risk, 45)
 
-    if normalized and normalized.startswith("::") or any(token in lower_path for token in CONTROL_PANEL_TOKENS) or "::{" in lower_path:
+    shell_type = str(row.get("ShellType") or "").lower()
+    if (
+        (normalized and normalized.startswith("::"))
+        or any(token in lower_path for token in CONTROL_PANEL_TOKENS)
+        or "::{" in lower_path
+        or "\\controlpanel" in lower_path
+        or "control panel" in shell_type
+    ):
         is_control_panel = True
         artifact_type = "shellbag_control_panel"
         tags.add("control_panel")

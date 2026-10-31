@@ -1485,7 +1485,7 @@ function formatReportStatus(status: string | null | undefined) {
       const hasRawSrum = candidates.some((candidate) => candidate.artifact_type === "srum_database" || candidate.artifact_type === "srum_raw");
       const hasCheckpoint = candidates.some((candidate) => candidate.artifact_type === "srum_checkpoint");
       if (hasRawSrum || hasCheckpoint) {
-        return "SRUM databases were detected. Use the scoped SRUM action to parse SRUDB.dat with SrumECmd without re-indexing EVTX or MFT.";
+        return "SRUM databases were detected. Recommended indexing parses SRUDB.dat in its own SRUM step, without re-indexing EVTX or MFT.";
       }
     }
     return `No parseable ${formatCategoryLabel(category)} artifacts found`;

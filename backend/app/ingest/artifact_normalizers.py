@@ -618,9 +618,6 @@ SRUM_REMOTE_TOOL_HINTS = {
     "rustdesk",
     "rclone",
     "megasync",
-    "dropbox",
-    "onedrive",
-    "googledrive",
     "winscp",
     "filezilla",
     "putty",
@@ -631,9 +628,13 @@ SRUM_REMOTE_TOOL_HINTS = {
     "tor",
     "vpn",
 }
-SRUM_FILE_TRANSFER_HINTS = {"rclone", "winscp", "filezilla", "megasync", "dropbox", "onedrive", "googledrive"}
+SRUM_FILE_TRANSFER_HINTS = {"rclone", "winscp", "filezilla", "megasync"}
+# Sync clients ship with Windows or are everyday installs: context, not a lead on their own.
+SRUM_CLOUD_SYNC_HINTS = {"onedrive", "dropbox", "googledrive", "google drive"}
 SRUM_LOLBIN_NETWORK_HINTS = {"powershell.exe", "pwsh.exe", "cmd.exe", "certutil.exe", "bitsadmin.exe", "mshta.exe", "rundll32.exe", "regsvr32.exe", "wscript.exe", "cscript.exe", "curl.exe", "wget.exe"}
 SRUM_HIGH_UPLOAD_THRESHOLD = 100 * 1024 * 1024
+# Defender platform updates install under ProgramData, writable only by SYSTEM (same rule as startup_persistence).
+SRUM_DEFENDER_PLATFORM_RE = re.compile(r"\\programdata\\microsoft\\windows defender\\platform\\", re.IGNORECASE)
 
 
 def _apply_execution_artifact_suspicion(document: dict, *, artifact_name: str | None, path: str | None) -> None:
@@ -1057,6 +1058,9 @@ def _parse_srum_timestamp(value: str | None) -> str | None:
     cleaned = _clean_placeholder(value)
     if not cleaned:
         return None
+    if re.fullmatch(r"-?\d{1,9}", cleaned):
+        # SrumECmd's ConnectedTime and similar columns are second counts, not dates.
+        return None
     if re.fullmatch(r"\d{16,18}", cleaned):
         try:
             epoch_start = date_parser.parse("1601-01-01T00:00:00Z")
@@ -1155,8 +1159,16 @@ def _srum_artifact_type(row: dict, artifact_meta: dict) -> str:
     source_name = str(artifact_meta.get("name") or "").lower()
     blob = f"{table} {source_name}"
     header_blob = " ".join(str(key).lower() for key in row.keys())
-    if any(token in blob for token in ["network usage", "networkusage", "network connectivity", "networkconnectivity"]):
-        return "srum_network_usage" if "connectivity" not in blob else "srum_network_connectivity"
+    if any(token in blob for token in ["networkconnections", "network connections", "network connectivity", "networkconnectivity"]):
+        return "srum_network_connectivity"
+    if any(token in blob for token in ["network usage", "networkusage"]):
+        return "srum_network_usage"
+    if "apptimeline" in blob:
+        return "srum_app_timeline"
+    if "pushnotification" in blob:
+        return "srum_push_notification"
+    if "vfuprov" in blob:
+        return "srum_vfu"
     if any(token in blob for token in ["applicationresourceusage", "appresource", "resource usage"]):
         return "srum_app_resource"
     if "energy" in blob:
@@ -1174,10 +1186,32 @@ def _srum_artifact_type(row: dict, artifact_meta: dict) -> str:
     return "srum_unknown_table"
 
 
+def _srum_duration_seconds(row: dict) -> int | None:
+    """Seconds from SrumECmd's Duration (a .NET TimeSpan, [d.]hh:mm:ss.fffffff),
+    DurationMs, or a network connection's ConnectedTime (already seconds)."""
+    duration = _clean_placeholder(first_value(row, ["Duration"]))
+    if duration:
+        match = re.fullmatch(r"(-)?(?:(\d+)\.)?(\d{1,2}):(\d{2}):(\d{2})(?:\.\d+)?", duration)
+        if match:
+            sign, days, hours, minutes, seconds = match.groups()
+            total = int(days or 0) * 86400 + int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+            return -total if sign else total
+        if re.fullmatch(r"-?\d+", duration):
+            return int(duration)
+    duration_ms = _clean_placeholder(first_value(row, ["DurationMs", "DurationMS"]))
+    if duration_ms and re.fullmatch(r"\d+", duration_ms):
+        return int(duration_ms) // 1000
+    connected = _clean_placeholder(first_value(row, ["ConnectedTime"]))
+    if connected and re.fullmatch(r"\d{1,9}", connected):
+        return int(connected)
+    return None
+
+
 def _srum_timestamp_candidates(row: dict) -> list[tuple[str | None, str]]:
     return [
         (_parse_srum_timestamp(first_value(row, ["EndTime"])), "srum_end_time"),
         (_parse_srum_timestamp(first_value(row, ["StartTime"])), "srum_start_time"),
+        (_parse_srum_timestamp(first_value(row, ["ConnectStartTime"])), "srum_connect_start_time"),
         (_parse_srum_timestamp(first_value(row, ["ConnectedTime"])), "srum_connected_time"),
         (_parse_srum_timestamp(first_value(row, ["Timestamp", "TimeStamp", "EventTimestamp"])), "event_time"),
         (_parse_srum_timestamp(first_value(row, ["Created"])), "srum_created"),
@@ -1185,10 +1219,13 @@ def _srum_timestamp_candidates(row: dict) -> list[tuple[str | None, str]]:
 
 
 def _select_srum_application(row: dict) -> dict:
-    process_path = _normalize_windowsish_path(first_value(row, ["ExePath", "Path", "AppId", "AppID"]))
+    app_id = _clean_placeholder(first_value(row, ["AppId", "AppID"]))
+    if app_id and app_id.isdigit():
+        # SrumECmd's AppId is the SruDbIdMapTable index; the name is in ExeInfo.
+        app_id = None
+    process_path = _normalize_windowsish_path(first_value(row, ["ExePath", "Path"]) or app_id)
     exe_info = _clean_placeholder(first_value(row, ["ExeInfo"]))
     app_name = _clean_placeholder(first_value(row, ["AppName", "Application"]))
-    app_id = _clean_placeholder(first_value(row, ["AppId", "AppID"]))
     package_name = _clean_placeholder(first_value(row, ["PackageFullName", "PackageName"]))
     file_name = _clean_placeholder(first_value(row, ["FileName"]))
     if not process_path and exe_info:
@@ -1208,6 +1245,7 @@ def _select_srum_application(row: dict) -> dict:
         "process_name": process_name,
         "package_name": package_name,
         "display_name": display_name or "unknown",
+        "description": _clean_placeholder(first_value(row, ["ExeInfoDescription"])),
     }
 
 
@@ -1238,17 +1276,6 @@ def _derive_srum_risk_and_reasons(
     reasons = set()
     data_quality = set()
     risk = 0
-    blob = " ".join(
-        part
-        for part in [
-            display_name,
-            process_name,
-            app_name,
-            app_id,
-            process_path or "",
-        ]
-        if part
-    ).lower()
     candidate_path = process_path or _normalize_windowsish_path(app_id) or _normalize_windowsish_path(app_name)
     basename = (
         _appcompat_basename(candidate_path)
@@ -1259,6 +1286,18 @@ def _derive_srum_risk_and_reasons(
         or "unknown"
     )
     basename_lower = str(basename).lower()
+    # Tool hints match application names only: folder names and service-group text are not the tool.
+    names = {str(item).lower() for item in (basename, display_name, process_name, app_name) if item}
+
+    def _names_match(hints: set[str]) -> bool:
+        for hint in hints:
+            for name in names:
+                if len(hint) >= 4 and hint in name:
+                    return True
+                if hint in re.split(r"[^a-z0-9]+", name):
+                    return True
+        return False
+
     direction = _srum_direction(bytes_sent, bytes_received)
     sent = int(bytes_sent or 0)
     received = int(bytes_received or 0)
@@ -1273,13 +1312,20 @@ def _derive_srum_risk_and_reasons(
     elif sent == 0 and received == 0:
         data_quality.add("srum_zero_bytes")
 
-    if any(token in blob for token in SRUM_REMOTE_TOOL_HINTS):
+    if artifact_type not in {"srum_network_usage", "srum_unknown_table"}:
+        # Resource, timeline and energy rows show an application ran, not that it used the network.
+        if _names_match(SRUM_CLOUD_SYNC_HINTS):
+            tags.add("cloud_sync")
+        return tags, reasons, data_quality, 0
+    if _names_match(SRUM_REMOTE_TOOL_HINTS):
         tags.update({"suspicious", "remote_access_tool", "suspicious_process"})
         reasons.add("SRUM network activity by suspicious process")
         risk = max(risk, 45)
-    if any(token in blob for token in SRUM_FILE_TRANSFER_HINTS):
+    if _names_match(SRUM_FILE_TRANSFER_HINTS):
         tags.update({"suspicious", "file_transfer_tool"})
         risk = max(risk, 35)
+    if _names_match(SRUM_CLOUD_SYNC_HINTS):
+        tags.add("cloud_sync")
     if basename_lower in {"powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe"}:
         tags.update({"suspicious", "scripting_process"})
         reasons.add("SRUM network activity by scripting process")
@@ -1288,18 +1334,22 @@ def _derive_srum_risk_and_reasons(
         tags.update({"suspicious", "lolbin_network"})
         reasons.add("SRUM network activity by LOLBin")
         risk = max(risk, 60 if total > 0 else 45)
-    if candidate_path:
+    if candidate_path and not SRUM_DEFENDER_PLATFORM_RE.search(candidate_path):
         path_reasons = _path_suspicion_reasons(candidate_path)
-        if path_reasons:
+        # AppData alone holds most per-user installs (OneDrive, Teams...): a lead only with another reason.
+        if path_reasons and (set(path_reasons) - {"Executable observed in AppData", "appdata_path"}):
             tags.update({"suspicious", "suspicious_path", "user_writable_app"})
             reasons.add("SRUM network activity by user-writable application")
             reasons.update(path_reasons)
             risk = max(risk, 65 if total > 0 else 40)
-    elif display_name and display_name.lower() not in {"system", "svchost.exe", "chrome.exe", "msedge.exe", "firefox.exe"}:
-        tags.update({"suspicious", "unknown_application"})
-        reasons.add("SRUM network activity by unknown application")
-        risk = max(risk, 35 if total > 0 else 10)
+        elif path_reasons:
+            tags.add("user_writable_app")
+            reasons.update(path_reasons)
+            risk = max(risk, 30 if total > 0 else 10)
 
+    if "missing_application" in data_quality:
+        # Rows SRUM could not attribute (an empty SruDbIdMapTable entry) have nobody to raise a lead about.
+        sent = 0
     if sent >= SRUM_HIGH_UPLOAD_THRESHOLD:
         tags.update({"suspicious", "high_upload", "possible_exfiltration"})
         reasons.add("SRUM high outbound bytes")
@@ -3119,9 +3169,11 @@ def normalize_jumplist_row(document: dict, row: dict, artifact_meta: dict) -> di
 
 
 def normalize_shellbags_row(document: dict, row: dict, artifact_meta: dict) -> dict:
-    from app.ingest.shellbags.helpers import basename_windows, classify_shellbag_path, infer_user_from_windows_path, normalize_windows_path, parse_shellbags_timestamp
+    from app.ingest.shellbags.helpers import basename_windows, classify_shellbag_path, filesystem_path_from_shell_path, infer_user_from_windows_path, normalize_windows_path, parse_shellbags_timestamp
 
-    folder_path = normalize_windows_path(first_value(row, ["AbsolutePath", "Path", "FullPath", "ItemPath", "ShellItemPath", "FolderPath", "Value"]))
+    shell_path = normalize_windows_path(first_value(row, ["AbsolutePath", "Path", "FullPath", "ItemPath", "ShellItemPath", "FolderPath", "Value"]))
+    # Path rules (Downloads, UNC, removable...) read the filesystem path; namespace-only items keep the shell path.
+    folder_path = filesystem_path_from_shell_path(shell_path) or shell_path
     bag_path = normalize_windows_path(first_value(row, ["BagPath"]))
     source_file = _clean_placeholder(first_value(row, ["SourceFile"]))
     hive_path = normalize_windows_path(first_value(row, ["HivePath", "Hive"]))
@@ -3138,7 +3190,9 @@ def normalize_shellbags_row(document: dict, row: dict, artifact_meta: dict) -> d
     last_interacted = parse_shellbags_timestamp(first_value(row, ["LastInteracted"]))
     extension_block = _clean_placeholder(first_value(row, ["ExtensionBlock"]))
     sid = _clean_placeholder(first_value(row, ["SID"]))
-    user_name = _clean_placeholder(first_value(row, ["User", "UserName", "HiveOwner"])) or infer_user_from_windows_path(_clean_placeholder(first_value(row, ["ProfilePath"])) or source_file or hive_path or folder_path)
+    user_name = _clean_placeholder(first_value(row, ["User", "UserName", "HiveOwner"])) or infer_user_from_windows_path(
+        _clean_placeholder(first_value(row, ["ProfilePath"])) or source_file or hive_path or str(artifact_meta.get("source_path") or "").replace("/", "\\") or folder_path
+    )
     timestamp = last_interacted or first_interacted or last_write or modified or accessed or created
     timestamp_precision = (
         "shellbag_last_interacted" if last_interacted
@@ -3176,7 +3230,7 @@ def normalize_shellbags_row(document: dict, row: dict, artifact_meta: dict) -> d
             "artifact_type": path_meta["artifact_type"],
             "path": folder_path,
             "bag_path": bag_path,
-            "absolute_path": folder_path,
+            "absolute_path": shell_path,
             "shell_type": shell_type,
             "slot": slot,
             "node_slot": node_slot,
@@ -3420,13 +3474,14 @@ def normalize_srum_row(document: dict, row: dict, artifact_meta: dict) -> dict:
             timestamp_precision = precision
             break
 
-    start_time = _parse_srum_timestamp(first_value(row, ["StartTime"]))
+    start_time = _parse_srum_timestamp(first_value(row, ["StartTime", "ConnectStartTime"]))
     end_time = _parse_srum_timestamp(first_value(row, ["EndTime"]))
-    duration_value = _safe_int(first_value(row, ["Duration"]))
+    duration_value = _srum_duration_seconds(row)
     connected_time = _parse_srum_timestamp(first_value(row, ["ConnectedTime"]))
     energy_usage = _clean_placeholder(first_value(row, ["EnergyUsage"]))
     cycle_time = _clean_placeholder(first_value(row, ["CycleTime"]))
-    interface_profile = _clean_placeholder(first_value(row, ["InterfaceProfile"]))
+    interface_profile = _clean_placeholder(first_value(row, ["InterfaceProfile", "ProfileName"]))
+    interface_type = _clean_placeholder(first_value(row, ["InterfaceType"]))
     network_profile = _clean_placeholder(first_value(row, ["NetworkProfile"])) or interface_profile
     interface_guid = _clean_placeholder(first_value(row, ["InterfaceGuid"]))
     interface_luid = _clean_placeholder(first_value(row, ["InterfaceLuid"]))
@@ -3434,6 +3489,8 @@ def normalize_srum_row(document: dict, row: dict, artifact_meta: dict) -> dict:
     source_file = _normalize_windowsish_path(first_value(row, ["SourceFile"])) or _clean_placeholder(str(artifact_meta.get("source_path") or ""))
     direction = _srum_direction(bytes_sent, bytes_received)
     network_artifact_type = artifact_type if artifact_type in {"srum_network_usage", "srum_network_connectivity"} else "srum_network_usage"
+    # svchost rows name their service group ("[netsvcs] [Schedule]"); messages carry it, srum.application stays the image name.
+    message_name = f"{display_name} {application['description']}" if application["description"] else display_name
 
     document["@timestamp"] = timestamp
     document["timestamp_precision"] = timestamp_precision
@@ -3488,8 +3545,10 @@ def normalize_srum_row(document: dict, row: dict, artifact_meta: dict) -> dict:
             "user_sid": user_sid,
             "interface_luid": interface_luid,
             "interface_guid": interface_guid,
+            "interface_type": interface_type,
             "interface_profile": interface_profile,
             "network_profile": network_profile,
+            "exe_description": application["description"],
             "bytes_sent": bytes_sent,
             "bytes_received": bytes_received,
             "bytes_total": bytes_total,
@@ -3514,7 +3573,7 @@ def normalize_srum_row(document: dict, row: dict, artifact_meta: dict) -> dict:
                 "type": "network_usage",
                 "action": "srum_network_usage_observed",
                 "severity": "info",
-                "message": f"SRUM network usage observed: {display_name} sent={bytes_sent or 0} received={bytes_received or 0}",
+                "message": f"SRUM network usage observed: {message_name} sent={bytes_sent or 0} received={bytes_received or 0}",
                 "timeline_include": True,
             }
         )
@@ -3525,12 +3584,19 @@ def normalize_srum_row(document: dict, row: dict, artifact_meta: dict) -> dict:
                 "type": "network_connectivity_observed",
                 "action": "srum_network_connectivity_observed",
                 "severity": "info",
-                "message": f"SRUM network connectivity observed: {network_profile or interface_profile or interface_guid or 'unknown profile'}",
+                "message": " ".join(
+                    part
+                    for part in [
+                        f"SRUM network connectivity observed: {network_profile or interface_profile or interface_type or interface_guid or interface_luid or 'unknown interface'}",
+                        f"connected {duration_value} s" if duration_value is not None else "",
+                    ]
+                    if part
+                ),
                 "timeline_include": True,
             }
         )
     elif artifact_type == "srum_app_resource":
-        summary = f"SRUM application usage: {display_name}"
+        summary = f"SRUM application usage: {message_name}"
         if bytes_total is not None:
             summary = f"{summary} ({_format_bytes_for_summary(bytes_total)})"
         document["event"].update(
@@ -3540,6 +3606,17 @@ def normalize_srum_row(document: dict, row: dict, artifact_meta: dict) -> dict:
                 "action": "srum_app_resource_usage_observed",
                 "severity": "info",
                 "message": summary,
+                "timeline_include": True,
+            }
+        )
+    elif artifact_type in {"srum_app_timeline", "srum_vfu"}:
+        document["event"].update(
+            {
+                "category": "process",
+                "type": "app_resource_usage",
+                "action": "srum_app_timeline_observed",
+                "severity": "info",
+                "message": f"SRUM app timeline: {message_name}" + (f" active {duration_value} s" if duration_value is not None else ""),
                 "timeline_include": True,
             }
         )
@@ -3561,7 +3638,7 @@ def normalize_srum_row(document: dict, row: dict, artifact_meta: dict) -> dict:
                 "type": "srum_record",
                 "action": "srum_observed",
                 "severity": "info",
-                "message": f"SRUM record: {display_name}",
+                "message": f"SRUM record: {message_name}",
                 "timeline_include": True,
             }
         )

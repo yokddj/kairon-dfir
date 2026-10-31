@@ -34,7 +34,7 @@ RUN curl -fsSL --retry 3 --retry-delay 5 https://dot.net/v1/dotnet-install.sh -o
 
 RUN set -eux; \
     mkdir -p /opt/eztools; \
-    for tool in LECmd JLECmd PECmd AmcacheParser AppCompatCacheParser RECmd MFTECmd SrumECmd; do \
+    for tool in LECmd JLECmd PECmd AmcacheParser AppCompatCacheParser RECmd MFTECmd SrumECmd SBECmd; do \
         mkdir -p "/opt/eztools/${tool}"; \
         curl -fsSL --retry 3 --retry-delay 5 "https://download.ericzimmermanstools.com/net/${tool}.zip" -o "/tmp/${tool}.zip"; \
         python -m zipfile -e "/tmp/${tool}.zip" "/opt/eztools/${tool}"; \
