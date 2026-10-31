@@ -615,6 +615,8 @@ export default function EvidenceDetail() {
   const linuxUnsupportedArtifacts = linuxInventory?.unsupported ?? [];
   const linuxWarnings = linuxInventory?.warnings ?? [];
   const diskImage = data?.disk_image ?? null;
+  // Archives, folders and AD1 images: one volume made from the archive listing.
+  const browsableCollection = ["raw_collection", "velociraptor_zip", "kape_archive", "parsed_folder", "linux_triage", "macos_triage"].includes(String(data?.evidence_type ?? ""));
   const artifactProgressDone = typeof metadata.artifacts_done === "number" ? (metadata.artifacts_done as number) : typeof metadata.artifacts_processed === "number" ? (metadata.artifacts_processed as number) : 0;
   const artifactProgressTotal = typeof metadata.artifacts_total === "number" ? (metadata.artifacts_total as number) : 0;
   const progressPct =
@@ -1631,7 +1633,7 @@ function formatReportStatus(status: string | null | undefined) {
             <button type="button" onClick={() => setDeleteDialogOpen(true)} className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
               Delete evidence
             </button>
-            {diskImage && data?.case_id ? <Link to={diskFilesRoute(data.case_id, evidenceId)} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Browse files</Link> : null}
+            {(diskImage || browsableCollection) && data?.case_id ? <Link to={diskFilesRoute(data.case_id, evidenceId)} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Browse files</Link> : null}
             {data?.case_id ? <Link to={addFindingHref} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Add finding</Link> : null}
             {data?.case_id ? <Link to={`/cases/${data.case_id}`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back to case</Link> : null}
           </div>

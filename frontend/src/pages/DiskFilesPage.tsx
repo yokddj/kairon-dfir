@@ -29,6 +29,7 @@ function fmtEpoch(value: number | null | undefined) {
 }
 
 function volumeLabel(volume: DiskFileVolume) {
+  if (volume.file_count !== undefined) return [volume.filesystem_type, `${volume.file_count.toLocaleString()} files`, formatBytes(volume.length_bytes)].join(" · ");
   const install = volume.installations[0];
   const name = volume.logical_volume ? `LV ${volume.logical_volume}` : `Partition ${volume.partition_index}`;
   const parts = [name, volume.filesystem_type ?? "unknown filesystem", formatBytes(volume.length_bytes)];
@@ -77,6 +78,7 @@ export default function DiskFilesPage() {
     return (byPartition ?? volumes.find((volume) => volume.browsable && volume.installations.length) ?? volumes.find((volume) => volume.browsable))?.id ?? "";
   }, [partitionParam, searchParams, volumes]);
   const volume = volumes.find((item) => item.id === volumeId);
+  const isCollection = volumesQuery.data?.kind === "collection";
 
   const listingQuery = useQuery({
     queryKey: ["disk-files", caseId, evidenceId, volumeId, path, inode],
@@ -162,9 +164,15 @@ export default function DiskFilesPage() {
       <section className="rounded-[28px] border border-line bg-panel p-6 shadow-panel">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.18em] text-accent"><FolderTree size={14} /> Disk files</p>
+            <p className="flex items-center gap-2 font-mono text-xs uppercase tracking-[0.18em] text-accent"><FolderTree size={14} /> {isCollection ? "Collection files" : "Disk files"}</p>
             <h2 className="mt-2 break-words text-2xl font-semibold">{volumesQuery.data?.image_name ?? "Disk image"}</h2>
-            <p className="mt-1 text-sm text-muted">Browse the filesystem as it is in the image, including deleted entries, and export files. Read-only: the image is never modified.</p>
+            <p className="mt-1 text-sm text-muted">
+              {isCollection
+                ? volumesQuery.data?.format === "ad1"
+                  ? "Browse the files of the AD1 logical image and export them. Times, MD5/SHA1, owner and attributes are the ones FTK recorded at acquisition. A logical image holds no deleted files or inodes. Read-only."
+                  : "Browse the files of the collection and export them. A collection holds copies of files, not a filesystem: no deleted entries or inodes. Read-only."
+                : "Browse the filesystem as it is in the image, including deleted entries, and export files. Read-only: the image is never modified."}
+            </p>
           </div>
           <Link to={`/evidences/${evidenceId}`} className="rounded-2xl border border-line px-4 py-2 text-sm text-muted">Back to evidence</Link>
         </div>
@@ -211,10 +219,10 @@ export default function DiskFilesPage() {
             </form>
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm">
-            <label className="flex items-center gap-2 text-muted">
+            {isCollection ? <span /> : <label className="flex items-center gap-2 text-muted">
               <input type="checkbox" checked={showDeleted} onChange={(event) => update({ deleted: event.target.checked ? null : "0" })} />
               Show deleted entries{deletedCount ? ` (${deletedCount})` : ""}
-            </label>
+            </label>}
             <div className="flex items-center gap-2">
               {searchTerm && searchQuery.data ? (
                 <span className="text-muted">{searchQuery.data.results.length} matches · {searchQuery.data.scanned.toLocaleString()} entries scanned{searchQuery.data.truncated ? " · stopped early, refine the pattern" : ""}</span>
@@ -242,7 +250,7 @@ export default function DiskFilesPage() {
                   <th className="whitespace-nowrap px-3 py-2">Changed</th>
                   <th className="whitespace-nowrap px-3 py-2">Created</th>
                   <th className="px-3 py-2">Owner</th>
-                  <th className="px-3 py-2">Inode</th>
+                  <th className="px-3 py-2">{isCollection ? "MD5 (acquisition)" : "Inode"}</th>
                   <th className="px-3 py-2"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
@@ -268,6 +276,9 @@ export default function DiskFilesPage() {
                         ) : (
                           <span className={`break-all ${deleted ? "text-danger line-through decoration-danger/40" : "text-ink"}`}>{searchTerm ? entry.path : entry.name}{entry.kind === "symlink" ? " →" : ""}</span>
                         )}
+                        {entry.attributes?.filter((attribute) => attribute === "hidden" || attribute === "system").map((attribute) => (
+                          <span key={attribute} className="ml-2 rounded-full border border-line px-1.5 text-[10px] uppercase text-muted">{attribute}</span>
+                        ))}
                         {searchTerm ? <button type="button" onClick={() => update({ q: null, path: parentOf(entry.path), inode: null, file: entry.name })} className="ml-2 text-[11px] text-muted underline">show in folder</button> : null}
                       </td>
                       <td className="whitespace-nowrap px-3 py-2">{deleted ? <span title={STATUS_HINT[entry.status]} className="rounded-full border border-danger/40 bg-danger/10 px-2 py-0.5 text-[11px] text-danger">{STATUS_LABEL[entry.status]}</span> : null}
@@ -282,8 +293,8 @@ export default function DiskFilesPage() {
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{fmtEpoch(entry.atime)}</td>
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{fmtEpoch(entry.ctime)}</td>
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{fmtEpoch(entry.crtime)}</td>
-                      <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted">{entry.uid !== null && entry.uid !== undefined ? `${entry.uid}:${entry.gid ?? "?"}` : "-"}</td>
-                      <td className="px-3 py-2 font-mono text-xs text-muted">{entry.inode ?? "-"}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted" title={entry.owner_sid ?? undefined}>{entry.owner ?? (entry.uid !== null && entry.uid !== undefined ? `${entry.uid}:${entry.gid ?? "?"}` : "-")}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-muted" title={entry.sha1 ? `SHA1 ${entry.sha1}` : undefined}>{isCollection ? entry.md5 ?? "-" : entry.inode ?? "-"}</td>
                       <td className="whitespace-nowrap px-3 py-2">
                         {exportable ? <button type="button" disabled={exporting} onClick={() => void download([entry])} className="rounded-xl border border-line px-2 py-1 text-xs text-muted disabled:opacity-40">{entry.kind === "dir" ? "Download folder" : "Download"}</button> : null}
                       </td>

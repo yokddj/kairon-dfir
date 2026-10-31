@@ -30,6 +30,9 @@ filesystem, so it is handled as a collection, not as a disk image:
   an empty `$I30` index twin next to some files; the copy with content is kept.
   Files whose content cannot be decompressed are listed in
   `metadata_json.ad1_image.failed`.
+- **Browse files** on the evidence shows the image's tree with the times, hashes,
+  owner and attributes FTK recorded (see
+  [disk-image-ingestion.md](disk-image-ingestion.md#collections)).
 - Not supported: multi-segment images (`.ad1` + `.ad2`...) and ADCRYPT-encrypted
   images. Both are rejected at upload with that reason.
 

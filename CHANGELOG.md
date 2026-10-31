@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Browse files** for collections (ZIP/7z/TAR archives, uploaded folders, AD1 logical images): the disk file explorer shows the collection as one volume, with find and password-protected export. For AD1 images, the NTFS times, MD5/SHA1, owner and attributes FTK recorded at acquisition are shown and exports are checked against FTK's MD5.
 - **AD1 logical images** (FTK Imager folder and custom-content images) can be uploaded, alone or as the only file of a ZIP. Preflight lists their files in place and registration repacks them into a ZIP that goes through the normal collection pipeline (discovery, hives, SRUM, Shellbags, LNK, Jump Lists, browsers...); the `.ad1` stays the hashed original. Multi-segment and ADCRYPT-encrypted images are rejected with that reason.
 - **Folder uploads** from the evidence wizard are packed into one uncompressed ZIP in the browser and sent through the resumable upload, like any archive. Before, the whole folder went in one request: refused unless the experimental folder upload was enabled, limited to 2,000 files and 2 GB, and cut off by the proxy above 2 GB.
 - **Password-protected ZIP archives**: preflight detects them and the wizard asks for the password; the archive is decrypted once into a plain ZIP and processed normally. The password is checked before registration and is not stored. Before, every member failed to extract with unrelated errors and almost nothing was indexed.

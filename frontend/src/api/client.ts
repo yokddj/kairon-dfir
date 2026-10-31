@@ -326,6 +326,7 @@ export type DiskFileVolume = {
   browsable: boolean;
   unavailable_reason?: string | null;
   installations: Array<{ platform: string; hostname?: string | null; distro?: string | null; version?: string | null; root_path: string }>;
+  file_count?: number;
 };
 
 export type DiskFileVolumes = {
@@ -334,6 +335,8 @@ export type DiskFileVolumes = {
   image_name: string;
   volumes: DiskFileVolume[];
   archive_password: string;
+  // "collection": an archive, folder or AD1 image shown as one volume, no inodes or deleted entries.
+  kind?: "collection";
 };
 
 export type DiskFileStatus = "allocated" | "deleted" | "deleted_inode_reused" | "deleted_metadata_lost" | "deleted_journal";
@@ -356,6 +359,13 @@ export type DiskFileEntry = {
   journal_last_seen?: number | null;
   journal_gone_by?: number | null;
   journal_last_seq?: number | null;
+  // Collections (app.services.collection_file_explorer): what an AD1 image recorded at acquisition.
+  md5?: string | null;
+  sha1?: string | null;
+  owner?: string | null;
+  owner_sid?: string | null;
+  short_name?: string | null;
+  attributes?: string[];
 };
 
 export type DiskFileListing = { path: string; inode: number | null; entries: DiskFileEntry[]; total: number; truncated: boolean; journal?: boolean };
