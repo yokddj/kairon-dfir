@@ -11,7 +11,7 @@ from zipfile import ZipFile
 
 from app.core.storage import ensure_within_directory, sanitize_relative_path
 from app.ingest.ad1_image import AD1_SUFFIX, entry_mtime, iter_ad1_files, open_ad1
-from app.ingest.archive import should_ignore_path
+from app.ingest.archive import restore_mtime, should_ignore_path, zip_member_mtime
 
 SEVEN_ZIP_CONTAINER_SUFFIXES: tuple[tuple[str, ...], ...] = (
     (".7z",),
@@ -140,6 +140,16 @@ class _SevenZipEntryStream(io.RawIOBase):
         self.close()
 
 
+def _listing_mtime(value: str | None) -> float | None:
+    """7-Zip's "Modified" column (UTC inside the containers) as epoch seconds."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC).timestamp()
+    except ValueError:
+        return None
+
+
 def _safe_zip_mtime(date_time: tuple[int, int, int, int, int, int] | None) -> str | None:
     if not date_time:
         return None
@@ -209,6 +219,7 @@ class ZipEvidenceContainer(EvidenceContainer):
         with ZipFile(self.archive_path) as archive:
             with archive.open(path) as src, target.open("wb") as dst:
                 shutil.copyfileobj(src, dst)
+            restore_mtime(target, zip_member_mtime(archive.getinfo(path)))
         return target
 
     def extract_entries(self, paths: list[str], destination: Path) -> list[dict]:
@@ -223,6 +234,7 @@ class ZipEvidenceContainer(EvidenceContainer):
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with archive.open(item) as src, target.open("wb") as dst:
                         shutil.copyfileobj(src, dst)
+                    restore_mtime(target, zip_member_mtime(archive.getinfo(item)))
                     results.append({"path": item, "status": "extracted", "local_path": str(target), "error": None})
                 except Exception as exc:  # noqa: BLE001
                     results.append({"path": item, "status": "failed", "local_path": None, "error": str(exc)})
@@ -372,6 +384,8 @@ class SevenZipEvidenceContainer(EvidenceContainer):
             raise RuntimeError(result.stderr.decode("utf-8", errors="replace") or f"Unable to extract {path} from {self.archive_path}")
         with target.open("wb") as handle:
             handle.write(result.stdout)
+        entry = self.get_metadata(path)
+        restore_mtime(target, _listing_mtime(entry.mtime if entry else None))
         return target
 
     def extract_entries(self, paths: list[str], destination: Path) -> list[dict]:
@@ -474,6 +488,8 @@ class AD1EvidenceContainer(EvidenceContainer):
         target.parent.mkdir(parents=True, exist_ok=True)
         with self.open_entry(path) as src, target.open("wb") as dst:
             shutil.copyfileobj(src, dst, 1024 * 1024)
+        mtime = entry_mtime(self._entry(path))
+        restore_mtime(target, mtime.timestamp() if mtime else None)
         return target
 
 
