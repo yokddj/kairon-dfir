@@ -31,7 +31,7 @@ def _evidence(tmp_path: Path, monkeypatch, *, ad1: bool = False):
         handle.writestr("C/Users/alice/NTUSER.DAT", b"regf-data")
         handle.writestr("C/Users/alice/Desktop/notes.txt", b"hello")
         handle.writestr("C/Users/alice/Desktop/tool.exe", b"MZ")
-        handle.writestr("__MACOSX/._junk", b"x")
+        handle.writestr("C/Users/alice/Desktop/desktop.ini", b"")
     metadata = {}
     if ad1:
         source = root / "source" / "alice.ad1"
@@ -51,12 +51,13 @@ def test_collection_is_one_volume_with_its_folder_tree(tmp_path, monkeypatch):
     evidence = _evidence(tmp_path, monkeypatch)
     volumes = explorer.list_volumes(evidence, "infected")
     assert volumes["kind"] == "collection"
-    assert [(item["id"], item["filesystem_type"], item["file_count"]) for item in volumes["volumes"]] == [("collection", "ZIP collection", 3)]
+    assert [(item["id"], item["filesystem_type"], item["file_count"]) for item in volumes["volumes"]] == [("collection", "ZIP collection", 4)]
 
     root = explorer.list_directory(evidence, "collection", path="/", max_entries=100)
     assert [(item["name"], item["kind"]) for item in root["entries"]] == [("C", "dir")]
     desktop = explorer.list_directory(evidence, "collection", path="/C/Users/alice/Desktop", max_entries=100)
-    assert [item["name"] for item in desktop["entries"]] == ["notes.txt", "tool.exe"]
+    # Listed although ingestion skips it (empty desktop.ini).
+    assert [item["name"] for item in desktop["entries"]] == ["desktop.ini", "notes.txt", "tool.exe"]
     alice = explorer.list_directory(evidence, "collection", path="/C/Users/alice", max_entries=100)
     assert [(item["name"], item["kind"]) for item in alice["entries"]] == [("Desktop", "dir"), ("NTUSER.DAT", "file")]
     with pytest.raises(explorer.CollectionExplorerError):
@@ -80,7 +81,7 @@ def test_find_and_export(tmp_path, monkeypatch):
     out = tmp_path / "out"
     response = explorer.export_into(evidence, "collection", items=[{"path": "/C/Users/alice/Desktop"}], output_dir=out, max_bytes=10_000, max_files=10)
     by_path = {item["path"]: item for item in response["manifest"]}
-    assert set(by_path) == {"/C/Users/alice/Desktop/notes.txt", "/C/Users/alice/Desktop/tool.exe"}
+    assert set(by_path) == {"/C/Users/alice/Desktop/desktop.ini", "/C/Users/alice/Desktop/notes.txt", "/C/Users/alice/Desktop/tool.exe"}
     assert (out / "files/C/Users/alice/Desktop/notes.txt").read_bytes() == b"hello"
     # The MD5 FTK recorded matches the bytes exported.
     assert by_path["/C/Users/alice/Desktop/notes.txt"]["md5_computed"] == "5d41402abc4b2a76b9719d911017c592"
