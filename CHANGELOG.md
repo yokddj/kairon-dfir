@@ -12,6 +12,10 @@
 - Raw **Shellbags**: SBECmd now ships in the image and parses each profile's `UsrClass.dat` and `NTUSER.DAT` (with their transaction logs) on the Linux worker.
 - SRUM and Shellbags are steps of recommended indexing when discovery finds their sources, and scoped actions (`POST /api/evidences/{id}/srum-index`, `/shellbags-index`).
 
+### Fixed
+
+- A resumable upload could end in "Inspection failed: This upload session is busy": the last chunk queues a background preflight and the wizard also finalizes, and whichever lost the lock failed. The wizard's finalize now waits for the background inspection and reuses its report; the background job steps aside when the wizard got there first.
+
 ### Changed
 
 - Resumable uploads read each 64 MB chunk into memory before sending it, instead of letting the browser stream it from disk during the request. A file the browser can no longer read (moved, renamed, permission lost) now says so instead of failing as a network error.
