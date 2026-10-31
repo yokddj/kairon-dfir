@@ -5,6 +5,7 @@ This document describes current known limitations. It is intentionally explicit 
 ## Parser / Artifact Coverage
 
 - AD1 logical images: single-segment, unencrypted images only; deleted entries inside the image are not recovered. See [evidence/ingestion.md](evidence/ingestion.md#ad1-logical-images).
+- Password-protected archives: only ZIP is detected and decrypted; an encrypted 7z or RAR is not. Decrypting needs free space for the extracted files twice over, briefly.
 - SRUM: raw `SRUDB.dat` is read natively (SrumECmd cannot run on Linux). Wi-Fi profile names (SSID) are not resolved and pending ESE log records are not replayed. See [artifacts/srum.md](artifacts/srum.md).
 - Shellbags: raw `NTUSER.DAT`/`UsrClass.dat` are parsed with SBECmd. Namespace-only items (known folders such as Downloads, GUID folders) keep their shell path instead of a drive path. See [artifacts/shellbags.md](artifacts/shellbags.md).
 - Outlook/OST/PST and rich email-message parsing are pending. Current email-related analysis is based on filesystem, browser, MFT, MOTW and user-activity evidence that is already indexed.

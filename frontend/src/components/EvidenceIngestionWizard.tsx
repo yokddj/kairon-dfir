@@ -305,6 +305,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [evidenceIntent, setEvidenceIntent] = useState<EvidenceIntent>("raw");
   const [ingestMode, setIngestMode] = useState<IngestMode>("full_forensic");
   const [evtxProfile, setEvtxProfile] = useState<EvtxProfile>("full");
+  // Per preflight token; sent once with promote to decrypt a password-protected ZIP, never stored.
+  const [archivePasswords, setArchivePasswords] = useState<Record<string, string>>({});
   const [fullCsvTables, setFullCsvTables] = useState(false);
   const [hashProgress, setHashProgress] = useState<number | null>(null);
   const [clientSha256, setClientSha256] = useState<string | null>(null);
@@ -1014,6 +1016,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
             ingest_mode: ingestMode,
             evtx_profile: evtxProfile,
             full_csv_tables: fullCsvTables && item.preflight.classification.category !== "memory_dump",
+            archive_password: item.preflight.classification.password_protected ? archivePasswords[item.preflight.token] : undefined,
           });
           lastEvidence = evidence;
           if (evidence.evidence_type === "memory_dump") memoryEvidences.push(evidence);
@@ -1046,6 +1049,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
           ingest_mode: ingestMode,
           evtx_profile: evtxProfile,
           full_csv_tables: fullCsvTables && preflight?.classification.category !== "memory_dump",
+          archive_password: preflight?.classification.password_protected ? archivePasswords[preflight.token] : undefined,
         });
         promotedRef.current = true;
         promotedEvidenceRef.current = evidence;
@@ -1133,7 +1137,9 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     const detected = routeForCategory(report.classification.category);
     return forced && detected && forced !== detected && [forced, detected].includes("disk_image") && [forced, detected].includes("memory_dump") && !wrongRouteAccepted[report.token];
   });
-  const canStartProcessing = !startMutation.isPending && hostAssignmentBlockingReason === null && !overrideBlocking && !wrongRouteBlocking;
+  const passwordProtectedReports = ingestablePreflightReports.filter((report) => report.classification.password_protected);
+  const passwordMissing = passwordProtectedReports.some((report) => !archivePasswords[report.token]);
+  const canStartProcessing = !startMutation.isPending && hostAssignmentBlockingReason === null && !overrideBlocking && !wrongRouteBlocking && !passwordMissing;
   const selectedHostName = hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE
     ? caseHosts.find((h) => h.id === hostChoice)?.display_name || "Selected host"
     : null;
@@ -1804,6 +1810,28 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
               </div>
             ) : readyToProcess ? (
               <p className="mt-4 text-sm font-semibold text-mint">Ready to process</p>
+            ) : null}
+
+            {passwordProtectedReports.length ? (
+              <div className="mt-4 rounded-2xl border border-amber/40 bg-amber/10 p-4" data-testid="archive-password-panel">
+                <p className="text-sm font-semibold text-ink">Password-protected archive</p>
+                <p className="mt-1 text-xs text-muted">Kairon decrypts it once when processing starts and does not store the password.</p>
+                <div className="mt-3 grid gap-2">
+                  {passwordProtectedReports.map((report) => (
+                    <label key={report.token} className="text-xs text-muted">
+                      {report.original_filename}
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={archivePasswords[report.token] ?? ""}
+                        onChange={(event) => setArchivePasswords((current) => ({ ...current, [report.token]: event.target.value }))}
+                        className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink"
+                        data-testid={`archive-password-${report.token}`}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
             ) : null}
 
             <details className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen((event.target as HTMLDetailsElement).open)}>

@@ -17,10 +17,12 @@ An `.ad1` from FTK Imager (a folder or custom-content image) holds files, not a
 filesystem, so it is handled as a collection, not as a disk image:
 
 - Preflight lists its files in place with `dissect.evidence`.
-- At registration the live files are repacked into a ZIP next to the original;
+- At registration the live files are repacked into a ZIP in `original/`;
   discovery, selected extraction and the raw hive, SRUM and `$MFT` steps read that
-  ZIP like any uploaded collection. The `.ad1` keeps the evidence hash and is what
-  the integrity check verifies.
+  ZIP like any uploaded collection. The `.ad1` is moved to `source/`: it keeps the
+  evidence hash and is what the integrity check verifies.
+- A ZIP whose only file is an `.ad1` (how training and CTF images are usually
+  shipped) is unwrapped and handled the same way.
 - Paths are rebased on the source volume: FTK names the image after where it was
   taken (`C:\NONAME [NTFS]\[root]\Users\alice`); the partition label and `[root]`
   are dropped, so files read `C/Users/alice/NTUSER.DAT`.
@@ -30,6 +32,20 @@ filesystem, so it is handled as a collection, not as a disk image:
   `metadata_json.ad1_image.failed`.
 - Not supported: multi-segment images (`.ad1` + `.ad2`...) and ADCRYPT-encrypted
   images. Both are rejected at upload with that reason.
+
+## Password-Protected ZIP Archives
+
+Preflight reads the ZIP's directory (no password needed) and, when its members are
+encrypted, the wizard asks for the password before processing starts. With it, the
+archive is decrypted once with 7-Zip (ZipCrypto and AES) into a plain ZIP in
+`original/`, and processed like any other upload; the encrypted file is moved to
+`source/` and keeps the evidence hash. The password is checked before the upload is
+registered, so a wrong one can be corrected without uploading again. It is used for
+that one 7-Zip run and is not stored. An encrypted ZIP uploaded without its password
+through the API is rejected (`archive_password_required`).
+
+`metadata_json.repacked_from` records the uploaded file and each step taken
+(`encrypted_zip`, `zip_member`, `ad1`).
 
 ## How the Evidence Type Is Detected
 

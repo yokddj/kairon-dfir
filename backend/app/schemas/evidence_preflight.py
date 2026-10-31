@@ -51,6 +51,8 @@ class PreflightClassification(BaseModel):
     filesystems: list[str] = []
     installations: int | None = None
     expected_parsers: list[str] = []
+    # A ZIP whose members are encrypted: the wizard asks for its password.
+    password_protected: bool = False
     warnings: list[PreflightWarning] = []
     volume_diagnostics: list[PreflightVolumeDiagnostic] = []
 

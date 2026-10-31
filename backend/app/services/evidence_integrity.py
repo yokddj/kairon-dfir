@@ -78,11 +78,11 @@ def record_evidence_event(
 def verify_evidence_integrity(db: Session, evidence: Evidence, *, actor_user_id: str | None = None) -> dict[str, Any]:
     checked_at = utc_now_naive()
     expected_sha256 = str(evidence.sha256 or "").strip().lower() or None
-    stored_path = Path(evidence.stored_path)
-    # An AD1 upload works from a ZIP repack; the hash belongs to the image.
-    ad1_image = (evidence.metadata_json or {}).get("ad1_image") or {}
-    if ad1_image.get("path"):
-        stored_path = Path(str(ad1_image["path"]))
+    # A repacked upload (AD1, decrypted ZIP) is processed from a ZIP; the
+    # hash belongs to the file that was uploaded.
+    from app.services.evidence_container_prep import hashed_source_path
+
+    stored_path = hashed_source_path(evidence)
     details: dict[str, Any] = {"expected_sha256": expected_sha256, "stored_file_present": stored_path.exists()}
     if not stored_path.exists():
         evidence.integrity_status = EvidenceIntegrityStatus.missing_file

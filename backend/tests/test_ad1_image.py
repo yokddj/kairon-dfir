@@ -161,7 +161,7 @@ def test_integrity_check_hashes_the_ad1_not_the_repack(tmp_path):
         ingest_status=IngestStatus.pending,
         path_validation={},
         ingest_source={},
-        metadata_json={"ad1_image": {"path": str(image)}},
+        metadata_json={"repacked_from": {"path": str(image)}},
         error_log={},
     )
     db.add(evidence)
@@ -216,12 +216,14 @@ def test_ad1_upload_registers_the_zip_repack_as_a_raw_collection(monkeypatch, tm
     from app.models.evidence import EvidenceType
 
     stored, evidence = _upload_ad1(monkeypatch, tmp_path, lambda path: _sample_image())
-    assert evidence.original_path == str(stored)
+    source = stored.parent.parent / "source" / "alice.ad1"
+    assert evidence.original_path == str(source)
+    assert source.read_bytes().startswith(b"ADSEGMENTEDFILE")
     assert evidence.stored_path == str(stored.with_name("alice.zip"))
     assert evidence.sha256 == "ab" * 32
     assert evidence.evidence_type == EvidenceType.velociraptor_zip
-    assert evidence.metadata_json["ad1_image"]["path"] == str(stored)
-    assert evidence.metadata_json["ad1_image"]["files"] == 3
+    assert evidence.metadata_json["repacked_from"]["path"] == str(source)
+    assert evidence.metadata_json["repacked_from"]["steps"][-1]["files"] == 3
     assert "C/Users/alice/NTUSER.DAT" in {entry["path"] for entry in evidence.metadata_json["folder_entries"]}
 
 

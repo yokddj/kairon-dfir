@@ -39,6 +39,7 @@ from app.disk_images.service import inspect_disk_image_readonly
 from app.ingest.evidence_classifier import EvidenceCategory, get_evidence_classifier
 from app.ingest.linux.discovery import build_linux_inventory
 from app.ingest.linux.helpers import looks_like_linux_artifact
+from app.ingest.encrypted_archive import is_encrypted_zip
 from app.ingest.velociraptor.zip_inventory import ContainerEntry, is_supported_archive_container, open_evidence_container
 from app.schemas.evidence_preflight import (
     PreflightClassification,
@@ -483,6 +484,7 @@ def run_preflight(
     warnings: list[str] = []
     volume_diagnostics: list[PreflightVolumeDiagnostic] = []
 
+    password_protected = False
     is_openable_container = is_directory or classification_category == EvidenceCategory.ARCHIVE
     if is_openable_container:
         chain.append("Archive" if not is_directory else "Folder")
@@ -512,6 +514,9 @@ def run_preflight(
                 contained_object = f"{distro or platform.title()} artifact collection ({info['expected_artifact_count']} matched file(s))"
             else:
                 contained_object = f"Unclassified file collection ({info['entry_count']} file(s))"
+        if not is_directory and is_encrypted_zip(path):
+            password_protected = True
+            warnings.append("Password-protected archive: enter its password before processing. It is decrypted once and not stored.")
         classification_category_value = "archive"
         pipeline_preview = [
             "Archive" if not is_directory else "Folder",
@@ -835,6 +840,7 @@ def run_preflight(
         filesystems=filesystems,
         installations=installations_count,
         expected_parsers=expected_parsers,
+        password_protected=password_protected,
         warnings=[_classify_warning(message) for message in warnings],
         volume_diagnostics=volume_diagnostics,
     )

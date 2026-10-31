@@ -344,10 +344,56 @@ def _zip_needs_seven_zip(source: Path) -> bool:
         return False
 
 
+def _extract_ad1(source: Path, dest_dir: Path, progress_cb: Callable[[dict], None] | None) -> tuple[list[str], list[dict]]:
+    """An AD1 logical image nested in a collection (e.g. a ZIP holding one
+    .ad1): its live files are written out like an archive's members."""
+    from app.ingest.ad1_image import AD1ImageError, iter_ad1_files, open_ad1
+
+    try:
+        files = list(iter_ad1_files(open_ad1(source)))
+    except AD1ImageError as exc:
+        _raise_classified(ArchiveExtractionError(exc.code, exc.message), source, exc)
+    total_files = len(files)
+    total_bytes = sum(int(entry.size or 0) for _path, entry in files)
+    manifest_entries: list[dict] = []
+    processed_bytes = 0
+    for index, (relative, entry) in enumerate(files, start=1):
+        size = int(entry.size or 0)
+        processed_bytes += size
+        ignored, reason = should_ignore_path(Path(relative), size=size, is_dir=False)
+        record = {"path": relative, "ignored": ignored, "reason": reason, "size": size, "status": "ignored" if ignored else "extracted", "local_path": None}
+        if not ignored:
+            target = _validate_path(dest_dir, relative)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with entry.open() as src, target.open("wb") as dst:
+                    shutil.copyfileobj(src, dst, 1024 * 1024)
+                record["local_path"] = str(target)
+            except OSError as exc:
+                if _is_disk_space_error(exc):
+                    _raise_classified(_classify_zip_failure(exc, source), source, exc)
+                target.unlink(missing_ok=True)
+                record.update({"status": "failed", "reason": f"{type(exc).__name__}: {exc}"[:300]})
+            except Exception as exc:  # noqa: BLE001
+                target.unlink(missing_ok=True)
+                record.update({"status": "failed", "reason": f"{type(exc).__name__}: {exc}"[:300]})
+        manifest_entries.append(record)
+        if progress_cb:
+            progress_cb({"processed_files": index, "total_files": total_files, "processed_bytes": processed_bytes, "total_bytes": total_bytes, "current_path": relative})
+    try:
+        _enforce_limits(manifest_entries)
+    except ValueError as exc:
+        _raise_classified(_classify_limit_exceeded(exc, source), source, exc)
+    extracted = [entry["path"] for entry in manifest_entries if entry["status"] == "extracted"]
+    return extracted, manifest_entries
+
+
 def extract_archive(source: Path, dest_dir: Path, progress_cb: Callable[[dict], None] | None = None) -> tuple[list[str], list[dict]]:
     dest_dir.mkdir(parents=True, exist_ok=True)
     suffix = source.suffix.lower()
-    if suffix == ".zip" and _zip_needs_seven_zip(source):
+    if suffix == ".ad1":
+        extracted, manifest_entries = _extract_ad1(source, dest_dir, progress_cb)
+    elif suffix == ".zip" and _zip_needs_seven_zip(source):
         extracted, manifest_entries = _extract_seven_zip(source, dest_dir, progress_cb)
     elif suffix == ".zip":
         extracted, manifest_entries = _extract_zip(source, dest_dir, progress_cb)
