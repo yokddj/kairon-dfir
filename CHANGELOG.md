@@ -23,6 +23,7 @@
 
 ### Fixed
 
+- **Re-index evidence** of a raw collection now also parses artifacts discovery finds that did not exist at the previous run (a parser added since, such as Windows notifications). Before, it repeated the previous selection exactly and new artifacts stayed unparsed with no way to add them from the evidence page. Artifacts the analyst left out are still left out.
 - Raw collections: selected Windows notification databases and network candidates (WLAN profile XML, `hosts`) were extracted and then never parsed, because no artifact mapping existed for their category. Both are mapped now, and a supported candidate without a mapping is logged instead of dropped silently.
 - Collections that name the volume as a folder (`C/Users/...`, as KAPE and AD1 repacks do) or wrap the tree in their own folders (`challenge/Users/...`) got no user from artifact paths: path normalization now finds the Windows tree by its layout (`Windows\System32`, `Users\<name>\AppData`...) and takes a one-letter folder before it as the drive.
 - Artifact Views: MOTW and email artifact details open in the side panel, like event details, instead of below the whole table.

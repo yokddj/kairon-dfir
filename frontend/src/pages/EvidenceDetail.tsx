@@ -363,7 +363,7 @@ export default function EvidenceDetail() {
     },
     onMutate: (payload) => {
       const descriptions: Record<string, string> = {
-        previous_selection: "Reprocessing the same artifacts and parsers that were used in the previous ingest plan.",
+        previous_selection: "Reprocessing the artifacts of the previous ingest plan, plus any that Kairon can read since then.",
         choose_again: "Refreshing discovery candidates so you can review the previous selection and change it before reprocessing.",
         full_rediscovery: "Running a full rediscovery. This may parse a different set of artifacts than the previous ingest.",
         manual_selection: "Reprocessing only the artifacts and parsers selected manually in this preview.",

@@ -1163,7 +1163,7 @@ def test_velociraptor_reprocess_with_selection_resets_to_waiting_selection() -> 
     assert metadata["velociraptor_selected_candidate_ids"] == ["browser-1"]
 
 
-def test_ingest_plan_previous_selection_preview_excludes_new_candidates() -> None:
+def test_ingest_plan_previous_selection_preview_adds_never_offered_candidates() -> None:
     evidence = SimpleNamespace(
         id="evidence-1",
         case_id="case-1",
@@ -1219,9 +1219,25 @@ def test_ingest_plan_previous_selection_preview_excludes_new_candidates() -> Non
         },
     }
     preview = build_reprocess_preview(evidence, metadata=previous_metadata, current_metadata=current_metadata, mode="previous_selection")
-    assert [item["candidate_id"] for item in preview["selected_candidates"]] == ["evtx-1"]
+    # browser-1 did not exist when the plan was made (a parser added since).
+    assert [item["candidate_id"] for item in preview["selected_candidates"]] == ["evtx-1", "browser-1"]
     assert [item["candidate_id"] for item in preview["new_candidates"]] == ["browser-1"]
     assert preview["summary"]["new_candidates"] == 1
+
+    # A candidate the analyst left out at the last run stays out.
+    declined = persist_plan(
+        dict(previous_metadata, velociraptor_discovery=current_metadata["velociraptor_discovery"]),
+        build_plan(
+            evidence,
+            dict(previous_metadata, velociraptor_discovery=current_metadata["velociraptor_discovery"]),
+            discovery_mode="manual",
+            selected_candidate_ids=["evtx-1"],
+            disabled_candidate_ids=["browser-1"],
+        ),
+    )
+    preview = build_reprocess_preview(evidence, metadata=declined, current_metadata=current_metadata, mode="previous_selection")
+    assert [item["candidate_id"] for item in preview["selected_candidates"]] == ["evtx-1"]
+    assert preview["new_candidates"] == []
 
 
 def test_ingest_plan_choose_again_preview_keeps_previous_selection_preselected() -> None:
