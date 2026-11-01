@@ -2,9 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import EvidenceIngestionWizard from "./EvidenceIngestionWizard";
+import { api } from "../api/client";
 import type { EvidenceUploadSessionCreateResponse, IngestionReadiness, PreflightReport } from "../api/client";
 
 const createEvidenceUploadSessionMock = vi.fn();
@@ -17,6 +18,8 @@ const getCaseHostsMock = vi.fn();
 const createCaseHostMock = vi.fn();
 const listResumableEvidenceUploadsMock = vi.fn();
 const createResumableEvidenceUploadSessionMock = vi.fn();
+const appendResumableEvidenceUploadMock = vi.fn();
+const finalizeResumableEvidenceUploadSessionMock = vi.fn();
 const getEvidenceUploadSessionMock = vi.fn();
 const getMemoryUploadStatusMock = vi.fn();
 const uploadMemoryUploadChunkMock = vi.fn();
@@ -56,6 +59,16 @@ vi.mock("../api/client", () => ({
     startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
     startMemoryRunAll: (...args: unknown[]) => startMemoryRunAllMock(...args),
     getActiveMemoryAnalysisBatch: (...args: unknown[]) => getActiveMemoryAnalysisBatchMock(...args),
+  },
+  // runResumableUpload (used by both unified and legacy resumable uploads)
+  // imports this directly from the same module to classify a 409 lock
+  // conflict as retryable -- not otherwise used by these tests.
+  ApiError: class ApiError extends Error {
+    status: number;
+    constructor(status: number, _errorCode: string | null, message: string) {
+      super(message);
+      this.status = status;
+    }
   },
 }));
 
@@ -1496,6 +1509,7 @@ function resumableUnifiedSession(overrides: Partial<import("../api/client").Resu
     case_id: "case-1",
     backend: "unified",
     category: "memory_dump",
+    packaged_from_folder: false,
     original_filename: "capture.mem",
     expected_size_bytes: 32,
     bytes_received: 16,
@@ -1865,6 +1879,108 @@ describe.skip("EvidenceIngestionWizard unified disk_image uploads", () => {
 
     await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-disk-2", { profile: "recommended" }));
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/evidences/evidence-disk-2"));
+  });
+});
+
+function folderFile(path: string, data: string) {
+  const file = new File([data], path.split("/").pop() ?? path, { lastModified: Date.UTC(2025, 1, 15, 12, 0, 0) });
+  Object.defineProperty(file, "webkitRelativePath", { value: path });
+  return file;
+}
+
+describe("EvidenceIngestionWizard folder upload resume (legacy byte-offset backend)", () => {
+  // The legacy byte-offset functions runResumableUpload calls for a
+  // non-unified session are injected only for this block: most other
+  // describe blocks rely on them being absent from the api mock so a
+  // single-file resumable upload falls back to the legacy staged flow
+  // (see uploadSingleFileResumable's own guard) -- adding them globally
+  // would change what every one of those tests actually exercises.
+  const originalAppend = api.appendResumableEvidenceUpload;
+  const originalFinalize = api.finalizeResumableEvidenceUploadSession;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navigateMock.mockReset();
+    getCaseHostsMock.mockResolvedValue({ hosts: [{ id: "host-1", display_name: "WS-01" }] });
+    getIngestionReadinessMock.mockResolvedValue(readyHealth());
+    api.appendResumableEvidenceUpload = appendResumableEvidenceUploadMock as typeof api.appendResumableEvidenceUpload;
+    api.finalizeResumableEvidenceUploadSession = finalizeResumableEvidenceUploadSessionMock as typeof api.finalizeResumableEvidenceUploadSession;
+  });
+
+  afterEach(() => {
+    api.appendResumableEvidenceUpload = originalAppend;
+    api.finalizeResumableEvidenceUploadSession = originalFinalize;
+  });
+
+  it("offers a folder picker (not a single-file one) to resume a session packed from a folder, and re-uploads no bytes the server already has", async () => {
+    // Deterministic packing: the same folder selection always produces the
+    // same filename ("challenge.zip") and byte size, which is exactly what
+    // lets the server recognize a re-selection as the same in-flight
+    // session (see create_resumable_upload_session's filename+size reuse).
+    const files = [folderFile("challenge/a.txt", "AAAAAAAAAAAAAAAA"), folderFile("challenge/b.txt", "BBBBBBBBBBBBBBBB")];
+    const expectedSize = (await (await import("../lib/folderZip")).zipFolder(files)).size;
+
+    // Interrupted after every byte landed (e.g. the reload happened right
+    // before finalize) -- the smallest archive that still lets a single 64
+    // MB chunk's worth of "nothing left to send" be observed deterministically.
+    const candidate: import("../api/client").ResumableUploadSessionRead = {
+      id: "resume-session-folder",
+      case_id: "case-1",
+      backend: "legacy",
+      category: "velociraptor_zip",
+      packaged_from_folder: true,
+      original_filename: "challenge.zip",
+      expected_size_bytes: expectedSize,
+      bytes_received: expectedSize,
+      progress_percent: 100,
+      status: "interrupted",
+      current_stage: "upload",
+      created_at: new Date(Date.now() - 60_000).toISOString(),
+      updated_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      resumable: true,
+      cancellable: true,
+      promoted_evidence_id: null,
+      failure_message: null,
+      unified: null,
+    };
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [candidate] });
+
+    renderWizard();
+    await passHealthCheck();
+
+    const panel = await screen.findByTestId("resumable-uploads-panel");
+    expect(within(panel).getByText("challenge.zip")).toBeInTheDocument();
+    await userEvent.click(within(panel).getByTestId("resume-upload-select"));
+
+    await screen.findByTestId("resume-upload-step");
+    expect(screen.getByText(/challenge\.zip/)).toBeInTheDocument();
+    // Not the single-file resume input: a folder was packed, so a folder
+    // picker (webkitdirectory) is what the browser can meaningfully offer.
+    expect(screen.queryByTestId("resume-file-input")).not.toBeInTheDocument();
+    const folderInput = screen.getByTestId("resume-folder-input");
+    expect(folderInput).toHaveAttribute("webkitdirectory");
+
+    getEvidenceUploadSessionMock.mockResolvedValue({ session: { ...candidate, status: "uploading" }, health: null, unified: null });
+    // uploadSingleFileResumable only reuses `session` from its own React
+    // state closure, which is stale right after setSession() inside the
+    // same resume call; it falls through to creating a session, same as
+    // the server's own create_resumable_upload_session reusing the
+    // existing row for this filename+size (see that function's docstring).
+    createResumableEvidenceUploadSessionMock.mockResolvedValue({ session: { ...candidate, status: "uploading" }, health: null, unified: null });
+    finalizeResumableEvidenceUploadSessionMock.mockResolvedValue({
+      session: { ...candidate, status: "promoted", promoted_evidence_id: "evidence-folder-1" },
+      preflight: readyReport({ original_filename: "challenge.zip" }),
+      health: null,
+    });
+
+    await userEvent.upload(folderInput, files);
+    await waitFor(() => expect(screen.getByTestId("resume-upload-button")).toBeEnabled());
+    await userEvent.click(screen.getByTestId("resume-upload-button"));
+
+    await waitFor(() => expect(finalizeResumableEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "resume-session-folder"));
+    // Every byte of the repacked ZIP was already on the server: nothing is sent again.
+    expect(appendResumableEvidenceUploadMock).not.toHaveBeenCalled();
   });
 });
 

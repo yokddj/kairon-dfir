@@ -62,6 +62,12 @@ class EvidenceUploadSessionInitRequest(BaseModel):
     expected_size_bytes: int
     declared_platform: str | None = None
     client_sha256: str | None = None
+    # A folder packed into one ZIP in the browser (see frontend/src/lib/
+    # folderZip.ts): the legacy byte-offset backend only, so the session can
+    # be told apart on resume (the wizard offers a folder picker, not a
+    # single-file one, to re-pack and re-verify it). Ignored for a unified
+    # kind (intake_category).
+    is_folder: bool = False
     # Only consulted when intake_category names a kind registered in
     # app.services.evidence_unified_upload.UNIFIED_UPLOAD_KINDS
     # ("memory_dump", "disk_image", "archive") AND that kind's own flag is
@@ -167,6 +173,12 @@ class ResumableUploadSessionRead(BaseModel):
     case_id: str
     backend: str
     category: str | None = None
+    # Whether this file was packed from a folder in the browser (see
+    # frontend/src/lib/folderZip.ts); NOT EvidenceUploadSession.is_folder
+    # (that column names a different, structural intake kind -- see
+    # app.services.evidence_upload_session.promote_upload_session). Lets the
+    # resume step offer a folder picker instead of a single-file one.
+    packaged_from_folder: bool = False
     original_filename: str
     expected_size_bytes: int | None = None
     bytes_received: int = 0
