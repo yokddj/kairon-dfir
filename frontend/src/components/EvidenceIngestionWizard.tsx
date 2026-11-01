@@ -57,6 +57,26 @@ function isSupportedArchiveFilename(filename: string): boolean {
   return SUPPORTED_ARCHIVE_SUFFIX_GROUPS.some((group) => suffixes.length >= group.length && group.every((suffix, index) => suffixes[suffixes.length - group.length + index] === suffix));
 }
 
+const AD1_SEGMENT_SUFFIX = /^\.ad(\d+)$/i;
+
+// A selection is "one AD1 split into segments" (app.ingest.ad1_image.find_files
+// mirrors this on the server) when every file shares the same base name and
+// each has a .ad<N> suffix -- not "several unrelated files", which the batch
+// path below treats as independent evidence. Order doesn't matter here: the
+// server sorts by segment number from each file's own suffix.
+function segmentedAd1Group(files: File[]): File[] | null {
+  if (files.length < 2) return null;
+  const matches = files.map((file) => {
+    const match = AD1_SEGMENT_SUFFIX.exec(`.${file.name.split(".").pop() ?? ""}`);
+    return match ? { file, stem: file.name.slice(0, -match[0].length), segment: Number(match[1]) } : null;
+  });
+  if (matches.some((entry) => entry === null)) return null;
+  const entries = matches as { file: File; stem: string; segment: number }[];
+  const [first, ...rest] = entries;
+  if (!rest.every((entry) => entry.stem === first.stem)) return null;
+  return [...entries].sort((a, b) => a.segment - b.segment).map((entry) => entry.file);
+}
+
 function bytes(value: number | null | undefined): string {
   if (value === null || value === undefined) return "unknown";
   let num = value;
@@ -765,6 +785,14 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       };
       if ((useUnifiedMemoryDump || useUnifiedDiskImage || useUnifiedArchive) && !requiresFolderInput && files.length === 1) {
         return uploadUnifiedEvidence(files[0], onProgress);
+      }
+      const ad1Segments = !requiresFolderInput ? segmentedAd1Group(files) : null;
+      if (ad1Segments) {
+        // One AD1 split across .ad1/.ad2/.ad3... -- the legacy staged,
+        // multi-file flow (same one multi-segment EWF/RAW already uses)
+        // stages every segment and passes them in order to
+        // prepare_upload_container, never as independent evidence items.
+        return api.createEvidenceUploadSession(caseId, { files: ad1Segments, folderUpload: false }, { declaredPlatform: platform, onProgress });
       }
       if (!requiresFolderInput && files.length > 1) {
         const items: BatchPreflightItem[] = [];

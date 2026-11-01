@@ -33,22 +33,37 @@ filesystem, so it is handled as a collection, not as a disk image:
 - **Browse files** on the evidence shows the image's tree with the times, hashes,
   owner and attributes FTK recorded (see
   [disk-image-ingestion.md](disk-image-ingestion.md#collections)).
-- Not supported: multi-segment images (`.ad1` + `.ad2`...) and ADCRYPT-encrypted
-  images. Both are rejected at upload with that reason.
+- **Multi-segment images** (`.ad1` + `.ad2` + `.ad3`...) are supported: selecting
+  every segment stages them together (the same mechanism multi-segment EWF/RAW
+  disk images use), and all of them are passed to the AD1 reader in order. An
+  incomplete segment set is rejected with how many segments the image actually
+  has and how many were uploaded.
+- **ADCRYPT-encrypted images** (the password FTK Imager asks for when creating an
+  encrypted custom-content image) are supported with a passphrase; a private
+  key/certificate is not. Preflight detects an encrypted image from its header
+  (no password needed) and the wizard asks for the password before processing
+  starts, the same way it does for a password-protected archive.
 
-## Password-Protected ZIP Archives
+## Password-Protected Archives and AD1 Images
 
-Preflight reads the ZIP's directory (no password needed) and, when its members are
-encrypted, the wizard asks for the password before processing starts. With it, the
-archive is decrypted once with 7-Zip (ZipCrypto and AES) into a plain ZIP in
-`original/`, and processed like any other upload; the encrypted file is moved to
-`source/` and keeps the evidence hash. The password is checked before the upload is
-registered, so a wrong one can be corrected without uploading again. It is used for
-that one 7-Zip run and is not stored. An encrypted ZIP uploaded without its password
-through the API is rejected (`archive_password_required`).
+Preflight detects a password-protected ZIP, 7z or RAR (reading the central
+directory/listing, no password needed) or an ADCRYPT-encrypted AD1 (from its
+header), and the wizard asks for the password before processing starts. With it:
 
-`metadata_json.repacked_from` records the uploaded file and each step taken
-(`encrypted_zip`, `zip_member`, `ad1`).
+- ZIP and 7z are decrypted with 7-Zip (ZipCrypto and AES for ZIP); RAR is
+  decrypted with `unar` instead (7-Zip's own RAR reader cannot decompress RAR's
+  encrypted data streams). Decrypted once into a plain ZIP in `original/`.
+- An ADCRYPT AD1 is unlocked with the password, then repacked into a ZIP the
+  same way any AD1 is (see above).
+
+Either way, the encrypted original is moved to `source/` and keeps the evidence
+hash. The password is checked before the upload is registered, so a wrong one can
+be corrected without uploading again. It is used for that one decryption and is
+not stored. An encrypted upload without its password through the API is rejected
+(`archive_password_required` / `ad1_password_required`).
+
+`metadata_json.repacked_from` records the uploaded file(s) and each step taken
+(`encrypted_zip`, `encrypted_7z`, `encrypted_rar`, `zip_member`, `ad1`).
 
 ## How the Evidence Type Is Detected
 

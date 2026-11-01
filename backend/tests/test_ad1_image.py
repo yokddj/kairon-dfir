@@ -90,7 +90,7 @@ def test_iter_ad1_files_skips_deleted_and_links_and_keeps_content_twin():
 
 
 def test_convert_ad1_to_zip_repacks_live_files_and_lists_unreadable_ones(tmp_path, monkeypatch):
-    monkeypatch.setattr(ad1_image, "open_ad1", lambda path: _sample_image())
+    monkeypatch.setattr(ad1_image, "open_ad1", lambda path, **kwargs: _sample_image())
     target = tmp_path / "alice.zip"
     summary = convert_ad1_to_zip(tmp_path / "alice.ad1", target)
     with zipfile.ZipFile(target) as archive:
@@ -105,13 +105,66 @@ def test_convert_ad1_to_zip_repacks_live_files_and_lists_unreadable_ones(tmp_pat
     assert not (tmp_path / "alice.zip.partial").exists()
 
 
+def test_convert_ad1_to_zip_passes_extra_segments_through_to_open_ad1(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_open_ad1(path, *, extra_segments=None, password=None):
+        seen["path"] = path
+        seen["extra_segments"] = extra_segments
+        seen["password"] = password
+        return _sample_image()
+
+    monkeypatch.setattr(ad1_image, "open_ad1", fake_open_ad1)
+    extras = [tmp_path / "alice.ad2", tmp_path / "alice.ad3"]
+    convert_ad1_to_zip(tmp_path / "alice.ad1", tmp_path / "alice.zip", extra_segments=extras, password="secret")
+    assert seen["extra_segments"] == extras
+    assert seen["password"] == "secret"
+
+
+def test_prepare_upload_container_moves_every_ad1_segment_to_source(tmp_path, monkeypatch):
+    from app.ingest.ad1_image import convert_ad1_to_zip as real_convert
+    from app.services.evidence_container_prep import prepare_upload_container
+
+    original = tmp_path / "case" / "evidence" / "original"
+    original.mkdir(parents=True)
+    primary = original / "alice.ad1"
+    primary.write_bytes(b"ADSEGMENTEDFILE primary bytes")
+    extras = []
+    for suffix in ("ad2", "ad3"):
+        segment = original / f"alice.{suffix}"
+        segment.write_bytes(f"{suffix} bytes".encode())
+        extras.append(segment)
+
+    seen = {}
+
+    def fake_convert(source, target, progress_cb=None, *, metadata_path=None, password=None, extra_segments=None):
+        seen["extra_segments"] = extra_segments
+        with zipfile.ZipFile(target, "w") as handle:
+            handle.writestr("C/Users/alice/NTUSER.DAT", b"regf")
+        return {"format": "ad1", "image_name": "test", "files": 1, "bytes": 4, "failed": [], "failed_count": 0, "container_path": str(target)}
+
+    monkeypatch.setattr("app.services.evidence_container_prep.convert_ad1_to_zip", fake_convert)
+    working, repacked = prepare_upload_container(primary, "00", extra_segment_paths=extras)
+
+    source_dir = original.parent / "source"
+    assert (source_dir / "alice.ad1").read_bytes() == b"ADSEGMENTEDFILE primary bytes"
+    assert (source_dir / "alice.ad2").read_bytes() == b"ad2 bytes"
+    assert (source_dir / "alice.ad3").read_bytes() == b"ad3 bytes"
+    # Original directory holds only the repacked working ZIP: segments do
+    # not linger beside it once moved.
+    assert sorted(path.name for path in original.iterdir()) == ["alice.zip"]
+    assert seen["extra_segments"] == [source_dir / "alice.ad2", source_dir / "alice.ad3"]
+    assert repacked["extra_segment_paths"] == [str(source_dir / "alice.ad2"), str(source_dir / "alice.ad3")]
+    assert working == original / "alice.zip"
+
+
 def test_ad1_is_an_archive_container(tmp_path, monkeypatch):
     image = tmp_path / "alice.ad1"
     image.write_bytes(b"ADSEGMENTEDFILE\0")
     assert is_supported_archive_container(image)
     container = open_evidence_container(image)
     assert isinstance(container, AD1EvidenceContainer)
-    monkeypatch.setattr("app.ingest.velociraptor.zip_inventory.open_ad1", lambda path: _sample_image())
+    monkeypatch.setattr("app.ingest.velociraptor.zip_inventory.open_ad1", lambda path, **kwargs: _sample_image())
     entries = {entry.path: entry for entry in container.list_entries()}
     assert entries["C/Users/alice/AppData/Local/ok.db"].container_type == "ad1"
     with container.open_entry("C/Users/alice/AppData/Local/ok.db") as handle:
@@ -127,6 +180,187 @@ def test_open_ad1_rejects_a_file_without_the_signature(tmp_path):
     with pytest.raises(AD1ImageError) as exc_info:
         open_ad1(fake)
     assert exc_info.value.code == "ad1_invalid"
+
+
+def _segment_header(*, segment_number: int = 1, segment_count: int = 1) -> bytes:
+    """A real ADSEGMENTEDFILE segment header (dissect.evidence's own
+    cstruct), the only part of a segment open_ad1 reads itself before
+    handing the path(s) to AD1 -- not a hand-reconstructed format guess."""
+    from dissect.evidence.ad1.c_ad1 import c_ad1
+
+    return c_ad1.SegmentedFileHeader(
+        magic=b"ADSEGMENTEDFILE",
+        unk1=1,
+        unk2=2,
+        segment_number=segment_number,
+        segment_count=segment_count,
+        segment_size=512,
+        logical_image_offset=0,
+        padding=b"\x00" * 468,
+    ).dumps()
+
+
+def test_open_ad1_without_enough_segments_names_how_many_are_missing(tmp_path):
+    (tmp_path / "alice.ad1").write_bytes(_segment_header(segment_number=1, segment_count=3))
+    with pytest.raises(AD1ImageError) as exc_info:
+        open_ad1(tmp_path / "alice.ad1")
+    assert exc_info.value.code == "ad1_multi_segment"
+    assert "first of 3 AD1 segments" in exc_info.value.message
+    assert "only 1 were uploaded" in exc_info.value.message
+
+
+def test_open_ad1_with_every_segment_reaches_ad1(tmp_path, monkeypatch):
+    (tmp_path / "alice.ad1").write_bytes(_segment_header(segment_number=1, segment_count=2))
+    (tmp_path / "alice.ad2").write_bytes(_segment_header(segment_number=2, segment_count=2))
+    seen = {}
+
+    def fake_ad1(segments):
+        seen["segments"] = segments
+        return SimpleNamespace(is_adcrypt=lambda: False)
+
+    monkeypatch.setattr("dissect.evidence.ad1.AD1", fake_ad1)
+    image = open_ad1(tmp_path / "alice.ad1", extra_segments=[tmp_path / "alice.ad2"])
+    assert seen["segments"] == [tmp_path / "alice.ad1", tmp_path / "alice.ad2"]
+    assert image.is_adcrypt() is False
+
+
+def _adcrypt_header() -> bytes:
+    return b"ADCRYPT\x00" + b"\x00" * (512 - 8)
+
+
+class _FakeAdcrypt:
+    def __init__(self, *, correct_password: str):
+        self._correct_password = correct_password
+        self._unlocked = False
+
+    def unlock(self, *, passphrase=None, private_key=None):
+        if passphrase != self._correct_password:
+            raise ValueError("Unable to unlock: HMAC verification of passphrase failed")
+        self._unlocked = True
+
+
+class _FakeSegment:
+    def __init__(self, segment_count: int):
+        self.header = SimpleNamespace(segment_count=segment_count)
+
+
+class _FakeAdcryptAd1:
+    """Stands in for dissect.evidence.ad1.AD1 wrapping an ADCRYPT container:
+    enough of its surface for open_ad1's ADCRYPT branch (is_adcrypt,
+    .adcrypt.unlock, .segment(0).header.segment_count, ._open_ad1)."""
+
+    def __init__(self, segments, *, total_segment_count: int, correct_password: str):
+        self.fh = segments
+        self.adcrypt = _FakeAdcrypt(correct_password=correct_password)
+        self._total_segment_count = total_segment_count
+        self._segments = {}
+        self._segment_lru = []
+        self.opened = False
+
+    def is_adcrypt(self):
+        return True
+
+    def segment(self, _idx):
+        return _FakeSegment(self._total_segment_count)
+
+    def _open_ad1(self):
+        self.opened = True
+
+
+def test_open_ad1_adcrypt_requires_a_password(tmp_path, monkeypatch):
+    (tmp_path / "enc.ad1").write_bytes(_adcrypt_header())
+    monkeypatch.setattr(
+        "dissect.evidence.ad1.AD1",
+        lambda segments: _FakeAdcryptAd1(segments, total_segment_count=1, correct_password="secret"),
+    )
+    with pytest.raises(AD1ImageError) as exc_info:
+        open_ad1(tmp_path / "enc.ad1")
+    assert exc_info.value.code == "ad1_password_required"
+    assert "ADCRYPT" in exc_info.value.message
+
+
+def test_open_ad1_adcrypt_rejects_a_wrong_password(tmp_path, monkeypatch):
+    (tmp_path / "enc.ad1").write_bytes(_adcrypt_header())
+    monkeypatch.setattr(
+        "dissect.evidence.ad1.AD1",
+        lambda segments: _FakeAdcryptAd1(segments, total_segment_count=1, correct_password="secret"),
+    )
+    with pytest.raises(AD1ImageError) as exc_info:
+        open_ad1(tmp_path / "enc.ad1", password="wrong")
+    assert exc_info.value.code == "ad1_password_invalid"
+
+
+def test_open_ad1_adcrypt_with_the_right_password_but_missing_segments(tmp_path, monkeypatch):
+    # A correct password unlocks the container (reads only the first
+    # segment's header), but the image itself is split across more segments
+    # than were uploaded -- this must read as ad1_multi_segment, not crash
+    # trying to read past the end of the one segment present.
+    (tmp_path / "enc.ad1").write_bytes(_adcrypt_header())
+    monkeypatch.setattr(
+        "dissect.evidence.ad1.AD1",
+        lambda segments: _FakeAdcryptAd1(segments, total_segment_count=13, correct_password="secret"),
+    )
+    with pytest.raises(AD1ImageError) as exc_info:
+        open_ad1(tmp_path / "enc.ad1", password="secret")
+    assert exc_info.value.code == "ad1_multi_segment"
+    assert "first of 13 AD1 segments" in exc_info.value.message
+
+
+def test_open_ad1_adcrypt_with_every_segment_unlocks_and_opens(tmp_path, monkeypatch):
+    (tmp_path / "enc.ad1").write_bytes(_adcrypt_header())
+    fake_holder = {}
+
+    def make_fake(segments):
+        fake = _FakeAdcryptAd1(segments, total_segment_count=2, correct_password="secret")
+        fake_holder["instance"] = fake
+        return fake
+
+    monkeypatch.setattr("dissect.evidence.ad1.AD1", make_fake)
+    image = open_ad1(tmp_path / "enc.ad1", extra_segments=[tmp_path / "enc.ad2"], password="secret")
+    assert image.opened is True
+    assert fake_holder["instance"].adcrypt._unlocked is True
+
+
+def test_is_encrypted_ad1_detects_the_adcrypt_magic(tmp_path):
+    from app.ingest.ad1_image import is_encrypted_ad1
+
+    plain = tmp_path / "plain.ad1"
+    plain.write_bytes(_segment_header())
+    assert is_encrypted_ad1(plain) is False
+
+    encrypted = tmp_path / "enc.ad1"
+    encrypted.write_bytes(_adcrypt_header())
+    assert is_encrypted_ad1(encrypted) is True
+
+    # Not an AD1 at all (wrong extension): never flagged, regardless of content.
+    wrong_suffix = tmp_path / "enc.bin"
+    wrong_suffix.write_bytes(_adcrypt_header())
+    assert is_encrypted_ad1(wrong_suffix) is False
+
+
+def test_has_ad1_signature_recognizes_both_plain_and_adcrypt_headers(tmp_path):
+    from app.ingest.ad1_image import has_ad1_signature
+
+    plain = tmp_path / "plain.ad1"
+    plain.write_bytes(_segment_header())
+    assert has_ad1_signature(plain) is True
+
+    encrypted = tmp_path / "enc.ad1"
+    encrypted.write_bytes(_adcrypt_header())
+    assert has_ad1_signature(encrypted) is True
+
+
+def test_find_ad1_segments_orders_by_suffix_number(tmp_path):
+    from app.ingest.ad1_image import find_ad1_segments
+
+    (tmp_path / "image.ad1").write_bytes(b"1")
+    (tmp_path / "image.ad10").write_bytes(b"2")
+    (tmp_path / "image.ad2").write_bytes(b"3")
+    (tmp_path / "image.ad1.txt").write_bytes(b"not a segment")
+    (tmp_path / "other.ad1").write_bytes(b"not the same image")
+
+    segments = find_ad1_segments(tmp_path / "image.ad1")
+    assert [path.name for path in segments] == ["image.ad1", "image.ad2", "image.ad10"]
 
 
 def test_integrity_check_hashes_the_ad1_not_the_repack(tmp_path):
@@ -209,13 +443,13 @@ def _upload_ad1(monkeypatch, tmp_path, opener):
     monkeypatch.setattr(routes_evidence, "enqueue_ingest", lambda *_args, **_kwargs: None)
     db = _FakeSession(Case(id="case-1", name="Case 1"))
     upload = UploadFile(filename="alice.ad1", file=SimpleNamespace())
-    return stored, routes_evidence.upload_evidence("case-1", upload, False, None, "raw", "single_file", db)
+    return stored, routes_evidence._upload_evidence_impl("case-1", upload, False, None, "raw", "single_file", db)
 
 
 def test_ad1_upload_registers_the_zip_repack_as_a_raw_collection(monkeypatch, tmp_path):
     from app.models.evidence import EvidenceType
 
-    stored, evidence = _upload_ad1(monkeypatch, tmp_path, lambda path: _sample_image())
+    stored, evidence = _upload_ad1(monkeypatch, tmp_path, lambda path, **kwargs: _sample_image())
     source = stored.parent.parent / "source" / "alice.ad1"
     assert evidence.original_path == str(source)
     assert source.read_bytes().startswith(b"ADSEGMENTEDFILE")
@@ -230,7 +464,7 @@ def test_ad1_upload_registers_the_zip_repack_as_a_raw_collection(monkeypatch, tm
 def test_unreadable_ad1_upload_is_rejected_with_its_reason(monkeypatch, tmp_path):
     from fastapi import HTTPException
 
-    def encrypted(_path):
+    def encrypted(_path, **_kwargs):
         raise AD1ImageError("ad1_encrypted", "alice.ad1 is an encrypted (ADCRYPT) AD1 image.")
 
     with pytest.raises(HTTPException) as exc_info:
@@ -238,3 +472,23 @@ def test_unreadable_ad1_upload_is_rejected_with_its_reason(monkeypatch, tmp_path
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["code"] == "ad1_encrypted"
     assert not (tmp_path / "data" / "case-1").exists() or not any((tmp_path / "data" / "case-1").rglob("*.ad1"))
+
+
+def test_preflight_flags_a_password_protected_adcrypt_ad1(tmp_path):
+    from app.services.evidence_preflight import run_preflight
+
+    archive = tmp_path / "encrypted.ad1"
+    archive.write_bytes(_adcrypt_header())
+    (tmp_path / "scratch").mkdir()
+    report = run_preflight(archive, token="t", original_filename="encrypted.ad1", declared_platform=None, tmp_dir=tmp_path / "scratch")
+    assert report.classification.password_protected is True
+
+
+def test_preflight_does_not_flag_a_plain_ad1_as_password_protected(tmp_path):
+    from app.services.evidence_preflight import run_preflight
+
+    archive = tmp_path / "plain.ad1"
+    archive.write_bytes(_segment_header())
+    (tmp_path / "scratch").mkdir()
+    report = run_preflight(archive, token="t", original_filename="plain.ad1", declared_platform=None, tmp_dir=tmp_path / "scratch")
+    assert report.classification.password_protected is False

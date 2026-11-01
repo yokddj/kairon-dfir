@@ -65,15 +65,29 @@ def needs_preparation(path: Path) -> bool:
     return is_encrypted_archive(path) or single_ad1_member(path) is not None
 
 
-def prepare_upload_container(stored_path: Path, sha256: str | None, *, archive_password: str | None = None) -> tuple[Path, dict | None]:
+def prepare_upload_container(
+    stored_path: Path,
+    sha256: str | None,
+    *,
+    archive_password: str | None = None,
+    extra_segment_paths: list[Path] | None = None,
+) -> tuple[Path, dict | None]:
     """Returns the working container and the ``repacked_from`` record, or
-    ``(stored_path, None)`` when the upload is processed as it is."""
+    ``(stored_path, None)`` when the upload is processed as it is.
+
+    ``extra_segment_paths``: an AD1's ``.ad2``, ``.ad3``... segments (the
+    caller already staged them as siblings of ``stored_path`` -- see
+    evidence_upload_session._stage_disk_image_segments, reused for AD1 the
+    same way as multi-segment EWF/RAW). Moved alongside the first segment so
+    they stay next to it through the ``source/`` move, then passed to
+    ``AD1`` in order; ignored for any other container."""
     stored_path = Path(stored_path)
     if not needs_preparation(stored_path):
         return stored_path, None
     original_dir = stored_path.parent
     source_dir = original_dir.parent / SOURCE_DIR_NAME
     source = move_aside(stored_path, source_dir)
+    sources_extra = [move_aside(path, source_dir) for path in (extra_segment_paths or [])]
     working = source
     steps: list[dict] = []
     try:
@@ -90,7 +104,13 @@ def prepare_upload_container(stored_path: Path, sha256: str | None, *, archive_p
         if working.suffix.lower() == AD1_SUFFIX and has_ad1_signature(working):
             image = working
             working = original_dir / f"{image.stem}.zip"
-            summary = convert_ad1_to_zip(image, working, metadata_path=ad1_metadata_path(original_dir.parent))
+            summary = convert_ad1_to_zip(
+                image,
+                working,
+                metadata_path=ad1_metadata_path(original_dir.parent),
+                password=archive_password,
+                extra_segments=sources_extra or None,
+            )
             if image != source:
                 image.unlink(missing_ok=True)
             if not summary["files"]:
@@ -100,7 +120,7 @@ def prepare_upload_container(stored_path: Path, sha256: str | None, *, archive_p
         raise ContainerPrepError(exc.code, exc.message) from exc
     except AD1ImageError as exc:
         raise ContainerPrepError(exc.code, exc.message) from exc
-    return working, {"path": str(source), "sha256": sha256, "steps": steps}
+    return working, {"path": str(source), "extra_segment_paths": [str(path) for path in sources_extra], "sha256": sha256, "steps": steps}
 
 
 def _unwrap_member(container: Path, member: str, original_dir: Path, *, discard_container: bool) -> Path:

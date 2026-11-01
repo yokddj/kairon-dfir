@@ -842,6 +842,7 @@ def test_promote_memory_session_uses_memory_upload_lifecycle_not_generic_ingest(
     monkeypatch.setattr("app.services.memory.upload_sessions._capacity_snapshot", lambda *args, **kwargs: {"can_accept_selected_size": True})
     monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda _evidence_id: (_ for _ in ()).throw(AssertionError("memory wizard must not enqueue generic ingest")))
     monkeypatch.setattr("app.api.routes_evidence.upload_evidence", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("memory wizard must not call generic upload_evidence")))
+    monkeypatch.setattr("app.api.routes_evidence._upload_evidence_impl", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("memory wizard must not call generic upload_evidence")))
     monkeypatch.setattr("app.api.routes_evidence.upload_disk_image", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("memory wizard must not call disk image upload")))
     db = _db()
     _case(db)
@@ -1265,7 +1266,7 @@ def test_forced_route_metadata_is_written_to_promoted_evidence(tmp_path, monkeyp
         )
 
     import app.api.routes_evidence as routes_evidence
-    monkeypatch.setattr(routes_evidence, "upload_evidence", _fake_upload_evidence)
+    monkeypatch.setattr(routes_evidence, "_upload_evidence_impl", _fake_upload_evidence)
 
     evidence = promote_upload_session(
         db, session,
