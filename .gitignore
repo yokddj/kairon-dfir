@@ -83,6 +83,7 @@ graphify-out/
 # Forensic evidence and case archives should never be added accidentally.
 *.7z
 *.zip
+*.rar
 *.E01
 *.e01
 *.Ex01
@@ -99,6 +100,7 @@ graphify-out/
 *.msg
 !backend/tests/fixtures/**/*.evtx
 !backend/tests/fixtures/**/*.log
+!backend/tests/fixtures/encrypted_archives/*.rar
 
 # Local synthetic/temp packs
 /tmp_*/

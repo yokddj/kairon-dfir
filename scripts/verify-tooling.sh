@@ -46,6 +46,7 @@ done
 echo "--- System ---"
 check_tool "curl" "" "true"
 check_tool "p7zip" "$(which 7z 2>/dev/null || which p7zip 2>/dev/null || echo '')" "true"
+check_tool "unar" "$(which unar 2>/dev/null || echo '')" "true"
 
 echo ""
 if [ "$MISSING" -gt 0 ]; then

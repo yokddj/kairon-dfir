@@ -307,7 +307,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [evidenceIntent, setEvidenceIntent] = useState<EvidenceIntent>("raw");
   const [ingestMode, setIngestMode] = useState<IngestMode>("full_forensic");
   const [evtxProfile, setEvtxProfile] = useState<EvtxProfile>("full");
-  // Per preflight token; sent once with promote to decrypt a password-protected ZIP, never stored.
+  // Per preflight token; sent once with promote to decrypt a password-protected archive (ZIP, 7z or RAR), never stored.
   const [archivePasswords, setArchivePasswords] = useState<Record<string, string>>({});
   const [fullCsvTables, setFullCsvTables] = useState(false);
   const [hashProgress, setHashProgress] = useState<number | null>(null);

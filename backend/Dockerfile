@@ -17,7 +17,7 @@ LABEL org.opencontainers.image.title="Kairon DFIR backend" \
       org.opencontainers.image.version="${KAIRON_VERSION}"
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential libpq-dev libyara-dev pkg-config p7zip-full curl ca-certificates libicu-dev ewf-tools sleuthkit dosfstools mtools gdisk parted qemu-utils \
+    && apt-get install -y --no-install-recommends build-essential libpq-dev libyara-dev pkg-config p7zip-full unar curl ca-certificates libicu-dev ewf-tools sleuthkit dosfstools mtools gdisk parted qemu-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Known limitation: dotnet-install.sh checksum is not verified (script changes per-channel)

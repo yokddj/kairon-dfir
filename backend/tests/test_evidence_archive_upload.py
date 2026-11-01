@@ -172,7 +172,7 @@ def test_archive_session_uses_original_filename_as_canonical_name(tmp_path, monk
     assert memory_upload.canonical_relative_path.endswith("/original/Case-Collection.tar.gz")
 
 
-@pytest.mark.parametrize("filename", ["evidence.zip", "evidence.ad1", "evidence.7z", "evidence.tar", "evidence.tar.gz", "evidence.gz", "evidence.xz"])
+@pytest.mark.parametrize("filename", ["evidence.zip", "evidence.ad1", "evidence.7z", "evidence.rar", "evidence.tar", "evidence.tar.gz", "evidence.gz", "evidence.xz"])
 def test_archive_session_accepts_every_supported_extension(tmp_path, monkeypatch, filename):
     _configure(monkeypatch, tmp_path)
     db = _db()
@@ -186,7 +186,7 @@ def test_archive_session_rejects_unsupported_extension(tmp_path, monkeypatch):
     db = _db()
     _case(db)
     with pytest.raises(MemoryUploadSessionError) as exc_info:
-        _create_archive_session(db, filename="evidence.rar", expected_size_bytes=64)
+        _create_archive_session(db, filename="evidence.cab", expected_size_bytes=64)
     assert exc_info.value.code == "MEMORY_UPLOAD_INVALID_EXTENSION"
 
 
