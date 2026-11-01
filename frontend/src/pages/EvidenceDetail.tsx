@@ -10,6 +10,7 @@ import { useNotifications } from "../context/NotificationsContext";
 import { useHostAssignment } from "../hooks/useHostAssignment";
 import { useHostContext } from "../hooks/useHostContext";
 import { diskFilesRoute, linuxCommandHistoryRoute, memoryEvidenceRoute } from "../lib/canonicalRoutes";
+import { isBrowsableCollection } from "../lib/browsableEvidence";
 import EvidenceSourceTablesPanel from "../components/EvidenceSourceTablesPanel";
 import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 import {
@@ -615,8 +616,7 @@ export default function EvidenceDetail() {
   const linuxUnsupportedArtifacts = linuxInventory?.unsupported ?? [];
   const linuxWarnings = linuxInventory?.warnings ?? [];
   const diskImage = data?.disk_image ?? null;
-  // Archives, folders and AD1 images: one volume made from the archive listing.
-  const browsableCollection = ["raw_collection", "velociraptor_zip", "kape_archive", "parsed_folder", "linux_triage", "macos_triage"].includes(String(data?.evidence_type ?? ""));
+  const browsableCollection = isBrowsableCollection(data);
   const artifactProgressDone = typeof metadata.artifacts_done === "number" ? (metadata.artifacts_done as number) : typeof metadata.artifacts_processed === "number" ? (metadata.artifacts_processed as number) : 0;
   const artifactProgressTotal = typeof metadata.artifacts_total === "number" ? (metadata.artifacts_total as number) : 0;
   const progressPct =

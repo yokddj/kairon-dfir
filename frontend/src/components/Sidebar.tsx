@@ -8,6 +8,7 @@ import {
   Fingerprint,
   Flag,
   FolderSearch2,
+  FolderTree,
   GitCommitHorizontal,
   Home,
   KeyRound,
@@ -27,6 +28,7 @@ import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useAuth } from "../context/AuthContext";
 import { useMemoryEnabled } from "../hooks/useMemoryEnabled";
+import { isBrowsableEvidence } from "../lib/browsableEvidence";
 import { useQuery } from "@tanstack/react-query";
 
 type NavItem = {
@@ -38,12 +40,22 @@ type NavItem = {
   // Shown only when the case has evidence of this kind (a workbench id of the capability
   // registry: "windows", "linux", "memory"). Every view is one click away, with no submenus.
   workbench?: string;
+  // Shown only when the case has a disk image or collection whose files can be browsed.
+  browsable?: boolean;
 };
 
 const INVESTIGATION_ITEMS: NavItem[] = [
   { to: "/cases/:caseId/overview", label: "Overview", icon: Home, requiresCase: true },
   { to: "/cases/:caseId/evidence", label: "Evidence", icon: Database, requiresCase: true },
   { to: "/cases/:caseId/host-information", label: "Host Information", icon: Fingerprint, requiresCase: true },
+  {
+    to: "/cases/:caseId/files",
+    label: "Files",
+    icon: FolderTree,
+    requiresCase: true,
+    browsable: true,
+    description: "Browse, search and export the file system of the case's disk images and collections.",
+  },
   { to: "/cases/:caseId/search", label: "Search", icon: Search, requiresCase: true },
   { to: "/cases/:caseId/artifacts", label: "Artifact Views", icon: FolderSearch2, requiresCase: true },
   {
@@ -182,6 +194,14 @@ export default function Sidebar() {
     staleTime: 15_000,
     refetchOnWindowFocus: false,
   });
+  const evidencesQuery = useQuery({
+    queryKey: ["case-evidences", activeCaseId, "browsable"],
+    queryFn: () => api.listEvidences(activeCaseId),
+    enabled: Boolean(activeCaseId),
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
+  });
+  const hasBrowsable = evidencesQuery.isError || (evidencesQuery.data ?? []).some((item) => isBrowsableEvidence(item));
   const memoryEnabled = useMemoryEnabled();
   // Views that exist only for some evidence (Memory, Execution Stories, Linux Authentication) are
   // listed once the registry says the case has that evidence; if the registry cannot be read,
@@ -190,7 +210,8 @@ export default function Sidebar() {
   const investigationItems = INVESTIGATION_ITEMS.filter(
     (item) =>
       (item.workbench !== "memory" || memoryEnabled) &&
-      (!item.workbench || capabilitiesQuery.isError || presentWorkbenches.has(item.workbench)),
+      (!item.workbench || capabilitiesQuery.isError || presentWorkbenches.has(item.workbench)) &&
+      (!item.browsable || hasBrowsable),
   );
 
   return (

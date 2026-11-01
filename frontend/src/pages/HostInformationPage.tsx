@@ -6,6 +6,7 @@ import { Fingerprint, Network as NetworkIcon, Users as UsersIcon } from "lucide-
 import { api, type HostFactObservation, type HostNetworkAddress, type HostUserEntry, type HostUserFieldResolution, type HostUserObservation, type ResolvedHostFact, type UnverifiedHostProfile } from "../api/client";
 import EmptyState from "../components/EmptyState";
 import { useActiveCase } from "../context/ActiveCaseContext";
+import { isBrowsableEvidence } from "../lib/browsableEvidence";
 
 type FactSlot = { factType: string; label: string };
 type FactGroup = { id: string; title: string; slots: FactSlot[] };
@@ -759,6 +760,14 @@ export default function HostInformationPage() {
   });
 
   const selectedHost = hosts.find((host) => host.id === selectedHostId) ?? null;
+  const hostEvidencesQuery = useQuery({
+    queryKey: ["case-evidences", caseId, "browsable"],
+    queryFn: () => api.listEvidences(caseId),
+    enabled: Boolean(caseId && selectedHostId),
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
+  });
+  const hostHasFiles = (hostEvidencesQuery.data ?? []).some((item) => item.host_id === selectedHostId && isBrowsableEvidence(item));
 
   if (!caseId) {
     return <div className="rounded-[28px] border border-line bg-panel/70 p-8 text-sm text-muted shadow-panel">Select a case first.</div>;
@@ -776,6 +785,16 @@ export default function HostInformationPage() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-3">
+            {hostHasFiles ? (
+              <Link
+                to={`/cases/${caseId}/files?host_id=${encodeURIComponent(selectedHostId)}`}
+                data-testid="host-browse-files"
+                className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent transition hover:bg-accent/20"
+                title="Browse the file system of this host's disk images and collections"
+              >
+                Browse files
+              </Link>
+            ) : null}
             <button
               type="button"
               onClick={() => rebuildMutation.mutate()}
