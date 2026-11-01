@@ -1105,7 +1105,7 @@ def promote_upload_session(
     """
     from app.api.routes_evidence import RegisterPathRequest, _actor_label, _current_user_id, register_evidence_path, upload_disk_image, upload_evidence, upload_evidence_folder
     from app.models.evidence import EvidenceType
-    from app.ingest.encrypted_archive import ArchivePasswordError, check_zip_password
+    from app.ingest.encrypted_archive import ArchivePasswordError, check_archive_password
     from app.services.host_resolution import assign_evidence_host as service_assign_evidence_host, resolve_host
     from app.services.memory.upload_sessions import create_memory_upload_session_from_staged_file, finalize_memory_upload_session
 
@@ -1283,7 +1283,7 @@ def promote_upload_session(
                     # Checked before upload_evidence takes the staged file, so a
                     # missing or wrong password leaves the session to retry.
                     try:
-                        check_zip_password(staged_path, archive_password)
+                        check_archive_password(staged_path, archive_password)
                     except ArchivePasswordError as exc:
                         raise UploadSessionError(exc.code, exc.message) from exc
                     evidence = upload_evidence(

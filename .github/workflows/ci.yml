@@ -47,6 +47,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install system tools
+        # The runner ships 7z (p7zip-full) already; unar is the backend
+        # image's RAR decryptor (7-Zip's RAR reader cannot decompress RAR's
+        # own encrypted data streams) and is not preinstalled.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq unar
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run tests
@@ -110,8 +115,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install system tools
-        # The backend image ships 7z to extract tar/7z archives.
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full
+        # The backend image ships 7z to extract tar/7z archives, and unar to
+        # decrypt RAR archives (7-Zip's RAR reader cannot decompress RAR's
+        # own encrypted data streams).
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full unar
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run integration tests

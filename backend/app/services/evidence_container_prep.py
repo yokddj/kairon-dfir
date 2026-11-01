@@ -5,7 +5,8 @@ registration, into a plain ZIP in ``original/`` that every later step
 (discovery, selected extraction, the raw backends that call 7-Zip on the
 original archive) reads like any uploaded collection:
 
-- a password-protected ZIP, decrypted with the password the analyst gave;
+- a password-protected ZIP, 7z or RAR, decrypted with the password the
+  analyst gave;
 - a ZIP whose only file is an AD1 image (how CTF and training images are
   usually shipped), unwrapped;
 - an AD1 logical image, repacked (app.ingest.ad1_image).
@@ -24,7 +25,7 @@ import tempfile
 
 from app.core.config import get_settings
 from app.ingest.ad1_image import AD1_SUFFIX, AD1ImageError, convert_ad1_to_zip, has_ad1_signature
-from app.ingest.encrypted_archive import ArchivePasswordError, decrypt_zip, is_encrypted_zip, move_aside, password_required_message
+from app.ingest.encrypted_archive import ArchivePasswordError, decrypt_archive, is_encrypted_archive, move_aside, password_required_message
 
 SOURCE_DIR_NAME = "source"
 
@@ -61,7 +62,7 @@ def needs_preparation(path: Path) -> bool:
     path = Path(path)
     if path.suffix.lower() == AD1_SUFFIX:
         return has_ad1_signature(path)
-    return is_encrypted_zip(path) or single_ad1_member(path) is not None
+    return is_encrypted_archive(path) or single_ad1_member(path) is not None
 
 
 def prepare_upload_container(stored_path: Path, sha256: str | None, *, archive_password: str | None = None) -> tuple[Path, dict | None]:
@@ -76,11 +77,11 @@ def prepare_upload_container(stored_path: Path, sha256: str | None, *, archive_p
     working = source
     steps: list[dict] = []
     try:
-        if is_encrypted_zip(working):
+        if is_encrypted_archive(working):
             if not archive_password:
                 raise ContainerPrepError("archive_password_required", password_required_message(source.name))
-            decrypted = original_dir / source.name
-            steps.append(decrypt_zip(working, archive_password, decrypted))
+            decrypted = (original_dir / source.name).with_suffix(".zip")
+            steps.append(decrypt_archive(working, archive_password, decrypted))
             working = decrypted
         member = single_ad1_member(working)
         if member:
