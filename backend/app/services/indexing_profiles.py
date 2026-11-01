@@ -24,7 +24,7 @@ def _discovered_source_paths(metadata: dict[str, Any]) -> list[str]:
         for entry in container if isinstance(container, list) else []:
             value = entry if isinstance(entry, str) else ""
             if isinstance(entry, dict):
-                value = str(entry.get("source_path") or entry.get("relative_path") or entry.get("path") or entry.get("name") or "")
+                value = str(entry.get("source_path") or entry.get("relative_path") or entry.get("original_path") or entry.get("path") or entry.get("name") or "")
             value = value.strip()
             if value:
                 paths.append(value.replace("\\", "/").lower())
@@ -349,3 +349,39 @@ def create_indexing_plan_run(plan: dict[str, Any], queued_jobs: list[dict[str, A
         "excluded": list(plan.get("excluded") or []),
         "queued_jobs": queued_jobs,
     }
+
+
+def _evtx_sources(metadata: dict[str, Any]) -> list[str]:
+    return [path for path in _discovered_source_paths(metadata) if path.endswith(".evtx")]
+
+
+# Each follow-up step and whether the evidence holds what it reads: a step
+# with nothing to read is not started for it.
+_FOLLOW_UP_SOURCES = {
+    "user_activity": user_hive_candidates,
+    "shellbags": user_hive_candidates,
+    "srum": srum_source_candidates,
+    "defender": _evtx_sources,
+}
+
+
+def automatic_follow_up_steps(metadata: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Recommended steps started on their own once the core ingest of an
+    evidence is done: the light ones (user activity from the hives,
+    Shellbags, SRUM, Defender) whose sources the evidence holds and that
+    have not run yet. Heavy steps (Full MFT) stay on demand, and so does
+    everything in usable-search mode, which is chosen to get results fast."""
+    from app.services.usable_ingest import USABLE_INGEST_MODE, normalize_ingest_mode
+
+    metadata = dict(metadata or {})
+    if normalize_ingest_mode(metadata.get("ingest_mode")) == USABLE_INGEST_MODE:
+        return []
+    plan = build_indexing_plan(profile="recommended", metadata=metadata, indexed_docs=1)
+    steps: list[dict[str, Any]] = []
+    for step in plan["runnable_steps"]:
+        has_source = _FOLLOW_UP_SOURCES.get(str(step.get("id")))
+        if step.get("heavy") or has_source is None or not has_source(metadata):
+            continue
+        steps.append(step)
+    return steps
+

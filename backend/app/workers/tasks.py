@@ -576,6 +576,37 @@ def _enqueue_pending_source_tables(evidence_id: str) -> None:
         db.close()
 
 
+def _enqueue_follow_up_indexing(evidence_id: str) -> None:
+    """Start the recommended follow-up steps (hives, Shellbags, SRUM,
+    Defender) once the core ingest is done, as the "Run recommended
+    indexing" button does; see automatic_follow_up_steps."""
+    from app.api.routes_evidence import _enqueue_indexing_plan_steps
+    from app.services.indexing_profiles import automatic_follow_up_steps, build_indexing_plan, create_indexing_plan_run
+
+    db: Session = SessionLocal()
+    try:
+        evidence = db.get(Evidence, evidence_id)
+        if not evidence:
+            return
+        metadata = dict(evidence.metadata_json or {})
+        steps = automatic_follow_up_steps(metadata)
+        if not steps:
+            return
+        queued = _enqueue_indexing_plan_steps(evidence, steps, force=False)
+        run = create_indexing_plan_run(build_indexing_plan(profile="recommended", metadata=metadata, indexed_docs=1), queued)
+        run["trigger"] = "automatic_after_core_ingest"
+        metadata["indexing_plan_run"] = run
+        metadata["indexing_plan_steps"] = run["steps"]
+        evidence.metadata_json = merge_evidence_metadata(evidence.metadata_json or {}, metadata)
+        db.commit()
+        logger.info("Queued follow-up indexing for evidence %s: %s", evidence_id, [item.get("step_id") for item in queued])
+    except Exception as exc:  # noqa: BLE001 - the core ingest is done either way
+        db.rollback()
+        logger.warning("Could not queue follow-up indexing for evidence %s: %s", evidence_id, exc)
+    finally:
+        db.close()
+
+
 def enqueue_registry_persistence_summary_index(evidence_id: str, *, force: bool = False) -> str:
     job = ingest_queue.enqueue(
         "app.workers.tasks.index_registry_persistence_summary_for_evidence",
@@ -1662,6 +1693,17 @@ _ON_DEMAND_INDEXING_METADATA_RESET: dict[str, Any] = {
     "defender_evtx_sources_detected": 0,
     "defender_evtx_by_event_id": {},
     "defender_evtx_by_threat": {},
+    # Deleted with the evidence's events too: left as they were, the steps
+    # would read as done and never run again.
+    "srum": {},
+    "srum_runs": [],
+    "srum_status": "",
+    "srum_records_indexed": 0,
+    "srum_no_data": False,
+    "shellbags": {},
+    "shellbags_runs": [],
+    "shellbags_status": "",
+    "shellbags_records_indexed": 0,
 }
 
 
@@ -6975,6 +7017,7 @@ def ingest_evidence(evidence_id: str) -> None:
         )
         if evidence.ingest_status != IngestStatus.failed:
             _enqueue_pending_source_tables(evidence.id)
+            _enqueue_follow_up_indexing(evidence.id)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Ingest failed for evidence %s", evidence_id)
         db.rollback()

@@ -303,3 +303,41 @@ def test_close_indexing_plan_job_is_a_no_op_without_a_plan_run():
     result = close_indexing_plan_job(metadata, step_id="mft_full", status="completed")
 
     assert "indexing_plan_run" not in result
+
+
+def _collection_metadata(paths: list[str], **extra) -> dict:
+    return {"velociraptor_discovery": {"candidates": [{"id": str(index), "original_path": path, "supported": True} for index, path in enumerate(paths)]}, **extra}
+
+
+def test_follow_up_steps_start_only_for_sources_the_evidence_holds() -> None:
+    from app.services.indexing_profiles import automatic_follow_up_steps
+
+    windows = _collection_metadata([
+        "C/Users/alice/NTUSER.DAT",
+        "C/Windows/System32/sru/SRUDB.dat",
+        "C/Windows/System32/winevt/Logs/Microsoft-Windows-Windows Defender%4Operational.evtx",
+    ], ingest_mode="full_forensic")
+    assert sorted(step["id"] for step in automatic_follow_up_steps(windows)) == ["defender", "shellbags", "srum", "user_activity"]
+
+    # Nothing to read (a Linux collection): nothing started.
+    assert automatic_follow_up_steps(_collection_metadata(["etc/passwd", "var/log/auth.log"], ingest_mode="full_forensic")) == []
+
+    # Usable search is chosen to get results fast: follow-ups stay on demand.
+    assert automatic_follow_up_steps({**windows, "ingest_mode": "usable_search"}) == []
+
+    # A step that already ran is not started again.
+    done = {**windows, "registry_user_activity_records_indexed": 12, "srum_records_indexed": 3}
+    assert sorted(step["id"] for step in automatic_follow_up_steps(done)) == ["defender", "shellbags"]
+
+
+def test_reprocess_resets_every_follow_up_step() -> None:
+    """Re-index deletes the evidence's events, follow-up steps' included;
+    a step left marked as done would never run again."""
+    from app.services.indexing_profiles import automatic_follow_up_steps
+    from app.workers.tasks import _ON_DEMAND_INDEXING_METADATA_RESET
+
+    metadata = _collection_metadata(["C/Users/alice/NTUSER.DAT", "C/Windows/System32/sru/SRUDB.dat", "C/Windows/System32/winevt/Logs/Security.evtx"], ingest_mode="full_forensic")
+    metadata.update({"registry_user_activity_records_indexed": 5, "srum_records_indexed": 5, "shellbags_records_indexed": 5, "defender_evtx_docs_indexed": 5})
+    assert automatic_follow_up_steps(metadata) == []
+    metadata.update(_ON_DEMAND_INDEXING_METADATA_RESET)
+    assert sorted(step["id"] for step in automatic_follow_up_steps(metadata)) == ["defender", "shellbags", "srum", "user_activity"]

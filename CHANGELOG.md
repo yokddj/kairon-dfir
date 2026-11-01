@@ -17,6 +17,7 @@
 
 ### Changed
 
+- **Recommended follow-up indexing runs on its own** after an evidence's core ingest: user activity from the registry hives (RECmd), Shellbags, SRUM and Defender start in sequence when the evidence holds their sources, as **Run recommended indexing** did by hand. Heavy steps (Full MFT) stay on demand, and so does everything in usable-search mode.
 - Resumable uploads read each 64 MB chunk into memory before sending it, instead of letting the browser stream it from disk during the request. A file the browser can no longer read (moved, renamed, permission lost) now says so instead of failing as a network error.
 - Shellbags: the drive or UNC path is derived from SBECmd's shell-namespace path (`Desktop\This PC\C:\Users` -> `C:\Users`, `...\Computers and Devices\srv01\srv01\share` -> `\\srv01\share`), so network shares, user folders and suspicious folders are recognised; folders browsed on the RDP client's drive (`\\tsclient\...`) are tagged `rdp_client_drive`.
 - SRUM leads are raised only on network-usage rows and match tool names on the application name; OneDrive, Dropbox and Google Drive are context (`cloud_sync`), an AppData executable alone is a low-risk lead, the Defender platform folder is not user-writable and Delivery Optimization (`DoSvc`) uploading updates is not a volume lead.
@@ -24,6 +25,7 @@
 
 ### Fixed
 
+- **Re-index evidence** left SRUM and Shellbags marked as indexed after deleting their events, so they were never indexed again.
 - **Windows notifications** show what they said: the event message carries the sender, title and full text; a browser's web push notification is attributed to its site (Chromium launch arguments), packaged apps get a readable name, and the notification text is kept unredacted (a shared password or file name is the evidence). Notifications are attributed to the profile's user in wrapped collections. Search's event detail lists only the fields an event carries, including the notification's sender, text, type and launch target, instead of a fixed list of empty file and MOTW fields.
 - **Re-index evidence** of a raw collection now also parses artifacts discovery finds that did not exist at the previous run (a parser added since, such as Windows notifications). Before, it repeated the previous selection exactly and new artifacts stayed unparsed with no way to add them from the evidence page. Artifacts the analyst left out are still left out.
 - Raw collections: selected Windows notification databases and network candidates (WLAN profile XML, `hosts`) were extracted and then never parsed, because no artifact mapping existed for their category. Both are mapped now, and a supported candidate without a mapping is logged instead of dropped silently.
