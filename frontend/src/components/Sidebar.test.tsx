@@ -8,6 +8,7 @@ import type { CaseCapabilitiesResponse } from "../api/client";
 
 const getCaseCapabilitiesMock = vi.fn();
 const getSystemCapabilitiesMock = vi.fn();
+const listEvidencesMock = vi.fn();
 const logoutMock = vi.fn();
 
 const activeCaseState: any = {
@@ -31,6 +32,7 @@ vi.mock("../api/client", () => ({
   api: {
     getCaseCapabilities: (...args: unknown[]) => getCaseCapabilitiesMock(...args),
     getSystemCapabilities: () => getSystemCapabilitiesMock(),
+    listEvidences: (...args: unknown[]) => listEvidencesMock(...args),
   },
 }));
 
@@ -82,6 +84,22 @@ describe("registry-driven sidebar", () => {
     getSystemCapabilitiesMock.mockReset();
     getSystemCapabilitiesMock.mockResolvedValue({ memory: { enabled: true } });
     logoutMock.mockReset();
+    listEvidencesMock.mockReset();
+    listEvidencesMock.mockResolvedValue([]);
+  });
+
+  it("lists Files only when the case has a disk image or a collection", async () => {
+    getCaseCapabilitiesMock.mockResolvedValue(registry());
+    listEvidencesMock.mockResolvedValue([{ id: "ev-1", evidence_type: "evtx", original_filename: "Security.evtx", disk_image: null }]);
+    const { unmount } = renderSidebar();
+    await screen.findByRole("link", { name: "Overview" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByRole("link", { name: "Files" })).not.toBeInTheDocument();
+    unmount();
+
+    listEvidencesMock.mockResolvedValue([{ id: "ev-2", evidence_type: "velociraptor_zip", original_filename: "PC.ad1", disk_image: null }]);
+    renderSidebar();
+    expect(await screen.findByRole("link", { name: "Files" })).toHaveAttribute("href", "/cases/case-1/files");
   });
 
   it("renders the fixed Investigation group untouched, including Artifact Views", async () => {

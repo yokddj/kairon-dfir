@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Files** in the sidebar, listed when the case has a disk image or a collection: the case's browsable evidence by host, or the file explorer directly when there is only one. Host Information links to the files of the selected host.
 - **Windows notifications** (`wpndatabase.db`): toast, tile and badge notifications with the sending app, title, body text, launch target and arrival time, and each app registered to send notifications. Read with the database's WAL on a scratch copy. Discovery lists it in raw collections with its `-wal`/`-shm`; before, it was only an inventory entry. See [docs/artifacts/windows_notifications.md](docs/artifacts/windows_notifications.md).
 - **Browse files** for collections (ZIP/7z/TAR archives, uploaded folders, AD1 logical images): the disk file explorer shows the collection as one volume, with find and password-protected export. For AD1 images, the NTFS times, MD5/SHA1, owner and attributes FTK recorded at acquisition are shown and exports are checked against FTK's MD5.
 - **AD1 logical images** (FTK Imager folder and custom-content images) can be uploaded, alone or as the only file of a ZIP. Preflight lists their files in place and registration repacks them into a ZIP that goes through the normal collection pipeline (discovery, hives, SRUM, Shellbags, LNK, Jump Lists, browsers...); the `.ad1` stays the hashed original. Multi-segment and ADCRYPT-encrypted images are rejected with that reason.
