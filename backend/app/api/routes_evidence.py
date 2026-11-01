@@ -2084,6 +2084,53 @@ def upload_evidence(
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_optional_user),
 ) -> Evidence:
+    """HTTP entry point: every parameter above is exactly what a real
+    multipart upload can send. ``extra_segment_paths`` (an AD1's .ad2/.ad3...
+    segments) is NOT a parameter here on purpose -- it must never be
+    resolvable from request data (FastAPI would otherwise expose it as a
+    stray Body field on a multipart/form-data endpoint, and accepting
+    arbitrary server-side paths from a client would be a path traversal
+    risk). Only the internal direct call from promote_upload_session passes
+    it, via _upload_evidence_impl below."""
+    return _upload_evidence_impl(
+        case_id,
+        file,
+        folder_upload=folder_upload,
+        folder_name=folder_name,
+        evidence_intent=evidence_intent,
+        packaging=packaging,
+        ingest_mode=ingest_mode,
+        provided_host=provided_host,
+        provided_platform=provided_platform,
+        host_id=host_id,
+        evtx_profile=evtx_profile,
+        memory_authorization_acknowledged=memory_authorization_acknowledged,
+        memory_upload_id=memory_upload_id,
+        archive_password=archive_password,
+        db=db,
+        current_user=current_user,
+    )
+
+
+def _upload_evidence_impl(
+    case_id: str,
+    file: UploadFile,
+    folder_upload: bool = False,
+    folder_name: str | None = None,
+    evidence_intent: str | None = None,
+    packaging: str | None = None,
+    ingest_mode: str | None = None,
+    provided_host: str | None = None,
+    provided_platform: str | None = None,
+    host_id: str | None = None,
+    evtx_profile: str | None = None,
+    memory_authorization_acknowledged: bool = False,
+    memory_upload_id: str | None = None,
+    archive_password: str | None = None,
+    db: Session = None,
+    current_user: User | None = None,
+    extra_segment_paths: list[Path] | None = None,
+) -> Evidence:
     if hasattr(ingest_mode, "get") and not hasattr(db, "get"):
         db = ingest_mode  # type: ignore[assignment]
         ingest_mode = None
@@ -2273,7 +2320,7 @@ def upload_evidence(
         raise HTTPException(status_code=409, detail=duplicate_evidence_error_detail(duplicate))
     original_stored_path = stored_path
     try:
-        stored_path, repacked_from = prepare_upload_container(stored_path, uploaded_sha256, archive_password=archive_password)
+        stored_path, repacked_from = prepare_upload_container(stored_path, uploaded_sha256, archive_password=archive_password, extra_segment_paths=extra_segment_paths)
     except ContainerPrepError as exc:
         shutil.rmtree(original_stored_path.parent.parent, ignore_errors=True)
         raise HTTPException(status_code=400, detail={"error_code": exc.code, "code": exc.code, "message": exc.message}) from exc

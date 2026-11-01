@@ -125,7 +125,7 @@ def test_encrypted_zip_is_decrypted_into_the_working_container(tmp_path):
     working, repacked = prepare_upload_container(archive, "ab" * 32, archive_password="infected")
     source = archive.parent.parent / "source" / "challenge.zip"
     assert working == archive
-    assert repacked == {"path": str(source), "sha256": "ab" * 32, "steps": [{"format": "encrypted_zip", "files": 2, "bytes": 69}]}
+    assert repacked == {"path": str(source), "extra_segment_paths": [], "sha256": "ab" * 32, "steps": [{"format": "encrypted_zip", "files": 2, "bytes": 69}]}
     assert is_encrypted_zip(source)
     assert not is_encrypted_zip(working)
     with zipfile.ZipFile(working) as handle:
@@ -141,7 +141,7 @@ def test_encrypted_seven_zip_is_decrypted_into_the_working_container(tmp_path):
     # The working container is renamed to .zip: later steps (discovery,
     # extraction) only expect a plain ZIP, never an original-format file.
     assert working == archive.parent / "challenge.zip"
-    assert repacked == {"path": str(source), "sha256": "ab" * 32, "steps": [{"format": "encrypted_7z", "files": 2, "bytes": 69}]}
+    assert repacked == {"path": str(source), "extra_segment_paths": [], "sha256": "ab" * 32, "steps": [{"format": "encrypted_7z", "files": 2, "bytes": 69}]}
     assert not is_encrypted_archive(working)
     with zipfile.ZipFile(working) as handle:
         assert handle.read("challenge/notes.txt") == b"hello"
@@ -191,7 +191,7 @@ def test_zip_holding_one_ad1_is_unwrapped_and_repacked(tmp_path, monkeypatch, en
     assert single_ad1_member(archive) == "Evidence/alice.ad1"
     seen = {}
 
-    def fake_convert(image, zip_target, progress_cb=None, metadata_path=None):
+    def fake_convert(image, zip_target, progress_cb=None, metadata_path=None, password=None, extra_segments=None):
         seen["image"] = image.read_bytes()
         with zipfile.ZipFile(zip_target, "w") as handle:
             handle.writestr("C/Users/alice/NTUSER.DAT", b"regf")

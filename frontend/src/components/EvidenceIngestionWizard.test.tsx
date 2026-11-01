@@ -349,6 +349,37 @@ describe("EvidenceIngestionWizard", () => {
     expect(createEvidenceUploadSessionMock.mock.calls[0][2]).not.toHaveProperty("clientSha256");
   });
 
+  it("stages a selected set of .ad1/.ad2/.ad3 segments as one multi-segment AD1, not a batch of independent files", async () => {
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+      preflight: readyReport({ original_filename: "image.ad1", pipeline_preview: ["Archive", "Evidence Classification"] }),
+    }));
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+
+    // Selected out of order -- the server sorts by each file's own .ad<N> suffix.
+    const files = [new File(["b"], "image.ad2"), new File(["a"], "image.ad1"), new File(["c"], "image.ad3")];
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, files);
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+
+    expect(createEvidenceUploadSessionMock).toHaveBeenCalledWith(
+      "case-1",
+      { files: [files[1], files[0], files[2]], folderUpload: false },
+      expect.objectContaining({}),
+    );
+  });
+
+  it("treats unrelated multi-file selections as independent batch items, not AD1 segments", async () => {
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    const files = [new File(["a"], "one.log"), new File(["b"], "two.log")];
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, files);
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    await waitFor(() => expect(createEvidenceUploadSessionMock).toHaveBeenCalled());
+    expect(createEvidenceUploadSessionMock).not.toHaveBeenCalledWith("case-1", expect.objectContaining({ folderUpload: false }), expect.anything());
+  });
+
   it("rejects a dropped folder immediately instead of silently uploading it", async () => {
     // dataTransfer.files hands back a dropped folder as an ordinary (near-empty)
     // File, indistinguishable from a real file after the fact -- it used to upload

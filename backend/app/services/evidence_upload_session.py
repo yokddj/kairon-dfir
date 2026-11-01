@@ -1103,20 +1103,24 @@ def promote_upload_session(
        one branch expected to shrink as more single-file categories
        migrate, not grow.
     """
-    from app.api.routes_evidence import RegisterPathRequest, _actor_label, _current_user_id, register_evidence_path, upload_disk_image, upload_evidence, upload_evidence_folder
+    from app.api.routes_evidence import RegisterPathRequest, _actor_label, _current_user_id, _upload_evidence_impl, register_evidence_path, upload_disk_image, upload_evidence_folder
     from app.models.evidence import EvidenceType
     from app.ingest.encrypted_archive import ArchivePasswordError, check_archive_password
     from app.services.host_resolution import assign_evidence_host as service_assign_evidence_host, resolve_host
     from app.services.memory.upload_sessions import create_memory_upload_session_from_staged_file, finalize_memory_upload_session
 
-    # NOTE: upload_evidence/upload_disk_image/upload_evidence_folder are
-    # FastAPI route functions whose parameter defaults are Form(...)/File(...)
-    # sentinel descriptor objects, not usable plain values - those are only
-    # resolved by FastAPI's own request handling. Calling them directly here
-    # (to reuse their logic without a second HTTP round trip) means every
+    # NOTE: upload_disk_image/upload_evidence_folder are FastAPI route
+    # functions whose parameter defaults are Form(...)/File(...) sentinel
+    # descriptor objects, not usable plain values - those are only resolved
+    # by FastAPI's own request handling. Calling them directly here (to
+    # reuse their logic without a second HTTP round trip) means every
     # parameter must be passed an explicit, concrete value; relying on any
     # of the functions' own defaults produces a Form(...)/File(...) object
     # instead of None/False and breaks internal string handling.
+    # _upload_evidence_impl is the one exception: a plain Python function
+    # with real defaults (see routes_evidence.py), precisely so this call
+    # can also pass extra_segment_paths -- a parameter the HTTP route
+    # upload_evidence deliberately does not expose (see its own docstring).
     case_id = session.case_id
     promotion_started = time.monotonic()
     _log_upload(
@@ -1286,7 +1290,7 @@ def promote_upload_session(
                         check_archive_password(staged_path, archive_password)
                     except ArchivePasswordError as exc:
                         raise UploadSessionError(exc.code, exc.message) from exc
-                    evidence = upload_evidence(
+                    evidence = _upload_evidence_impl(
                         case_id,
                         upload,
                         folder_upload=False,
@@ -1301,6 +1305,11 @@ def promote_upload_session(
                         memory_authorization_acknowledged=memory_authorization_acknowledged,
                         memory_upload_id=None,
                         archive_password=archive_password,
+                        # An AD1's .ad2/.ad3... segments (see
+                        # _stage_disk_image_segments); harmless for any
+                        # other category, since prepare_upload_container
+                        # only consults this for an AD1 first segment.
+                        extra_segment_paths=[Path(spec["path"]) for spec in extra_segment_specs] or None,
                         db=db,
                         current_user=current_user,
                     )

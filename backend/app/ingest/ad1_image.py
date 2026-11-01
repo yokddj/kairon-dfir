@@ -26,6 +26,11 @@ import zipfile
 
 AD1_SUFFIX = ".ad1"
 AD1_MAGIC = b"ADSEGMENTEDFILE"
+# An ADCRYPT-encrypted AD1's first segment starts with this magic instead
+# (see dissect.evidence.adcrypt.c_adcrypt.c_adcrypt): the segment header and
+# file tree underneath are only readable once unlocked, but the container
+# itself must still be recognized as "an AD1" from this alone.
+ADCRYPT_MAGIC = b"ADCRYPT\x00"
 _DRIVE_PART = re.compile(r"^([A-Za-z]):\\?$")
 _ROOT_PART = "[root]"
 _ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
@@ -42,7 +47,8 @@ class AD1ImageError(RuntimeError):
 def has_ad1_signature(path: Path) -> bool:
     try:
         with Path(path).open("rb") as handle:
-            return handle.read(len(AD1_MAGIC)) == AD1_MAGIC
+            header = handle.read(len(AD1_MAGIC))
+            return header == AD1_MAGIC or header.startswith(ADCRYPT_MAGIC)
     except OSError:
         return False
 
@@ -52,30 +58,91 @@ def is_ad1_image(path: Path) -> bool:
     return path.is_file() and path.suffix.lower() == AD1_SUFFIX and has_ad1_signature(path)
 
 
-def open_ad1(path: Path):
+def is_encrypted_ad1(path: Path) -> bool:
+    """Whether an AD1's first segment is ADCRYPT-encrypted, from its magic
+    alone -- no password needed, same as the other archive formats."""
+    path = Path(path)
+    if path.suffix.lower() != AD1_SUFFIX:
+        return False
+    try:
+        with path.open("rb") as handle:
+            return handle.read(len(ADCRYPT_MAGIC)) == ADCRYPT_MAGIC
+    except OSError:
+        return False
+
+
+def ad1_password_required_message(name: str) -> str:
+    return f"{name} is an encrypted (ADCRYPT) AD1 image. Enter its password to process it."
+
+
+def find_ad1_segments(path: Path) -> list[Path]:
+    """Every segment of the AD1 ``path`` belongs to (``.ad1``, ``.ad2``...),
+    in order, found as siblings in the same directory. ``[path]`` for a
+    single-segment image."""
+    from dissect.evidence.ad1.ad1 import find_files
+
+    return find_files(Path(path))
+
+
+def open_ad1(path: Path, *, extra_segments: list[Path] | None = None, password: str | None = None):
+    """Open an AD1 image. ``path`` is the first (``.ad1``) segment;
+    ``extra_segments`` are the rest in order (``.ad2``, ``.ad3``...), already
+    known to the caller -- this does not look for siblings on disk itself,
+    since promotion moves the first segment into ``source/`` before this
+    runs and a sibling search there would miss segments staged elsewhere
+    (see evidence_container_prep.prepare_upload_container)."""
     try:
         from dissect.evidence.ad1 import AD1
         from dissect.evidence.ad1.ad1 import SegmentFile
     except ImportError as exc:  # pragma: no cover - dependency is part of the image
         raise AD1ImageError("ad1_reader_unavailable", "The AD1 reader (dissect.evidence) is not installed.") from exc
     path = Path(path)
+    segments = [path, *(extra_segments or [])]
     with path.open("rb") as handle:
-        if handle.read(len(AD1_MAGIC)) != AD1_MAGIC:
+        header = handle.read(len(AD1_MAGIC))
+        is_adcrypt_header = header.startswith(ADCRYPT_MAGIC)
+        if header != AD1_MAGIC and not is_adcrypt_header:
             raise AD1ImageError("ad1_invalid", f"{path.name} is not an AD1 image (no ADSEGMENTEDFILE signature).")
-        handle.seek(0)
-        segment_count = SegmentFile(handle).count
-    if segment_count > 1:
-        raise AD1ImageError(
-            "ad1_multi_segment",
-            f"{path.name} is the first of {segment_count} AD1 segments (.ad1, .ad2...). Multi-segment AD1 images are not supported yet; "
-            "re-export it from FTK Imager as a single segment.",
-        )
+        if not is_adcrypt_header:
+            handle.seek(0)
+            segment_count = SegmentFile(handle).count
+            if segment_count > len(segments):
+                raise AD1ImageError(
+                    "ad1_multi_segment",
+                    f"{path.name} is the first of {segment_count} AD1 segments (.ad1, .ad2...), but only {len(segments)} "
+                    "were uploaded. Select the complete segment set.",
+                )
     try:
-        image = AD1([path])
+        image = AD1(segments)
     except Exception as exc:  # noqa: BLE001
         raise AD1ImageError("ad1_invalid", f"{path.name} could not be read as an AD1 image: {exc}") from exc
     if image.is_adcrypt():
-        raise AD1ImageError("ad1_encrypted", f"{path.name} is an encrypted (ADCRYPT) AD1 image. Decrypt it in FTK Imager before uploading.")
+        if not password:
+            raise AD1ImageError("ad1_password_required", ad1_password_required_message(path.name))
+        try:
+            # Unlock the container itself (reads and verifies against the
+            # first segment's header only) without AD1.unlock()'s own call
+            # to _open_ad1(), which needs every segment present -- ADCRYPT
+            # images are commonly split (the cipher is keyed per segment),
+            # so checking the segment count first gives the same clear
+            # ad1_multi_segment error the unencrypted path gives, instead of
+            # an EOFError reading past a missing segment's end.
+            image.adcrypt.unlock(passphrase=password)
+        except RuntimeError as exc:
+            # Missing pycryptodome -- an image deployment problem, not a bad password.
+            raise AD1ImageError("ad1_reader_unavailable", str(exc)) from exc
+        except ValueError as exc:
+            raise AD1ImageError("ad1_password_invalid", f"The password for {path.name} is not correct.") from exc
+        image._segments = {}
+        image._segment_lru = []
+        segment_count = image.segment(0).header.segment_count
+        if segment_count > len(segments):
+            raise AD1ImageError(
+                "ad1_multi_segment",
+                f"{path.name} is the first of {segment_count} AD1 segments (.ad1, .ad2...), but only {len(segments)} "
+                "were uploaded. Select the complete segment set.",
+            )
+        image._open_ad1()
     return image
 
 
@@ -186,12 +253,12 @@ def write_ad1_metadata(files: list[tuple[str, object]], target: Path) -> None:
     partial.replace(target)
 
 
-def convert_ad1_to_zip(source: Path, target: Path, progress_cb: Callable[[dict], None] | None = None, *, metadata_path: Path | None = None) -> dict:
+def convert_ad1_to_zip(source: Path, target: Path, progress_cb: Callable[[dict], None] | None = None, *, metadata_path: Path | None = None, password: str | None = None, extra_segments: list[Path] | None = None) -> dict:
     """Repack the image's live files into ``target`` (written atomically).
     Files whose content cannot be read are listed, not fatal. With
     ``metadata_path``, FTK's per-file metadata is kept there (the ZIP only
     holds a modification time)."""
-    image = open_ad1(source)
+    image = open_ad1(source, extra_segments=extra_segments, password=password)
     files = list(iter_ad1_files(image))
     if metadata_path is not None:
         write_ad1_metadata(files, metadata_path)
