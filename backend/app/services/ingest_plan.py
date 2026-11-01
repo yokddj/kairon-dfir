@@ -588,7 +588,10 @@ def build_reprocess_preview(
             continue
         new_entry = candidate_plan_entry(candidate, enabled=True, reason="recommended", status="new")
         new_rows.append(new_entry)
-        if mode == "full_rediscovery":
+        # Never offered before, so never declined: an artifact a parser added
+        # since the last run reads (a selected re-index keeps what the analyst
+        # turned off, not what did not exist yet).
+        if mode in {"full_rediscovery", "previous_selection"}:
             selected_rows.append(new_entry)
 
     if mode == "full_rediscovery":
