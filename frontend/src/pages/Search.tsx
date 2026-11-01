@@ -468,6 +468,13 @@ function deduceArtifactView(results: SearchV2Result[], preferredArtifactTypes: s
   return "generic";
 }
 
+function hasObservedValue(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasObservedValue);
+  if (value === null || value === undefined) return false;
+  const text = String(value).trim();
+  return Boolean(text) && text !== "-";
+}
+
 function applyCellFallbacks(...values: unknown[]) {
   for (const value of values) {
     const text = asString(value).trim();
@@ -1349,38 +1356,54 @@ function DetailPanel({
           </div>
         </div>
 
-        {(raw.object || raw.access || raw.registry || raw.folder || raw.office || raw.execution || raw.process || raw.file || raw.ntfs || raw.url) ? (
-          <div className="rounded-2xl border border-line bg-abyss/60 p-4">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Observed data</p>
-            <div className="mt-3 grid gap-2 text-sm text-muted">
-              <div className="break-words">Event type: <span className="text-white">{pivotRenderer({ label: "event type", field: "event.type", value: result.event_type || event.type, display: applyCellFallbacks(humanizeToken(result.event_type)) })}</span></div>
-              <div className="break-words">Event ID: <span className="text-white">{pivotRenderer({ label: "Windows event ID", field: "windows.event_id", value: windows.event_id || event.id })}</span></div>
-              <div className="break-words">Provider: <span className="text-white">{pivotRenderer({ label: "provider", field: "event.provider", value: event.provider || windows.provider })}</span></div>
-              <div className="break-words">Channel: <span className="text-white">{pivotRenderer({ label: "channel", field: "event.channel", value: event.channel || windows.channel })}</span></div>
-              <div className="break-words">Parent process: <span className="text-white">{pivotRenderer({ label: "parent process", field: "parent.process.name", value: process.parent_name || parentProcess.name })}</span></div>
-              <div className="break-words">Parent command line: <span className="text-white">{pivotRenderer({ label: "parent command line", field: "parent.process.command_line", value: process.parent_command_line || parentProcess.command_line, operator: "contains" })}</span></div>
-              <div className="break-words">Object name: <span className="text-white">{pivotRenderer({ label: "object name", field: "object.name", value: object.name || object.path, operator: "contains" })}</span></div>
-              <div className="break-words">Object type: <span className="text-white">{applyCellFallbacks(object.type)}</span></div>
-              <div className="break-words">Access mask: <span className="text-white">{pivotRenderer({ label: "access mask", field: "access.mask", value: access.mask })}</span></div>
-              <div className="break-words">Accesses: <span className="text-white">{Array.isArray(access.list) ? access.list.join(", ") : applyCellFallbacks(access.accesses)}</span></div>
-              <div className="break-words">Registry key: <span className="text-white">{pivotRenderer({ label: "registry key", field: "registry.key", value: registry.key_path || registry.key, operator: "contains" })}</span></div>
-              <div className="break-words">Registry value: <span className="text-white">{applyCellFallbacks(registry.value_name, registry.value_data)}</span></div>
-              <div className="break-words">Command line: <span className="text-white">{pivotRenderer({ label: "command line", field: "process.command_line", value: process.command_line, operator: "contains" })}</span></div>
-              <div className="break-words">File path: <span className="text-white">{pivotRenderer({ label: "file path", field: "file.path", value: file.path, operator: "contains" })}</span></div>
-              <div className="break-words">Folder: <span className="text-white">{applyCellFallbacks(asRecord(raw.folder).path)}</span></div>
-              <div className="break-words">Office app: <span className="text-white">{applyCellFallbacks(asRecord(raw.office).app)}</span></div>
-              <div className="break-words">Trusted document: <span className="text-white">{applyCellFallbacks(asRecord(raw.office).trusted_document)}</span></div>
-              <div className="break-words">Execution confirmed: <span className="text-white">{applyCellFallbacks(asRecord(raw.execution).is_execution_confirmed)}</span></div>
-              <div className="break-words">NTFS source: <span className="text-white">{applyCellFallbacks(asRecord(raw.ntfs).source)}</span></div>
-              <div className="break-words">Reason: <span className="text-white">{applyCellFallbacks(asRecord(raw.ntfs).reason)}</span></div>
-              <div className="break-words">Zone ID: <span className="text-white">{applyCellFallbacks(asRecord(raw.ntfs).zone_id)}</span></div>
-              <div className="break-words">Host URL: <span className="text-white">{pivotRenderer({ label: "URL", field: "url.full", value: asRecord(raw.ntfs).host_url || url.full || browser.url || download.url, operator: "contains" })}</span></div>
-              <div className="break-words">Referrer URL: <span className="text-white">{applyCellFallbacks(asRecord(raw.ntfs).referrer_url)}</span></div>
-              <div className="break-words">Old / new name: <span className="text-white">{applyCellFallbacks(asRecord(raw.ntfs).old_name, asRecord(raw.ntfs).new_name)}</span></div>
-              <div className="break-words">Snapshot time: <span className="text-white">{applyCellFallbacks(asRecord(raw.ntfs).snapshot_time)}</span></div>
+        {(() => {
+          const notification = asRecord(raw.notification);
+          const observedRows: Array<{ label: string; value: unknown; node: ReactNode }> = [
+              { label: "Notification from", value: notification.sender, node: applyCellFallbacks(notification.sender) },
+              { label: "Notification title", value: notification.title, node: applyCellFallbacks(notification.title) },
+              { label: "Notification text", value: notification.body_preview, node: <span className="whitespace-pre-wrap">{applyCellFallbacks(notification.body_preview)}</span> },
+              { label: "Notification app", value: notification.app_id, node: pivotRenderer({ label: "app", field: "notification.app_id", value: notification.app_id }) },
+              { label: "Notification type", value: notification.type, node: applyCellFallbacks(notification.type) },
+              { label: "Opens", value: notification.launch_uri, node: applyCellFallbacks(notification.launch_uri) },
+              { label: "Expires", value: notification.expires_time, node: applyCellFallbacks(notification.expires_time) },
+              { label: "Event type", value: result.event_type || event.type, node: pivotRenderer({ label: "event type", field: "event.type", value: result.event_type || event.type, display: applyCellFallbacks(humanizeToken(result.event_type)) }) },
+              { label: "Event ID", value: windows.event_id || event.id, node: pivotRenderer({ label: "Windows event ID", field: "windows.event_id", value: windows.event_id || event.id }) },
+              { label: "Provider", value: event.provider || windows.provider, node: pivotRenderer({ label: "provider", field: "event.provider", value: event.provider || windows.provider }) },
+              { label: "Channel", value: event.channel || windows.channel, node: pivotRenderer({ label: "channel", field: "event.channel", value: event.channel || windows.channel }) },
+              { label: "Parent process", value: process.parent_name || parentProcess.name, node: pivotRenderer({ label: "parent process", field: "parent.process.name", value: process.parent_name || parentProcess.name }) },
+              { label: "Parent command line", value: process.parent_command_line || parentProcess.command_line, node: pivotRenderer({ label: "parent command line", field: "parent.process.command_line", value: process.parent_command_line || parentProcess.command_line, operator: "contains" }) },
+              { label: "Object name", value: object.name || object.path, node: pivotRenderer({ label: "object name", field: "object.name", value: object.name || object.path, operator: "contains" }) },
+              { label: "Object type", value: [object.type], node: applyCellFallbacks(object.type) },
+              { label: "Access mask", value: access.mask, node: pivotRenderer({ label: "access mask", field: "access.mask", value: access.mask }) },
+              { label: "Accesses", value: Array.isArray(access.list) ? access.list.join(", ") : access.accesses, node: Array.isArray(access.list) ? access.list.join(", ") : applyCellFallbacks(access.accesses) },
+              { label: "Registry key", value: registry.key_path || registry.key, node: pivotRenderer({ label: "registry key", field: "registry.key", value: registry.key_path || registry.key, operator: "contains" }) },
+              { label: "Registry value", value: [registry.value_name, registry.value_data], node: applyCellFallbacks(registry.value_name, registry.value_data) },
+              { label: "Command line", value: process.command_line, node: pivotRenderer({ label: "command line", field: "process.command_line", value: process.command_line, operator: "contains" }) },
+              { label: "File path", value: file.path, node: pivotRenderer({ label: "file path", field: "file.path", value: file.path, operator: "contains" }) },
+              { label: "Folder", value: [asRecord(raw.folder).path], node: applyCellFallbacks(asRecord(raw.folder).path) },
+              { label: "Office app", value: [asRecord(raw.office).app], node: applyCellFallbacks(asRecord(raw.office).app) },
+              { label: "Trusted document", value: [asRecord(raw.office).trusted_document], node: applyCellFallbacks(asRecord(raw.office).trusted_document) },
+              { label: "Execution confirmed", value: [asRecord(raw.execution).is_execution_confirmed], node: applyCellFallbacks(asRecord(raw.execution).is_execution_confirmed) },
+              { label: "NTFS source", value: [asRecord(raw.ntfs).source], node: applyCellFallbacks(asRecord(raw.ntfs).source) },
+              { label: "Reason", value: [asRecord(raw.ntfs).reason], node: applyCellFallbacks(asRecord(raw.ntfs).reason) },
+              { label: "Zone ID", value: [asRecord(raw.ntfs).zone_id], node: applyCellFallbacks(asRecord(raw.ntfs).zone_id) },
+              { label: "Host URL", value: asRecord(raw.ntfs).host_url || url.full || browser.url || download.url, node: pivotRenderer({ label: "URL", field: "url.full", value: asRecord(raw.ntfs).host_url || url.full || browser.url || download.url, operator: "contains" }) },
+              { label: "Referrer URL", value: [asRecord(raw.ntfs).referrer_url], node: applyCellFallbacks(asRecord(raw.ntfs).referrer_url) },
+              { label: "Old / new name", value: [asRecord(raw.ntfs).old_name, asRecord(raw.ntfs).new_name], node: applyCellFallbacks(asRecord(raw.ntfs).old_name, asRecord(raw.ntfs).new_name) },
+              { label: "Snapshot time", value: [asRecord(raw.ntfs).snapshot_time], node: applyCellFallbacks(asRecord(raw.ntfs).snapshot_time) },
+          ].filter((row) => hasObservedValue(row.value));
+          // Only what this event carries: a list of empty fields says nothing.
+          return observedRows.length ? (
+            <div className="rounded-2xl border border-line bg-abyss/60 p-4">
+              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Observed data</p>
+              <div className="mt-3 grid gap-2 text-sm text-muted">
+                {observedRows.map((row) => (
+                  <div key={row.label} className="break-words">{row.label}: <span className="text-white">{row.node}</span></div>
+                ))}
+              </div>
             </div>
-          </div>
-        ) : null}
+          ) : null;
+        })()}
 
         <details className="rounded-2xl border border-line bg-abyss/60 p-4">
           <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Raw JSON</summary>

@@ -209,8 +209,11 @@ export default function EventSummary({ event }: { event: Record<string, unknown>
     pushIf(rows, "App package", app.package);
     pushIf(rows, "File path", file.path);
     pushIf(rows, "Folder path", folder.path);
+    pushIf(rows, "Notification from", notification.sender);
     pushIf(rows, "Notification title", notification.title);
     pushIf(rows, "Notification body", notification.body_preview);
+    pushIf(rows, "Notification type", notification.type);
+    pushIf(rows, "Notification opens", notification.launch_uri);
     pushIf(rows, "Notification created", notification.created_time);
     pushIf(rows, "Notification expires", notification.expires_time);
     pushIf(rows, "Activity display", activity.display_text);

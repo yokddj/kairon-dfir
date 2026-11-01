@@ -4,6 +4,8 @@ import re
 from urllib.parse import urlparse
 
 from app.ingest.email.helpers import redact_secret_like_text
+from app.ingest.identity_extraction import extract_user_from_path
+from app.ingest.velociraptor.path_utils import normalize_velociraptor_path
 from app.ingest.windows_event_mapping import risk_score_to_severity
 from app.ingest.windows_ui.helpers import basename_windows, clean_value, first_nonempty, normalize_windows_path, parent_windows, suffix_windows
 
@@ -55,6 +57,56 @@ def _domain_from_url(value: str | None) -> str | None:
 
 def _body_preview(value: str | None) -> str | None:
     return redact_secret_like_text(clean_value(value), max_len=600)
+
+
+_NOTIFICATION_TEXT_MAX = 2000
+
+
+def notification_app_label(app_id: str | None) -> str | None:
+    """A readable sender from a notification AppId: a packaged app's family
+    name without its publisher hash and entry point
+    (``Microsoft.BingWeather_8wekyb3d8bbwe!App`` -> ``Microsoft.BingWeather``)."""
+    cleaned = clean_value(app_id)
+    if not cleaned:
+        return None
+    label = cleaned.split("!", 1)[0]
+    label = re.sub(r"_[a-z0-9]{13}$", "", label)
+    return label or cleaned
+
+
+def notification_web_origin(launch_uri: str | None) -> str | None:
+    """The site behind a browser's web push notification. Chromium browsers
+    launch them with ``<flags>|<profile>|<n>|<origin>|...``."""
+    cleaned = clean_value(launch_uri)
+    if not cleaned:
+        return None
+    for part in cleaned.replace("#", "|").split("|"):
+        part = part.strip()
+        if part.lower().startswith(("https://", "http://")):
+            return part[1:] if part.startswith("p") else part
+    return None
+
+
+def _notification_user(row: dict, artifact_meta: dict, source_file: str | None) -> str | None:
+    for candidate in (
+        artifact_meta.get("velociraptor_normalized_windows_path"),
+        artifact_meta.get("source_path"),
+        first_nonempty(row, "SourceFile"),
+        source_file,
+    ):
+        if not candidate:
+            continue
+        user = extract_user_from_path(normalize_velociraptor_path(str(candidate)))
+        if user:
+            return user
+    return clean_value(artifact_meta.get("user"))
+
+
+def _notification_message(sender: str | None, title: str | None, body: str | None, fallback: str | None) -> str:
+    text = " - ".join(part for part in (title, body) if part) or fallback or "-"
+    if len(text) > 300:
+        text = f"{text[:300]}..."
+    return f"Notification from {sender}: {text}" if sender else f"Notification: {text}"
 
 
 def _score_windows_ui(parser_name: str, row: dict, file_path: str | None) -> tuple[int, list[str], list[str]]:
@@ -167,7 +219,16 @@ def normalize_windows_ui_row(document: dict, row: dict, artifact_meta: dict) -> 
     risk_score, suspicious_reasons, tags = _score_windows_ui(parser_name, row, file_path)
 
     notification_title = clean_value(first_nonempty(row, "Title", "NotificationTitle"))
-    notification_body = _body_preview(first_nonempty(row, "Body", "BodyPreview", "PayloadPreview", "Payload"))
+    if parser_name == "windows_notifications":
+        # The text is the evidence (a shared password, a file name, a code):
+        # kept as shown, not redacted.
+        notification_body = (clean_value(first_nonempty(row, "Body", "BodyPreview", "PayloadPreview", "Payload")) or "")[:_NOTIFICATION_TEXT_MAX] or None
+    else:
+        notification_body = _body_preview(first_nonempty(row, "Body", "BodyPreview", "PayloadPreview", "Payload"))
+    notification_app_id = clean_value(first_nonempty(row, "AppId", "PackageId"))
+    notification_launch = clean_value(first_nonempty(row, "LaunchUri"))
+    notification_site = notification_web_origin(notification_launch) if parser_name == "windows_notifications" else None
+    notification_sender = _domain_from_url(notification_site) or notification_app_label(clean_value(first_nonempty(row, "AppName")) or notification_app_id)
     activity_display = clean_value(first_nonempty(row, "DisplayText", "DisplayName", "Description"))
     activity_uri = clean_value(first_nonempty(row, "ActivationUri", "WebUrl", "Uri"))
     office_alert_text = _body_preview(first_nonempty(row, "AlertText", "Message", "OfficeAlert"))
@@ -188,7 +249,7 @@ def normalize_windows_ui_row(document: dict, row: dict, artifact_meta: dict) -> 
     document["tags"] = tags
     document["event"]["message"] = {
         "thumbnail_observed": f"Thumbnail observed for {file_name or file_path or '-'}",
-        "notification_observed": f"Notification observed: {notification_title or file_name or '-'}",
+        "notification_observed": _notification_message(notification_sender, notification_title, notification_body, file_name),
         "notification_app_registered": f"Notification app registered: {clean_value(first_nonempty(row, 'AppId')) or '-'}",
         "activity_history_observed": f"Activity history observed: {activity_display or file_name or '-'}",
         "search_index_entry_observed": f"Windows Search indexed entry observed: {file_name or indexed_path or '-'}",
@@ -217,10 +278,20 @@ def normalize_windows_ui_row(document: dict, row: dict, artifact_meta: dict) -> 
     document["notification"] = {
         "title": notification_title,
         "body_preview": notification_body,
-        "app_id": clean_value(first_nonempty(row, "AppId", "PackageId")),
+        "app_id": notification_app_id,
+        "app": notification_app_label(notification_app_id),
+        "sender": notification_sender,
+        "site": notification_site,
+        "type": clean_value(first_nonempty(row, "NotificationType")),
+        "launch_uri": notification_launch,
+        "images": [str(item) for item in (row.get("Images") or []) if item][:10] if isinstance(row.get("Images"), list) else [],
         "created_time": clean_value(first_nonempty(row, "CreatedTime", "Created", "TimeCreated")),
         "expires_time": clean_value(first_nonempty(row, "ExpiresTime", "ExpiryTime")),
     }
+    if parser_name == "windows_notifications" and not (document.get("user") or {}).get("name"):
+        user_name = _notification_user(row, artifact_meta, source_file)
+        if user_name:
+            document.setdefault("user", {})["name"] = user_name
     document["activity"] = {
         "activity_id": clean_value(first_nonempty(row, "ActivityId")),
         "app_id": clean_value(first_nonempty(row, "AppId", "ApplicationId")),
@@ -250,7 +321,8 @@ def normalize_windows_ui_row(document: dict, row: dict, artifact_meta: dict) -> 
         "format": clean_value(first_nonempty(row, "Format", "ImageFormat")),
         "entry_hash": clean_value(first_nonempty(row, "CacheEntryHash", "EntryHash")),
     }
-    document["url"].update({"full": host_url or activity_uri, "domain": _domain_from_url(host_url or activity_uri)})
+    page_url = host_url or activity_uri or notification_site
+    document["url"].update({"full": page_url, "domain": _domain_from_url(page_url)})
     document["execution"]["is_execution_confirmed"] = False
     document["execution"]["confidence"] = "low"
     document["windows_ui"] = {
@@ -275,8 +347,8 @@ def normalize_windows_ui_row(document: dict, row: dict, artifact_meta: dict) -> 
     )
     document["related_iocs"] = {
         "files": sorted({item for item in [file_path, indexed_path, office_doc, (document.get("thumbnail") or {}).get("source_path")] if item}),
-        "urls": sorted({item for item in [host_url, activity_uri] if item and str(item).lower().startswith("http")}),
-        "domains": sorted({item for item in [_domain_from_url(host_url), _domain_from_url(activity_uri)] if item}),
+        "urls": sorted({item for item in [host_url, activity_uri, notification_site] if item and str(item).lower().startswith("http")}),
+        "domains": sorted({item for item in [_domain_from_url(host_url), _domain_from_url(activity_uri), _domain_from_url(notification_site)] if item}),
     }
     document["event"]["timeline_include"] = risk_score >= 50 or event_type in {"office_alert_observed", "notification_observed"}
     document["_preserve_timeline_include"] = True
