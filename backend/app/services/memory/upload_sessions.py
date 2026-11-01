@@ -323,6 +323,7 @@ _ARCHIVE_SUFFIX_GROUPS: tuple[tuple[str, ...], ...] = (
     (".zip",),
     (".ad1",),
     (".7z",),
+    (".rar",),
     (".tar", ".gz"),
     (".tar",),
     (".gz",),
@@ -337,7 +338,7 @@ def _allowed_archive_extension(filename: str) -> str:
             return "".join(group)
     raise MemoryUploadSessionError(
         "MEMORY_UPLOAD_INVALID_EXTENSION",
-        "Unsupported archive extension. Supported: .zip, .ad1, .7z, .tar, .tar.gz, .gz, .xz.",
+        "Unsupported archive extension. Supported: .zip, .ad1, .7z, .rar, .tar, .tar.gz, .gz, .xz.",
     )
 
 
