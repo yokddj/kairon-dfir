@@ -135,3 +135,38 @@ def test_every_supported_discovery_category_is_mapped_to_a_parser(tmp_path):
         candidate = {"supported": True, "category": category, "original_path": "C/x/file", "local_path": str(tmp_path / "file"), "parser": "p", "artifact_type": category}
         mapped = [item for item in list_velociraptor_artifacts(tmp_path, [candidate]) if item.get("velociraptor_category") == category]
         assert mapped, f"category {category!r} is not mapped"
+
+
+WEB_PUSH_TOAST = (
+    '<toast launch="0|0|Default|0|https://chat.example.org/|p#https://chat.example.org/#"><visual><binding template="ToastGeneric">'
+    '<text>Alice</text><text>report.zip, password: s3cret!</text><text>chat.example.org</text>'
+    '<image placement="appLogoOverride" src="C:\\Users\\bob\\AppData\\Local\\Google\\Chrome\\User Data\\Notification Resources\\a.tmp"/>'
+    "</binding></visual></toast>"
+)
+
+
+def test_web_push_notification_names_its_site_user_and_full_text(tmp_path):
+    path, connection = _database(tmp_path / "db")
+    connection.execute("INSERT INTO NotificationHandler VALUES (4, 'Chrome', 'app:desktop', '2023-07-01 10:00:00', '2023-07-01 10:00:00')")
+    connection.execute("INSERT INTO NotificationHandler VALUES (5, 'Microsoft.BingWeather_8wekyb3d8bbwe!App', 'app:immersive', '2023-07-01 10:00:00', '2023-07-01 10:00:00')")
+    _notify(connection,
+            (1, 63, 4, "toast", WEB_PUSH_TOAST.encode(), "41", "Notifications", None, FILETIME, "Xml"),
+            (2, 64, 5, "tile", b"<tile><visual><binding template='TileWide'><text>20 C | Cloudy</text></binding></visual></tile>", None, None, None, FILETIME, "Xml"))
+    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    connection.close()
+    documents = normalize_file("case", "ev", "art", path, {"artifact_type": "windows_ui", "parser": "windows_notifications",
+                                                           "source_path": "challenge/Users/bob/AppData/Local/Microsoft/Windows/Notifications/wpndatabase.db"})
+    by_id = {doc["raw"]["NotificationId"]: doc for doc in documents if doc["event"]["type"] == "notification_observed"}
+    web = by_id[63]
+    assert web["notification"]["site"] == "https://chat.example.org/"
+    assert web["notification"]["sender"] == "chat.example.org"
+    assert web["notification"]["app"] == "Chrome"
+    # Not redacted: a shared password is the evidence.
+    assert web["notification"]["body_preview"] == "report.zip, password: s3cret! | chat.example.org"
+    assert web["event"]["message"] == "Notification from chat.example.org: Alice - report.zip, password: s3cret! | chat.example.org"
+    assert web["url"]["domain"] == "chat.example.org"
+    assert web["user"]["name"] == "bob"
+    assert web["notification"]["images"]
+    weather = by_id[64]
+    assert weather["notification"]["sender"] == "Microsoft.BingWeather"
+    assert weather["event"]["message"].startswith("Notification from Microsoft.BingWeather: 20 C | Cloudy")

@@ -868,7 +868,9 @@ describe("Search page", () => {
     expect(await screen.findByText("Windows UI")).toBeInTheDocument();
     await userEvent.click(await screen.findByTestId("search-row-event-evt-windows-ui"));
     const detailPanel = await screen.findByTestId("search-detail-panel");
-    expect(within(detailPanel).getByText(/Threat quarantined: Trojan:Win32\/Test/i)).toBeInTheDocument();
+    expect(within(detailPanel).getAllByText(/Threat quarantined: Trojan:Win32\/Test/i).length).toBeGreaterThan(0);
+    // Fields the event does not carry are not listed as "-".
+    expect(within(detailPanel).queryByText(/Zone ID:/)).not.toBeInTheDocument();
     expect(within(detailPanel).getByText(/Protected View and Enable Content warning/i)).toBeInTheDocument();
     expect(within(detailPanel).getAllByText(/invoice\.docm/i).length).toBeGreaterThan(0);
   });
