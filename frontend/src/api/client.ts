@@ -4674,6 +4674,9 @@ export type ResumableUploadSessionRead = {
   case_id: string;
   backend: string;
   category: string | null;
+  // Packed from a folder in the browser (lib/folderZip.ts); the resume step
+  // offers a folder picker instead of a single-file one for this session.
+  packaged_from_folder: boolean;
   original_filename: string;
   expected_size_bytes: number | null;
   bytes_received: number;
@@ -7557,6 +7560,7 @@ export const api = {
       expected_size_bytes: number;
       declared_platform?: EvidencePlatform;
       client_sha256?: string;
+      is_folder?: boolean;
       intake_category?: string;
       host_id?: string;
       provided_host?: string;

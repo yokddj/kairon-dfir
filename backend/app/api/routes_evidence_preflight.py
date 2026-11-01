@@ -299,6 +299,7 @@ def _resumable_entry(session: EvidenceUploadSession, db: Session) -> ResumableUp
         case_id=session.case_id,
         backend="unified" if unified else "legacy",
         category=metadata.get("category"),
+        packaged_from_folder=bool(metadata.get("packaged_from_folder")),
         original_filename=session.original_filename,
         expected_size_bytes=session.expected_size_bytes,
         bytes_received=session.bytes_received,
@@ -371,7 +372,7 @@ def init_resumable_evidence_upload(
             raise HTTPException(status_code=status_code, detail=detail) from exc
         return EvidenceUploadSessionStageResponse(session=_session_to_read(db, session), health=check_ingestion_readiness(db), unified=UnifiedUploadInfo(**vars(info)))
     try:
-        session = create_resumable_upload_session(db, case_id, filename=payload.filename, expected_size_bytes=payload.expected_size_bytes, declared_platform=declared, client_sha256=payload.client_sha256)
+        session = create_resumable_upload_session(db, case_id, filename=payload.filename, expected_size_bytes=payload.expected_size_bytes, declared_platform=declared, client_sha256=payload.client_sha256, packaged_from_folder=payload.is_folder)
     except UploadSessionError as exc:
         raise _http_from_upload_error(exc) from exc
     return EvidenceUploadSessionStageResponse(session=_session_to_read(db, session), health=check_ingestion_readiness(db))

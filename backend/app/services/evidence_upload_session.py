@@ -199,6 +199,7 @@ def create_resumable_upload_session(
     expected_size_bytes: int,
     declared_platform: str | None = None,
     client_sha256: str | None = None,
+    packaged_from_folder: bool = False,
 ) -> EvidenceUploadSession:
     if not db.get(Case, case_id):
         raise UploadSessionError("case_not_found", "Case not found")
@@ -209,7 +210,11 @@ def create_resumable_upload_session(
     # e.g. the wizard reopened after a reload and didn't surface the existing session
     # as a resume target -- rather than a deliberate second upload. Reuse it instead of
     # staging a second multi-GB copy from scratch; the byte-offset append endpoint
-    # already requires the resumed file to match this filename+size anyway.
+    # already requires the resumed file to match this filename+size anyway. A folder's
+    # ZIP is packed deterministically from the same selection (same file order, same
+    # per-entry metadata), so a re-selection of the same folder reaches this with the
+    # same filename+size too, and is reused the same way -- the wizard only has to
+    # repack it (fast, local I/O), not re-upload the bytes the server already has.
     existing = (
         db.query(EvidenceUploadSession)
         .filter(
@@ -235,6 +240,13 @@ def create_resumable_upload_session(
         status=EvidenceUploadSessionStatus.created.value,
         original_filename=target.name,
         staged_path=str(target),
+        # NOT promote_upload_session's "is_folder -> upload_evidence_folder"
+        # structural kind (that is the legacy raw multipart path, a directory
+        # of loose files): this is a ZIP, promoted like any archive, so the
+        # model column stays False. Whether it was packed from a folder in
+        # the browser is recorded in metadata_json only, read back by the
+        # wizard's resume step to offer a folder picker instead of a
+        # single-file one for a reselection that re-packs and re-verifies.
         is_folder=False,
         is_server_path=False,
         size_bytes=0,
@@ -244,7 +256,7 @@ def create_resumable_upload_session(
         declared_platform=declared_platform,
         expires_at=utc_now() + timedelta(seconds=max(60, int(settings.evidence_upload_session_ttl_seconds))),
         last_activity_at=utc_now(),
-        metadata_json={"upload_mode": "resumable", "current_stage": "upload"},
+        metadata_json={"upload_mode": "resumable", "current_stage": "upload", "packaged_from_folder": packaged_from_folder},
     )
     db.add(session)
     db.commit()

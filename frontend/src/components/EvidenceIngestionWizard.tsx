@@ -336,6 +336,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [resumeFileError, setResumeFileError] = useState<string | null>(null);
   const [resumeVerifying, setResumeVerifying] = useState(false);
+  // Folder resume only: re-packing progress while zipFolder() rebuilds the
+  // same archive from the re-selected folder, before it can even be
+  // compared against the session being resumed (see packaged_from_folder).
+  const [resumeFolderPackProgress, setResumeFolderPackProgress] = useState<number | null>(null);
 
   const requiresPathInput = acquisitionSource === "server_path";
   const requiresFolderInput = folderUploadSelected;
@@ -537,7 +541,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     };
   }
 
-  async function uploadSingleFileResumable(file: File, onProgress: (progress: { loaded: number; total: number; lengthComputable: boolean }) => void) {
+  async function uploadSingleFileResumable(file: File, onProgress: (progress: { loaded: number; total: number; lengthComputable: boolean }) => void, options?: { isFolder?: boolean }) {
     if (!api.createResumableEvidenceUploadSession || !api.appendResumableEvidenceUpload || !api.finalizeResumableEvidenceUploadSession) {
       return api.createEvidenceUploadSession(caseId, { file }, { declaredPlatform: platform, onProgress });
     }
@@ -549,6 +553,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       filename: file.name,
       expected_size_bytes: file.size,
       declared_platform: platform,
+      is_folder: options?.isFolder,
     })).session;
     setSession(activeSession);
     const chunkSize = DEFAULT_CHUNK_SIZE;
@@ -783,10 +788,16 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       if (requiresFolderInput) {
         // A folder is packed into one stored ZIP and sent like any archive:
         // resumable 64 MB chunks, no request-size or file-count limit.
+        // Packing is deterministic (same file order, same per-entry
+        // metadata) from the same selection, so re-packing the same folder
+        // after a reload reaches create_resumable_upload_session with the
+        // same filename+size and reuses the in-flight session instead of
+        // starting a new upload from byte 0 (see is_folder below and the
+        // resume step's folder picker).
         setFolderPackProgress(0);
         const archive = await zipFolder(files, { onProgress: setFolderPackProgress });
         setFolderPackProgress(1);
-        return uploadSingleFileResumable(archive, onProgress);
+        return uploadSingleFileResumable(archive, onProgress, { isFolder: true });
       }
       if (files.length > 1) {
         return api.createEvidenceUploadSession(caseId, { files, folderUpload: false }, { declaredPlatform: platform, onProgress });
@@ -1261,37 +1272,81 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
           <section className="mt-5" data-testid="resume-upload-step">
             <h2 className="text-xl font-semibold text-ink">Resume upload</h2>
             <p className="mt-1 text-sm text-muted">
-              Browsers can't silently reopen a local file after a reload. Select <strong className="text-ink">{resumeTarget.original_filename}</strong> again
-              ({bytes(resumeTarget.expected_size_bytes)}, {resumeTarget.progress_percent !== null ? `${resumeTarget.progress_percent.toFixed(0)}% already uploaded` : "in progress"}) to continue &mdash;
-              Kairon verifies it's the same file before resuming.
+              {resumeTarget.packaged_from_folder ? (
+                <>Browsers can't silently reopen a folder after a reload. Select the folder packed as <strong className="text-ink">{resumeTarget.original_filename}</strong> again</>
+              ) : (
+                <>Browsers can't silently reopen a local file after a reload. Select <strong className="text-ink">{resumeTarget.original_filename}</strong> again</>
+              )}
+              {" "}({bytes(resumeTarget.expected_size_bytes)}, {resumeTarget.progress_percent !== null ? `${resumeTarget.progress_percent.toFixed(0)}% already uploaded` : "in progress"}) to continue &mdash;
+              Kairon {resumeTarget.packaged_from_folder ? "repacks it and verifies it matches before resuming; none of the already-uploaded bytes are sent again" : "verifies it's the same file before resuming"}.
             </p>
-            <label className="mt-4 flex flex-col gap-2 rounded-2xl border border-dashed border-line bg-abyss/60 p-6 text-sm text-muted">
-              <span>Select the original file</span>
-              <input
-                type="file"
-                data-testid="resume-file-input"
-                onChange={async (event) => {
-                  const file = event.target.files?.[0];
-                  setResumeFile(null);
-                  setResumeFileError(null);
-                  if (!file) return;
-                  setResumeVerifying(true);
-                  try {
-                    const error = await verifyResumeFile(resumeTarget, file);
-                    if (error) {
-                      setResumeFileError(error);
-                    } else {
-                      setResumeFile(file);
+            {resumeTarget.packaged_from_folder ? (
+              <label className="mt-4 flex flex-col gap-2 rounded-2xl border border-dashed border-line bg-abyss/60 p-6 text-sm text-muted">
+                <span>Select the same folder</span>
+                <input
+                  type="file"
+                  multiple
+                  data-testid="resume-folder-input"
+                  {...({ webkitdirectory: "true", directory: "true" } as Record<string, string>)}
+                  onChange={async (event) => {
+                    const selected = Array.from(event.target.files ?? []);
+                    setResumeFile(null);
+                    setResumeFileError(null);
+                    if (!selected.length) return;
+                    setResumeVerifying(true);
+                    setResumeFolderPackProgress(0);
+                    try {
+                      const archive = await zipFolder(selected, { onProgress: setResumeFolderPackProgress });
+                      setResumeFolderPackProgress(1);
+                      const error = await verifyResumeFile(resumeTarget, archive);
+                      if (error) {
+                        setResumeFileError(error);
+                      } else {
+                        setResumeFile(archive);
+                      }
+                    } catch (packError) {
+                      setResumeFileError(packError instanceof Error ? packError.message : "Could not repack the selected folder.");
+                    } finally {
+                      setResumeVerifying(false);
                     }
-                  } finally {
-                    setResumeVerifying(false);
-                  }
-                }}
-              />
-              {resumeVerifying ? <span className="text-xs text-muted" data-testid="resume-verifying">Verifying selected file matches this upload session...</span> : null}
-              {resumeFileError ? <span className="text-xs text-danger" data-testid="resume-file-error">{resumeFileError}</span> : null}
-              {resumeFile && !resumeFileError && !resumeVerifying ? <span className="text-xs text-mint" data-testid="resume-file-verified">Verified &mdash; ready to resume.</span> : null}
-            </label>
+                  }}
+                />
+                {resumeVerifying && resumeFolderPackProgress !== null && resumeFolderPackProgress < 1 ? (
+                  <span className="text-xs text-muted" data-testid="resume-folder-pack-progress">Repacking folder... {Math.round(resumeFolderPackProgress * 100)}%</span>
+                ) : null}
+                {resumeVerifying && (resumeFolderPackProgress === null || resumeFolderPackProgress >= 1) ? <span className="text-xs text-muted" data-testid="resume-verifying">Verifying selected folder matches this upload session...</span> : null}
+                {resumeFileError ? <span className="text-xs text-danger" data-testid="resume-file-error">{resumeFileError}</span> : null}
+                {resumeFile && !resumeFileError && !resumeVerifying ? <span className="text-xs text-mint" data-testid="resume-file-verified">Verified &mdash; ready to resume.</span> : null}
+              </label>
+            ) : (
+              <label className="mt-4 flex flex-col gap-2 rounded-2xl border border-dashed border-line bg-abyss/60 p-6 text-sm text-muted">
+                <span>Select the original file</span>
+                <input
+                  type="file"
+                  data-testid="resume-file-input"
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0];
+                    setResumeFile(null);
+                    setResumeFileError(null);
+                    if (!file) return;
+                    setResumeVerifying(true);
+                    try {
+                      const error = await verifyResumeFile(resumeTarget, file);
+                      if (error) {
+                        setResumeFileError(error);
+                      } else {
+                        setResumeFile(file);
+                      }
+                    } finally {
+                      setResumeVerifying(false);
+                    }
+                  }}
+                />
+                {resumeVerifying ? <span className="text-xs text-muted" data-testid="resume-verifying">Verifying selected file matches this upload session...</span> : null}
+                {resumeFileError ? <span className="text-xs text-danger" data-testid="resume-file-error">{resumeFileError}</span> : null}
+                {resumeFile && !resumeFileError && !resumeVerifying ? <span className="text-xs text-mint" data-testid="resume-file-verified">Verified &mdash; ready to resume.</span> : null}
+              </label>
+            )}
             {(createSessionMutation.isPending || inspectionState === "failed") ? (
               <div className={`mt-5 rounded-2xl border p-4 text-sm ${inspectionState === "failed" ? "border-danger/40 bg-danger/10" : "border-line bg-abyss/60"}`} data-testid="inspection-progress-panel">
                 <p className={`font-semibold ${inspectionState === "failed" ? "text-danger" : "text-ink"}`}>{inspectionLabel}</p>

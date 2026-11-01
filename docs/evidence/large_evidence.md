@@ -97,8 +97,14 @@ the Velociraptor folder discovery) still send every file in one request and stay
 behind `BACKEND_ENABLE_EXPERIMENTAL_FOLDER_UPLOAD` with their file-count and size
 limits.
 
-An interrupted folder upload cannot be resumed after a page reload: the browser
-cannot reopen the folder by itself, so it has to be selected and sent again.
+An interrupted folder upload survives a page reload, within that limit: the browser
+cannot reopen the folder by itself, so the analyst has to select it again from
+the **Resume upload** step (a folder picker, not a single-file one, for a session
+packed from a folder). Kairon re-packs it (fast, local I/O: no compression, just
+reading each file once for its CRC-32) and reuses the same upload session by
+filename and size, so none of the bytes the server already received are sent
+again over the network -- only re-selecting the folder and re-packing it locally
+cannot be avoided.
 
 ## What Is and Isn't Deleted When Removing Evidence
 
