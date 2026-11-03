@@ -31,6 +31,7 @@ const getMemoryProcessTreeMock = vi.fn();
 const startMemoryScanMock = vi.fn();
 const renormalizeProcessEntitiesMock = vi.fn();
 const listMemoryRunsMock = vi.fn();
+const getMemoryRunMock = vi.fn();
 const getMemoryEvidenceLandingMock = vi.fn();
 const getMemoryActiveResultMock = vi.fn();
 const getMemoryAnalysisCatalogueMock = vi.fn();
@@ -55,6 +56,7 @@ vi.mock("../api/client", () => ({
     startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
     renormalizeProcessEntities: (...args: unknown[]) => renormalizeProcessEntitiesMock(...args),
     listMemoryRuns: (...args: unknown[]) => listMemoryRunsMock(...args),
+    getMemoryRun: (...args: unknown[]) => getMemoryRunMock(...args),
     getMemoryEvidenceLanding: (...args: unknown[]) => getMemoryEvidenceLandingMock(...args),
     getMemoryActiveResult: (...args: unknown[]) => getMemoryActiveResultMock(...args),
     getMemoryAnalysisCatalogue: (...args: unknown[]) => getMemoryAnalysisCatalogueMock(...args),
@@ -360,6 +362,13 @@ describe("MemoryAnalysisPage workspace", () => {
     listMemoryRunsMock.mockResolvedValue([
       { id: "run-basic", case_id: "case-1", evidence_id: "ev-memory", backend: "volatility3", profile: "processes_basic", status: "completed", requested_plugin_count: 4, plugin_count: 4, plugins_completed: 4, plugins_failed: 0, plugins_skipped: 0, started_at: "2026-06-16T00:00:00Z", completed_at: "2026-06-16T00:00:30Z", duration_ms: 30000, output_dir: null, metadata_json: {}, error_log: {}, backend_version: "2.28.0", worker_task_id: null, cancellation_requested: false, created_at: "2026-06-16T00:00:00Z" },
     ]);
+    getMemoryRunMock.mockResolvedValue({
+      id: "run-basic", case_id: "case-1", evidence_id: "ev-memory", backend: "volatility3", profile: "processes_basic", status: "completed",
+      requested_plugin_count: 4, plugin_count: 4, plugins_completed: 4, plugins_failed: 0, plugins_skipped: 0,
+      started_at: "2026-06-16T00:00:00Z", completed_at: "2026-06-16T00:00:30Z", duration_ms: 30000, output_dir: null,
+      metadata_json: {}, error_log: {}, backend_version: "2.28.0", worker_task_id: null, cancellation_requested: false,
+      created_at: "2026-06-16T00:00:00Z", plugin_runs: [],
+    });
     getMemoryEvidenceLandingMock.mockResolvedValue({
       case_id: "case-1",
       items: [
@@ -544,6 +553,44 @@ describe("MemoryAnalysisPage workspace", () => {
     await screen.findByTestId("run-row-run-mixed");
     expect(screen.getByTestId("run-row-run-mixed-failed")).toHaveTextContent("2");
     expect(screen.getByTestId("run-row-run-mixed-skipped")).toHaveTextContent("1");
+  });
+
+  it("shows per-plugin errors and the stderr preview when a run's details are opened", async () => {
+    const run = {
+      id: "run-mixed", case_id: "case-1", evidence_id: "ev-memory", backend: "volatility3", profile: "find_evil",
+      status: "completed_with_errors", requested_plugin_count: 3, plugin_count: 3, plugins_completed: 2, plugins_failed: 1,
+      plugins_skipped: 0, started_at: "2026-06-16T00:00:00Z", completed_at: "2026-06-16T00:01:00Z", duration_ms: 60000,
+      output_dir: null, metadata_json: {}, error_log: {}, backend_version: "2.28.0", worker_task_id: null,
+      cancellation_requested: false, created_at: "2026-06-16T00:00:00Z",
+    };
+    listMemoryRunsMock.mockResolvedValue([run]);
+    getMemoryRunMock.mockResolvedValue({
+      ...run,
+      plugin_runs: [
+        {
+          id: "plugin-info", memory_scan_run_id: "run-mixed", case_id: "case-1", evidence_id: "ev-memory",
+          plugin: "windows.info", status: "completed", started_at: null, completed_at: null, duration_ms: 1200,
+          row_count: 1, output_relative_path: null, output_sha256: null, output_size: null,
+          error_code: null, error_message: null, warning_code: null, warning_message: null, metadata_json: {}, created_at: "2026-06-16T00:00:00Z",
+        },
+        {
+          id: "plugin-findevil", memory_scan_run_id: "run-mixed", case_id: "case-1", evidence_id: "ev-memory",
+          plugin: "kairon.findevil", status: "failed", started_at: null, completed_at: null, duration_ms: 8000,
+          row_count: 0, output_relative_path: null, output_sha256: null, output_size: null,
+          error_code: "PLUGIN_FAILED", error_message: "Kairon's checks failed.",
+          warning_code: null, warning_message: null, metadata_json: { stderr_preview: "Traceback (most recent call last):\nKeyError: 'Kernel Base'" }, created_at: "2026-06-16T00:00:00Z",
+        },
+      ],
+    });
+    renderPage("/cases/case-1/memory/ev-memory/runs");
+    await screen.findByTestId("run-row-run-mixed");
+    expect(screen.getByText("1 plugin failed. Open details for the cause.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("run-row-run-mixed-toggle"));
+    expect(await screen.findByTestId("run-detail-run-mixed")).toBeInTheDocument();
+    expect(getMemoryRunMock).toHaveBeenCalledWith("run-mixed");
+    expect(await screen.findByText("PLUGIN_FAILED · Kairon's checks failed.")).toBeInTheDocument();
+    expect(screen.getByText(/Traceback \(most recent call last\)/)).toBeInTheDocument();
   });
 
   it("shows an empty state when the evidence has no runs", async () => {

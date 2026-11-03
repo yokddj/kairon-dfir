@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
-import { type MemoryEvidenceLandingItem, type MemoryScanRun } from "../../api/client";
+import { Fragment, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { type MemoryEvidenceLandingItem, type MemoryPluginRun, type MemoryRunDetail, type MemoryScanRun, api } from "../../api/client";
 
 type Props = {
   caseId: string;
@@ -30,7 +31,11 @@ function memoryRunError(run: MemoryScanRun): string {
   if (code === "VOLATILITY_OUTPUT_INVALID") return "Volatility ran, but its output could not be parsed.";
   if (code === "MEMORY_SYMBOL_CACHE_NOT_WRITABLE") return "The controlled Volatility symbol cache is not writable.";
   if (["MEMORY_EVIDENCE_PERMISSION_DENIED", "MEMORY_OUTPUT_PERMISSION_DENIED"].includes(code)) return "Evidence unavailable to memory worker. No plugin was executed.";
-  return typeof run.error_log?.message === "string" ? run.error_log.message : "None";
+  if (typeof run.error_log?.message === "string" && run.error_log.message) return run.error_log.message;
+  if (run.plugins_failed > 0) {
+    return `${run.plugins_failed} plugin${run.plugins_failed === 1 ? "" : "s"} failed. Open details for the cause.`;
+  }
+  return "None";
 }
 
 function formatSeconds(value: unknown): string | null {
@@ -66,7 +71,90 @@ function StatusBadge({ status }: { status: string }) {
   if (status === "failed") {
     return <span className="rounded-md border border-rose-400/30 bg-rose-500/10 px-2 py-0.5 text-[10px] text-rose-100">{status}</span>;
   }
+  if (["timed_out", "cancelled"].includes(status)) {
+    return <span className="rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-100">{status}</span>;
+  }
   return <span className="rounded-md border border-sky-400/30 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-100">{status}</span>;
+}
+
+function pluginErrorText(plugin: MemoryPluginRun): string | null {
+  if (plugin.error_code || plugin.error_message) {
+    return [plugin.error_code, plugin.error_message].filter(Boolean).join(" · ");
+  }
+  if (plugin.warning_code || plugin.warning_message) {
+    return [plugin.warning_code, plugin.warning_message].filter(Boolean).join(" · ");
+  }
+  return null;
+}
+
+function PluginDetailRow({ plugin }: { plugin: MemoryPluginRun }) {
+  const preview = typeof plugin.metadata_json?.stderr_preview === "string" ? plugin.metadata_json.stderr_preview : "";
+  const errorText = pluginErrorText(plugin);
+  return (
+    <tr className="border-t border-line align-top" data-testid={`run-plugin-${plugin.id}`}>
+      <td className="py-2 pr-3 font-mono text-ink">{plugin.plugin}</td>
+      <td className="py-2 pr-3"><StatusBadge status={plugin.status} /></td>
+      <td className="py-2 pr-3 text-muted">{durationLabel(plugin.duration_ms)}</td>
+      <td className="py-2 pr-3 text-muted">{plugin.row_count}</td>
+      <td className="py-2 pr-3">
+        {errorText ? (
+          <p className={plugin.error_code || plugin.error_message ? "text-rose-200" : "text-amber-200"}>{errorText}</p>
+        ) : (
+          <span className="text-muted">—</span>
+        )}
+        {preview ? (
+          <details className="mt-1">
+            <summary className="cursor-pointer text-accent">stderr preview</summary>
+            <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-abyss/70 p-2 text-[10px] text-muted">{preview}</pre>
+          </details>
+        ) : null}
+      </td>
+    </tr>
+  );
+}
+
+function RunPluginDetails({ runId }: { runId: string }) {
+  const detailQuery = useQuery<MemoryRunDetail>({
+    queryKey: ["memory-run-detail", runId],
+    queryFn: () => api.getMemoryRun(runId),
+    refetchOnWindowFocus: false,
+  });
+  if (detailQuery.isLoading) {
+    return <p className="px-3 py-2 text-xs text-muted" data-testid={`run-detail-${runId}-loading`}>Loading plugin details...</p>;
+  }
+  if (detailQuery.isError) {
+    const message = detailQuery.error instanceof Error ? detailQuery.error.message : "Unknown error";
+    return <p className="px-3 py-2 text-xs text-rose-200" data-testid={`run-detail-${runId}-error`}>Could not load plugin details: {message}</p>;
+  }
+  const plugins = detailQuery.data?.plugin_runs ?? [];
+  if (!plugins.length) {
+    return <p className="px-3 py-2 text-xs text-muted" data-testid={`run-detail-${runId}-empty`}>No plugin runs were recorded for this run.</p>;
+  }
+  return (
+    <div className="px-3 py-3" data-testid={`run-detail-${runId}`}>
+      <p className="mb-2 text-xs text-muted">
+        Per-plugin results for this run. A failed plugin shows its own error code and a stderr preview.
+      </p>
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-xs" data-testid={`run-detail-${runId}-table`}>
+          <thead>
+            <tr className="text-left uppercase tracking-[0.14em] text-muted">
+              <th className="py-1 pr-3">Plugin</th>
+              <th className="py-1 pr-3">Status</th>
+              <th className="py-1 pr-3">Duration</th>
+              <th className="py-1 pr-3">Rows</th>
+              <th className="py-1 pr-3">Error</th>
+            </tr>
+          </thead>
+          <tbody>
+            {plugins.map((plugin) => (
+              <PluginDetailRow key={plugin.id} plugin={plugin} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 export function MemoryRunsTab({ evidenceId, runs, landingItems }: Props) {
@@ -76,6 +164,7 @@ export function MemoryRunsTab({ evidenceId, runs, landingItems }: Props) {
   const profileOptions = useMemo(() => countBy(runs, (run) => run.profile), [runs]);
   const [failuresOnly, setFailuresOnly] = useState(false);
   const [query, setQuery] = useState("");
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     return runs
@@ -185,25 +274,49 @@ export function MemoryRunsTab({ evidenceId, runs, landingItems }: Props) {
                 <th className="px-3 py-2">Failed</th>
                 <th className="px-3 py-2">Skipped</th>
                 <th className="px-3 py-2">Error</th>
+                <th className="px-3 py-2">Details</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
-              {filtered.map((run) => (
-                <tr key={run.id} data-testid={`run-row-${run.id}`}>
-                  <td className="px-3 py-2"><StatusBadge status={run.status} /></td>
-                  {!evidenceId ? <td className="px-3 py-2 text-muted">{landingByEvidence.get(run.evidence_id)?.filename || `${run.evidence_id.slice(0, 8)}...`}</td> : null}
-                  {!evidenceId ? <td className="px-3 py-2 text-muted">{landingByEvidence.get(run.evidence_id)?.detected_host || "Unknown"}</td> : null}
-                  <td className="px-3 py-2 text-muted">{run.profile}</td>
-                  <td className="px-3 py-2 text-muted">{run.created_at}</td>
-                  <td className="px-3 py-2 text-muted">{durationLabel(run.duration_ms)}</td>
-                  <td className="px-3 py-2 text-muted">{run.backend || "—"}</td>
-                  <td className="px-3 py-2 text-muted">{run.plugins_completed}/{run.plugin_count}</td>
-                  <td className="px-3 py-2 text-muted">{memoryRunProgress(run)}</td>
-                  <td className="px-3 py-2 text-muted" data-testid={`run-row-${run.id}-failed`}>{run.plugins_failed}</td>
-                  <td className="px-3 py-2 text-muted" data-testid={`run-row-${run.id}-skipped`}>{run.plugins_skipped}</td>
-                  <td className="px-3 py-2 text-muted">{memoryRunError(run)}</td>
-                </tr>
-              ))}
+              {filtered.map((run) => {
+                const expanded = expandedRunId === run.id;
+                return (
+                  <Fragment key={run.id}>
+                    <tr data-testid={`run-row-${run.id}`}>
+                      <td className="px-3 py-2"><StatusBadge status={run.status} /></td>
+                      {!evidenceId ? <td className="px-3 py-2 text-muted">{landingByEvidence.get(run.evidence_id)?.filename || `${run.evidence_id.slice(0, 8)}...`}</td> : null}
+                      {!evidenceId ? <td className="px-3 py-2 text-muted">{landingByEvidence.get(run.evidence_id)?.detected_host || "Unknown"}</td> : null}
+                      <td className="px-3 py-2 text-muted">{run.profile}</td>
+                      <td className="px-3 py-2 text-muted">{run.created_at}</td>
+                      <td className="px-3 py-2 text-muted">{durationLabel(run.duration_ms)}</td>
+                      <td className="px-3 py-2 text-muted">{run.backend || "—"}</td>
+                      <td className="px-3 py-2 text-muted">{run.plugins_completed}/{run.plugin_count}</td>
+                      <td className="px-3 py-2 text-muted">{memoryRunProgress(run)}</td>
+                      <td className="px-3 py-2 text-muted" data-testid={`run-row-${run.id}-failed`}>{run.plugins_failed}</td>
+                      <td className="px-3 py-2 text-muted" data-testid={`run-row-${run.id}-skipped`}>{run.plugins_skipped}</td>
+                      <td className="px-3 py-2 text-muted">{memoryRunError(run)}</td>
+                      <td className="px-3 py-2">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedRunId(expanded ? null : run.id)}
+                          aria-expanded={expanded}
+                          className="rounded-lg border border-line bg-abyss/70 px-2 py-1 text-xs text-muted hover:text-ink"
+                          data-testid={`run-row-${run.id}-toggle`}
+                        >
+                          {expanded ? "Hide" : "Details"}
+                        </button>
+                      </td>
+                    </tr>
+                    {expanded ? (
+                      <tr className="bg-abyss/40">
+                        <td colSpan={evidenceId ? 11 : 13}>
+                          <RunPluginDetails runId={run.id} />
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

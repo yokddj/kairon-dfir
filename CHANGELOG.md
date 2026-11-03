@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Memory run details**: opening a run in the Runs tab lists every plugin with its status, duration, row count, error code and message, plus a bounded stderr preview, so a run that only says "2/3 plugins" names the step that failed and why. The preview is also kept in the plugin's metadata and in the run directory's `<plugin>.error.json`; before, the run's `.error.json` kept only the 160-character status message.
 - **Files** in the sidebar, listed when the case has a disk image or a collection: the case's browsable evidence by host, or the file explorer directly when there is only one. Host Information links to the files of the selected host.
 - **Windows notifications** (`wpndatabase.db`): toast, tile and badge notifications with the sending app, title, body text, launch target and arrival time, and each app registered to send notifications. Read with the database's WAL on a scratch copy. Discovery lists it in raw collections with its `-wal`/`-shm`; before, it was only an inventory entry. See [docs/artifacts/windows_notifications.md](docs/artifacts/windows_notifications.md).
 - **Browse files** for collections (ZIP/7z/TAR archives, uploaded folders, AD1 logical images): the disk file explorer shows the collection as one volume, with find and password-protected export. For AD1 images, the NTFS times, MD5/SHA1, owner and attributes FTK recorded at acquisition are shown and exports are checked against FTK's MD5.

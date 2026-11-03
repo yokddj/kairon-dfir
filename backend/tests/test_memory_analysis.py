@@ -3188,6 +3188,7 @@ def test_windows_info_failure_marks_one_failed_and_later_plugins_skipped(db_sess
     assert run.error_log["code"] == "SYMBOLS_UNAVAILABLE"
     assert plugin_runs["windows.info"].status == "failed"
     assert plugin_runs["windows.info"].metadata_json["return_code"] == 1
+    assert plugin_runs["windows.info"].metadata_json["stderr_preview"] == "symbol requirement"
     assert {plugin_runs[name].status for name in ("windows.pslist", "windows.pstree", "windows.cmdline")} == {"skipped_dependency"}
     assert run.plugins_skipped == 3
 
