@@ -1882,6 +1882,8 @@ export type MemoryPluginRun = {
   output_size: number | null;
   error_code: string | null;
   error_message: string | null;
+  warning_code: string | null;
+  warning_message: string | null;
   metadata_json: Record<string, unknown>;
   created_at: string;
 };

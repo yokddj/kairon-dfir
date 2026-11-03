@@ -219,7 +219,7 @@ The runner validates:
 
 The runner writes bounded raw JSON per plugin and a manifest under the evidence storage tree, stores run and plugin metadata in PostgreSQL, and indexes normalized `memory_system_info`, `memory_process`, `memory_process_edge`, selected memory artifacts, and raw-first process observations only into memory-scoped indices. It never writes to the existing disk events index.
 
-Each profile plugin executes independently. If one optional plugin fails or is unavailable, Kairon records the plugin terminal state and continues with later plugins where safe. The profile is marked `completed_with_errors`; successful plugin output remains available for normalization and reindexing. A valid empty JSON result is successful with zero observations. Invalid or partial JSON is a plugin failure.
+Each profile plugin executes independently. If one optional plugin fails or is unavailable, Kairon records the plugin terminal state and continues with later plugins where safe. The profile is marked `completed_with_errors`; successful plugin output remains available for normalization and reindexing. A valid empty JSON result is successful with zero observations. Invalid or partial JSON is a plugin failure. The Runs tab's **Details** view lists each plugin's terminal state, its error code and message, and a bounded stderr preview, so a partially completed run names the plugin that failed; the same preview is written to the run directory's `<plugin>.error.json`.
 
 Plugin availability states are `available`, `unsupported_by_installed_volatility`, `unsupported_for_platform`, and `disabled_by_configuration`. The catalogue shows plugin counts and unavailable-plugin reasons. Missing optional plugins do not make the whole memory backend unavailable.
 

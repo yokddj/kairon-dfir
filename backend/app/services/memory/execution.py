@@ -1414,6 +1414,19 @@ def _row_count(payload: Any) -> int:
     return 0
 
 
+def _stderr_preview(stderr: bytes) -> str:
+    """Keep enough of the tool's stderr to diagnose a failure.
+
+    ``_sanitize_message`` collapses newlines and caps at 160 characters,
+    which is right for a one-line status message but drops the traceback or
+    the plugin error that actually explains a failed memory step. The
+    preview is stored locally (plugin metadata and the run's error file), so
+    it keeps newlines and the paths the operator needs to act on.
+    """
+    text = stderr.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n").strip()
+    return text[:4096]
+
+
 def _write_plugin_error(run: MemoryScanRun, plugin_run: MemoryPluginRun, exc: VolatilityRunnerError) -> None:
     plugin_run.metadata_json = {
         **(plugin_run.metadata_json or {}),
@@ -1425,10 +1438,12 @@ def _write_plugin_error(run: MemoryScanRun, plugin_run: MemoryPluginRun, exc: Vo
     }
     if not exc.stderr:
         return
+    stderr_preview = _stderr_preview(exc.stderr)
+    plugin_run.metadata_json = {**plugin_run.metadata_json, "stderr_preview": stderr_preview}
     try:
         output_dir = memory_run_dir(run.case_id, run.evidence_id, run.id)
         safe_plugin = plugin_run.plugin.replace(".", "_")
-        write_atomic_json(output_dir / f"{safe_plugin}.error.json", {"plugin": plugin_run.plugin, "code": exc.code, "message": _sanitize_message(exc.message), "stderr": _sanitize_message(exc.stderr.decode("utf-8", errors="replace"))})
+        write_atomic_json(output_dir / f"{safe_plugin}.error.json", {"plugin": plugin_run.plugin, "code": exc.code, "message": _sanitize_message(exc.message), "stderr": stderr_preview})
     except Exception:  # noqa: BLE001
         logger.warning("memory plugin error file could not be written", extra={"run_id": run.id, "plugin_run_id": plugin_run.id})
 
