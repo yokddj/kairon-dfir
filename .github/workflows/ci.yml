@@ -136,6 +136,25 @@ jobs:
           OPENSEARCH_PORT: "9200"
         run: python -m pytest tests/integration -v -p no:cacheprovider
 
+  mcp-server-tests:
+    # mcp_server is a standalone client of Kairon's API -- it never imports
+    # app.*, so it has its own dependency set and runs independent of the
+    # backend-tests job above.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend/mcp_server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
   frontend-typecheck:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -261,3 +280,8 @@ jobs:
           set -e
           docker compose config 2>&1 | head -5
           echo "Docker Compose config valid"
+      - name: Docker Compose config (every optional profile)
+        run: |
+          set -e
+          COMPOSE_PROFILES=memory,experimental,native-probe,memory-symbols,mcp docker compose config > /dev/null
+          echo "Docker Compose config valid with every optional profile enabled"
