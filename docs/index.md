@@ -116,6 +116,7 @@ This documentation describes the real state of the platform. Partial capabilitie
 
 - [operations/troubleshooting.md](operations/troubleshooting.md): application-level functional troubleshooting.
 - [operations/ai-assistant.md](operations/ai-assistant.md): optional AI case assistant and provider configuration.
+- [operations/mcp-server.md](operations/mcp-server.md): optional MCP server for external read-only case access.
 - [operations/performance.md](operations/performance.md): performance profiles.
 - [operations/opensearch.md](operations/opensearch.md): OpenSearch mapping and behavior.
 - [operations/api_summary.md](operations/api_summary.md): high-level endpoint map.
