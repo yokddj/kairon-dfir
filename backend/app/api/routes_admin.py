@@ -6,11 +6,13 @@ from pydantic import BaseModel
 from datetime import datetime, timezone
 
 from app.core.database import get_db
+from app.models.service_token import ServiceToken
 from app.models.user import User
 from app.models.session import Session as UserSession
 from app.services.auth_utils import hash_password
 from app.services.auth_dependencies import get_current_user, require_admin
 from app.services.audit import log_audit
+from app.services import service_tokens as service_tokens_service
 from app.core.client_ip import client_ip
 
 router = APIRouter(tags=["admin"], prefix="/api/admin")
@@ -36,6 +38,10 @@ class UpdateUserRequest(BaseModel):
 class CaseAccessRequest(BaseModel):
     user_id: str
     role: str = "user"  # user or admin effective; legacy analyst/viewer normalized to user
+
+class CreateServiceTokenRequest(BaseModel):
+    name: str
+    expires_in_days: int | None = None  # omitted/null: never expires
 
 @router.get("/users")
 def list_users(db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
@@ -208,3 +214,40 @@ def revoke_case_access(case_id: str, user_id: str, db: Session = Depends(get_db)
         log_audit("case_access_revoke", actor_user_id=_admin.id, case_id=case_id,
                   resource_type="case_access", resource_id=user_id)
     return {"status": "revoked", "case_id": case_id, "user_id": user_id}
+
+
+# --- Service tokens ----------------------------------------------------
+#
+# A read-only, every-case credential for a non-interactive client (an MCP
+# server, a script) that cannot use a browser session cookie. See
+# app.services.service_tokens for the authentication side of this.
+
+@router.get("/service-tokens")
+def list_service_tokens(db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+    rows = db.query(ServiceToken).order_by(ServiceToken.created_at.desc()).all()
+    return [service_tokens_service.serialize(row) for row in rows]
+
+@router.post("/service-tokens", status_code=201)
+def create_service_token(payload: CreateServiceTokenRequest, db: Session = Depends(get_db), admin_user: User = Depends(require_admin)):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    if payload.expires_in_days is not None and payload.expires_in_days < 1:
+        raise HTTPException(status_code=400, detail="expires_in_days must be a positive number of days")
+    row, plaintext = service_tokens_service.create_token(
+        db, name=name, created_by=admin_user.id, expires_in_days=payload.expires_in_days,
+    )
+    log_audit("service_token_create", actor_user_id=admin_user.id, resource_type="service_token", resource_id=row.id,
+              metadata={"name": row.name, "expires_at": row.expires_at})
+    # The plaintext token is returned exactly once, here, and never again --
+    # it is not recoverable from storage, only its hash is kept.
+    return {**service_tokens_service.serialize(row), "token": plaintext}
+
+@router.delete("/service-tokens/{token_id}")
+def revoke_service_token(token_id: str, db: Session = Depends(get_db), admin_user: User = Depends(require_admin)):
+    row = service_tokens_service.revoke_token(db, token_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Service token not found")
+    log_audit("service_token_revoke", actor_user_id=admin_user.id, resource_type="service_token", resource_id=row.id,
+              metadata={"name": row.name})
+    return service_tokens_service.serialize(row)

@@ -1190,6 +1190,18 @@
     "updated_at",
     "validation_errors"
   ],
+  "service_tokens": [
+    "created_at",
+    "created_by",
+    "expires_at",
+    "id",
+    "last_used_at",
+    "name",
+    "revoked_at",
+    "scope",
+    "token_hash",
+    "token_prefix"
+  ],
   "sessions": [
     "created_at",
     "expires_at",
