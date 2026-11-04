@@ -2970,3 +2970,30 @@ def _v42_memory_file_extractions(connection: Connection) -> None:
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_file_extractions_evidence_id ON memory_file_extractions (evidence_id)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_file_extractions_status ON memory_file_extractions (status)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_file_extractions_case_evidence ON memory_file_extractions (case_id, evidence_id)"))
+
+
+@register(43, "service_tokens")
+def _v43_service_tokens(connection: Connection) -> None:
+    """Long-lived, read-only credentials for non-interactive clients (an MCP
+    server, a script) calling the API with ``Authorization: Bearer`` instead
+    of a browser session cookie. See app.models.service_token.ServiceToken.
+    """
+    inspector = _inspector_for(connection)
+    if "service_tokens" in inspector.get_table_names():
+        return
+    id_type = "UUID" if connection.dialect.name == "postgresql" else "VARCHAR(36)"
+    connection.execute(text(f"""
+        CREATE TABLE service_tokens (
+            id {id_type} PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            token_hash VARCHAR(128) NOT NULL UNIQUE,
+            token_prefix VARCHAR(32) NOT NULL,
+            scope VARCHAR(64) NOT NULL DEFAULT 'read_only_all_cases',
+            created_at TIMESTAMP NOT NULL,
+            created_by VARCHAR(64),
+            expires_at TIMESTAMP,
+            revoked_at TIMESTAMP,
+            last_used_at TIMESTAMP
+        )
+    """))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_service_tokens_token_hash ON service_tokens (token_hash)"))

@@ -6,9 +6,30 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.user import User
 from app.models.case_access import CaseAccess
+from app.models.service_token import ServiceToken
 from app.models.session import Session as UserSession
 from app.services.auth_utils import hash_token
 from datetime import datetime, timezone
+
+
+class ServiceTokenPrincipal:
+    """Stands in for a human ``User`` when a request authenticated with a
+    service token instead of a session cookie. Deliberately minimal and not
+    a ``User`` subclass: code that branches on ``isinstance(x, User)`` must
+    not accidentally treat this as one and grant it a human's privileges.
+
+    ``is_admin`` is always ``False`` -- a service token is never allowed
+    into anything admin-only (user management, other service tokens,
+    case access grants), regardless of its scope.
+    """
+
+    is_admin = False
+    is_active = True
+
+    def __init__(self, token: ServiceToken):
+        self.token = token
+        self.id = f"service-token:{token.id}"
+        self.scope = token.scope
 
 
 def _get_session_user_dep(request: Request, db: Session) -> User | None:
@@ -64,7 +85,13 @@ def get_optional_user(request: Request, db: Session = Depends(get_db)) -> User |
     return _get_session_user_dep(request, db)
 
 
-def get_effective_case_role(user: User, case_id: str, db: Session) -> str | None:
+def get_effective_case_role(user: User | ServiceTokenPrincipal, case_id: str, db: Session) -> str | None:
+    if isinstance(user, ServiceTokenPrincipal):
+        # By design a service token's scope is every case: granting access
+        # case by case, the way a human user gets it, would make an
+        # automated integration re-grant access every time a new case is
+        # opened. See app.services.service_tokens for the rationale.
+        return user.scope
     if user.is_admin:
         return "admin"
     access = db.query(CaseAccess).filter(

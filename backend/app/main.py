@@ -113,46 +113,46 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Allow static files
         if path.startswith("/static") or path.startswith("/favicon"):
             return await call_next(request)
-        
-        # Check session for all other paths
-        token = request.cookies.get("kairon_session")
-        if not token:
-            return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
-        
+
         from app.core.database import SessionLocal
-        from app.services.auth_utils import hash_token
-        from app.models.session import Session as UserSession
         from app.models.user import User
-        from datetime import datetime, timezone
-        
+        from app.services.auth_dependencies import ServiceTokenPrincipal, get_effective_case_role
+
         db = SessionLocal()
         try:
-            token_h = hash_token(token)
-            session = db.query(UserSession).filter(
-                UserSession.token_hash == token_h,
-                UserSession.revoked_at == None,
-            ).first()
-            if not session:
+            cookie = request.cookies.get("kairon_session")
+            user: User | ServiceTokenPrincipal | None = None
+
+            if cookie:
+                user = self._authenticate_session(db, cookie)
+                if user is None:
+                    return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+            else:
+                # No browser session: the only other way in is a service
+                # token, for a non-interactive client (an MCP server, a
+                # script) calling the API with Authorization: Bearer.
+                authorization = request.headers.get("authorization")
+                token_error = self._authenticate_service_token(db, authorization, method=request.method)
+                if isinstance(token_error, JSONResponse):
+                    return token_error
+                user = token_error
+
+            if user is None:
                 return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
-            if session.expires_at < datetime.now(timezone.utc).isoformat():
-                session.revoked_at = datetime.now(timezone.utc).isoformat()
-                db.commit()
-                return JSONResponse(status_code=401, content={"detail": "Session expired"})
-            user = db.get(User, session.user_id)
-            if not user or not user.is_active:
-                return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
-            # Store user in request state for route handlers
+
+            # Store the principal in request state for route handlers.
             request.state.user = user
 
-            # Authorise the case centrally. There are 180 case-scoped endpoints
-            # across 27 route modules; enforcing this per route means the next
-            # one added forgets it, and the gap is invisible until someone sees
-            # another client's evidence. An admin is allowed everywhere, so
-            # deployments with only admins are unaffected.
+            # Authorise the case centrally. There are 180+ case-scoped
+            # endpoints across dozens of route modules; enforcing this per
+            # route means the next one added forgets it, and the gap is
+            # invisible until someone sees another client's evidence. An
+            # admin is allowed everywhere, so deployments with only admins
+            # are unaffected. A service token's scope is every case by
+            # design (see app.services.service_tokens), so this is a no-op
+            # for it beyond the read-only check already applied above.
             case_id = requested_case_id(path, request.query_params)
-            if case_id and not user.is_admin:
-                from app.services.auth_dependencies import get_effective_case_role
-
+            if case_id and not getattr(user, "is_admin", False):
                 if get_effective_case_role(user, case_id, db) is None:
                     return JSONResponse(
                         status_code=403,
@@ -162,6 +162,57 @@ class AuthMiddleware(BaseHTTPMiddleware):
             db.close()
         
         return await call_next(request)
+
+    @staticmethod
+    def _authenticate_session(db, cookie: str):
+        from app.services.auth_utils import hash_token
+        from app.models.session import Session as UserSession
+        from app.models.user import User
+        from datetime import datetime, timezone
+
+        token_h = hash_token(cookie)
+        session = db.query(UserSession).filter(
+            UserSession.token_hash == token_h,
+            UserSession.revoked_at == None,
+        ).first()
+        if not session:
+            return None
+        if session.expires_at < datetime.now(timezone.utc).isoformat():
+            session.revoked_at = datetime.now(timezone.utc).isoformat()
+            db.commit()
+            return None
+        user = db.get(User, session.user_id)
+        if not user or not user.is_active:
+            return None
+        return user
+
+    @staticmethod
+    def _authenticate_service_token(db, authorization: str | None, *, method: str):
+        """Resolve a service token from the Authorization header.
+
+        Returns the ``ServiceTokenPrincipal`` on success, a ``JSONResponse``
+        to short-circuit the request on failure, or ``None`` if there is no
+        bearer token at all (falls through to the usual 401).
+        """
+        from app.services.auth_dependencies import ServiceTokenPrincipal
+        from app.services.service_tokens import authenticate, touch_last_used
+
+        if not authorization:
+            return None
+        token = authenticate(db, authorization)
+        if token is None:
+            return None
+        # A service token is read-only by construction, never admin, never
+        # able to mutate state -- enforced here too, not just by omission
+        # from the tool surface that calls it, in case a future client
+        # tries a raw POST/PUT/PATCH/DELETE with it directly.
+        if method.upper() not in ("GET", "HEAD"):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Service tokens are read-only"},
+            )
+        touch_last_used(db, token)
+        return ServiceTokenPrincipal(token)
 
 
 app.add_middleware(AuthMiddleware)

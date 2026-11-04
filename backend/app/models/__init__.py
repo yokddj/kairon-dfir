@@ -32,6 +32,7 @@ from app.models.memory import (
     MemorySymbolRequirement,
 )
 from app.models.rule import Rule
+from app.models.service_token import ServiceToken
 from app.models.session import Session
 from app.models.rule_import_run import RuleImportRun
 from app.models.rule_set import RuleSet
