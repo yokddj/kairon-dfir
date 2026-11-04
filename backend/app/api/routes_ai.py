@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -40,6 +41,7 @@ from app.services.ai.history import (
 )
 from app.services.ai.providers import ProviderError, build_provider
 from app.services.ai.report_draft import ReportDraftUnavailable, ai_draft_status
+from app.services.ai.tools import TOOL_SPECS, run_tool
 from app.services.audit import log_audit
 from app.services.auth_dependencies import get_current_user, get_effective_case_role, get_optional_user
 
@@ -371,6 +373,90 @@ def case_ai_nl_search(
     except ProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"query": query}
+
+
+@router.get("/api/ai/tools")
+def ai_tools_catalog() -> dict:
+    """The read-only lookup tools available on any case, with their JSON
+    Schema parameters -- the same tools the in-app assistant calls, and the
+    same set an external MCP server exposes. This is the catalog, not case
+    data, so it is not case-scoped (same as /api/ai/config, /api/ai/status):
+    an external MCP server can discover it once, independent of which case
+    it is later asked about, and listing it does not require the assistant
+    to be enabled -- the tools read a case directly, independent of any
+    model provider being configured.
+    """
+    return {"tools": TOOL_SPECS}
+
+
+def _coerce_tool_args(tool_name: str, raw_args: dict[str, str]) -> dict:
+    """Query parameters arrive as strings; a tool's own code assumes the
+    types its schema promises (``bool(args.get("suspicious_only"))`` is
+    wrong for the string ``"false"``, which Python treats as truthy). This
+    converts each argument to the type TOOL_SPECS declares for it, the way a
+    JSON-speaking caller (the chat loop's model) would have sent it already.
+
+    An argument not in the tool's schema, or a value that does not parse as
+    its declared type, is passed through as the original string: the tool
+    (or run_tool's own error handling) reports that, rather than this layer
+    guessing and failing silently.
+    """
+    spec = next((item for item in TOOL_SPECS if item["name"] == tool_name), None)
+    if spec is None:
+        return dict(raw_args)
+    properties = spec.get("input_schema", {}).get("properties", {})
+    coerced: dict[str, Any] = {}
+    for key, value in raw_args.items():
+        declared_type = properties.get(key, {}).get("type")
+        if declared_type == "boolean":
+            lowered = value.strip().lower()
+            if lowered in ("true", "1", "yes"):
+                coerced[key] = True
+            elif lowered in ("false", "0", "no", ""):
+                coerced[key] = False
+            else:
+                coerced[key] = value
+        elif declared_type == "integer":
+            try:
+                coerced[key] = int(value)
+            except ValueError:
+                coerced[key] = value
+        elif declared_type == "number":
+            try:
+                coerced[key] = float(value)
+            except ValueError:
+                coerced[key] = value
+        else:
+            coerced[key] = value
+    return coerced
+
+
+@router.get("/api/cases/{case_id}/ai/tools/{tool_name}")
+def case_ai_tool_call(
+    case_id: str,
+    tool_name: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+) -> dict:
+    """Run one read-only lookup tool directly, bypassing the chat/model loop.
+
+    Every tool in TOOL_SPECS takes only scalar arguments (string, integer,
+    boolean -- never an array or nested object), so every one of them is
+    reachable through query parameters alone and this endpoint is a plain
+    GET. That matters beyond convenience: it is what lets a read-only
+    service token (which this project never lets perform a write, see
+    app.services.service_tokens) use every tool, since such a token is
+    refused on any method but GET/HEAD.
+
+    This is the endpoint an external MCP server calls; see
+    docs/operations/mcp-server.md. The in-app assistant does not use it --
+    it calls run_tool() in-process as part of its chat loop -- so this path
+    has no effect on, and needs no change for, that conversation history.
+    """
+    _require_case_access(db, case_id, user)
+    args = _coerce_tool_args(tool_name, dict(request.query_params))
+    return run_tool(db, case_id, tool_name, args)
 
 
 @router.get("/api/cases/{case_id}/ai/conversations")
