@@ -397,6 +397,43 @@ services:
     ports:
       - "5173:80"
 
+  mcp-server:
+    # Optional: a generic MCP server for any MCP-compatible client (an IDE,
+    # a desktop assistant, a chat application with MCP support) to look at
+    # a case's parsed data read-only. Off by default -- enable with
+    # `docker compose --profile mcp up -d`. See docs/operations/mcp-server.md.
+    profiles:
+      - mcp
+    build:
+      context: .
+      dockerfile: backend/mcp_server/Dockerfile
+      args:
+        KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    environment:
+      # Talks to the backend over the same Docker network, not through the
+      # frontend's /api proxy -- this server is not a browser client.
+      KAIRON_API_URL: http://backend:8000
+      # Create a read-only token as an administrator first:
+      # POST /api/admin/service-tokens. There is no default: this server
+      # refuses to start without one (see mcp_server.kairon_client.from_env).
+      KAIRON_SERVICE_TOKEN: ${KAIRON_MCP_SERVICE_TOKEN:-}
+    ports:
+      - "${KAIRON_MCP_BIND:-127.0.0.1}:8800:8800"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    user: "10001:10001"
+
 volumes:
   postgres_data:
   opensearch_data:
