@@ -79,15 +79,18 @@ def _gdb_executable() -> str | None:
 # gdb batch mode always exits 0 regardless of the debuggee's outcome, so the real result is
 # read back from these two gdb-internal convenience variables instead of the gdb process's own
 # exit code. $_exitsignal is only defined (non-void) if the debuggee was killed by a signal;
-# $_exitcode is only defined if it exited normally. gdb's own `printf` prints a literal "Value
-# can't be converted to integer." for a void value instead of failing the command, so a
-# KAIRON_EXITSIGNAL=<digits> line is unambiguous proof of a real signal, never a false positive
-# -- but either way (digits or that literal message) the whole line is stripped from the
-# child's stdout before anything downstream parses it.
-_GDB_SIGNAL_LINE_RE = re.compile(r"^KAIRON_EXITSIGNAL=.*$\n?", re.MULTILINE)
-_GDB_EXITCODE_LINE_RE = re.compile(r"^KAIRON_EXITCODE=.*$\n?", re.MULTILINE)
-_GDB_SIGNAL_VALUE_RE = re.compile(r"KAIRON_EXITSIGNAL=(\d+)")
-_GDB_EXITCODE_VALUE_RE = re.compile(r"KAIRON_EXITCODE=(\d+)")
+# $_exitcode is only defined if it exited normally. A KAIRON_EXITSIGNAL=<digits> line is
+# unambiguous proof of a real signal, never a false positive.
+#
+# When the variable being printf'd is void (the other one, always exactly one of the two per
+# run), gdb's own `printf` does NOT write a tidy "KAIRON_EXITCODE=Value can't be converted to
+# integer." to one stream: it writes the literal portion of the format string up to the %d
+# ("KAIRON_EXITCODE=", no trailing newline) to *stdout* first, then the conversion error
+# ("Value can't be converted to integer.", on its own line) to *stderr* separately, aborting
+# before stdout gets its newline (verified: this is gdb's real, if clunky, behavior, not a
+# truncation bug on Kairon's side). Both streams need cleaning up for either marker.
+_GDB_MARKER_RE = re.compile(r"KAIRON_EXIT(?:SIGNAL|CODE)=(?:(\d+)\n?)?")
+_GDB_CONVERSION_ERROR_RE = re.compile(r"^Value can't be converted to integer\.\s*\n?", re.MULTILINE)
 
 
 def _run_findevil_under_gdb(
@@ -120,7 +123,12 @@ def _run_findevil_under_gdb(
         "-ex", "set logging redirect on",
         "-ex", "set logging enabled on",
         "-ex", "run",
-        "-ex", "bt",
+        # MemProcFS's forensic mode runs several worker threads; `thread apply all bt` captures
+        # every thread's stack (gdb already switches to and highlights the one that actually
+        # received the signal), which is far more useful for an upstream report than only the
+        # thread gdb happens to be on -- at negligible extra cost since the process is already
+        # stopped at this point either way.
+        "-ex", "thread apply all bt",
         # If the debuggee was killed by a signal, gdb stops it for inspection instead of letting
         # the signal actually finish killing it, so $_exitsignal stays undefined until the
         # signal is let through: harmless no-op ("The program is not being run.") when the
@@ -143,22 +151,37 @@ def _run_findevil_under_gdb(
         timeout_label=FINDEVIL_PLUGIN,
         cancellation_check=cancellation_check,
     )
-    # The KAIRON_EXITSIGNAL/KAIRON_EXITCODE marker lines are themselves gdb output and must not
-    # leak into the child's real stdout (the FindEvil JSON parser downstream expects only that).
-    text = stdout.decode("utf-8", "replace")
-    signal_match = _GDB_SIGNAL_VALUE_RE.search(text)
-    exitcode_match = _GDB_EXITCODE_VALUE_RE.search(text)
-    clean_text = _GDB_SIGNAL_LINE_RE.sub("", _GDB_EXITCODE_LINE_RE.sub("", text))
-    clean_stdout = clean_text.encode("utf-8", "replace")
-    exit_signal = int(signal_match.group(1)) if signal_match else None
-    exit_code = int(exitcode_match.group(1)) if exitcode_match and exit_signal is None else None
+    # The KAIRON_EXITSIGNAL/KAIRON_EXITCODE markers (and, when one of them was void, gdb's
+    # "Value can't be converted to integer." conversion error) are gdb's own output and must not
+    # leak into the child's real stdout/stderr (the FindEvil JSON parser downstream expects only
+    # the child's own stdout) -- across *both* streams, since which marker ends up where depends
+    # on which variable was void (see _GDB_MARKER_RE's comment above).
+    stdout_text = stdout.decode("utf-8", "replace")
+    stderr_text = stderr.decode("utf-8", "replace")
+    exit_signal: int | None = None
+    exit_code: int | None = None
+    for text in (stdout_text, stderr_text):
+        for match in _GDB_MARKER_RE.finditer(text):
+            if match.group(1) is None:
+                continue
+            if "SIGNAL" in match.group(0):
+                exit_signal = int(match.group(1))
+            else:
+                exit_code = int(match.group(1))
+    if exit_signal is not None:
+        exit_code = None  # a signal kill always wins over a stale/void exit_code read
+    clean_stdout = _GDB_CONVERSION_ERROR_RE.sub("", _GDB_MARKER_RE.sub("", stdout_text)).encode("utf-8", "replace")
+    clean_stderr = _GDB_CONVERSION_ERROR_RE.sub("", _GDB_MARKER_RE.sub("", stderr_text)).encode("utf-8", "replace")
     backtrace_text = ""
     if crash_log.is_file():
         try:
-            backtrace_text = crash_log.read_text(encoding="utf-8", errors="replace")[:16384]
+            # Kept generous (not the 16384 char cap used when this instead ends up as a
+            # VolatilityRunnerError's exposed message): this is the full artifact an operator
+            # would want to actually read or attach to an upstream report, not a short preview.
+            backtrace_text = crash_log.read_text(encoding="utf-8", errors="replace")[:262144]
         except OSError:
             pass
-    return clean_stdout, stderr, exit_code, exit_signal, backtrace_text, duration_ms
+    return clean_stdout, clean_stderr, exit_code, exit_signal, backtrace_text, duration_ms
 
 
 def run_findevil(
@@ -236,13 +259,25 @@ def run_findevil(
                     stderr=retry_stderr,
                     duration_ms=duration_ms,
                 )
-            stdout, stderr = retry_stdout, retry_stderr
+            # retry_stderr is gdb's *own* stderr, not the plugin's: besides warnings like
+            # "Error disabling address space randomization", a multi-threaded crash (MemProcFS's
+            # forensic mode runs several worker threads) reliably makes gdb print "Unable to
+            # fetch general registers: No such process" while it tries to inspect threads that
+            # have already exited mid-crash (verified: this is harmless noise, not a parsing or
+            # retry failure -- the backtrace itself is still captured correctly in the same
+            # run). Showing that raw noise to the user as "the error" was confusing and useless;
+            # the backtrace is the actually useful diagnostic, so it becomes the exposed stderr
+            # instead, and gdb's own stderr only goes to the worker's own logs.
+            stdout = retry_stdout
+            stderr = backtrace_text.encode("utf-8", "replace") if backtrace_text else retry_stderr
             if retry_exit_signal is not None:
                 returncode = -retry_exit_signal
             elif retry_exit_code is not None:
                 returncode = retry_exit_code
             if backtrace_text:
                 logger.warning("MemProcFS FindEvil crash backtrace (gdb):\n%s", backtrace_text)
+            if retry_stderr:
+                logger.warning("MemProcFS FindEvil gdb-retry's own stderr (not the plugin's; informational):\n%s", retry_stderr.decode("utf-8", "replace"))
     if returncode != 0:
         if returncode < 0:
             signal_name = _signal_name(returncode)

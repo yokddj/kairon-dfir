@@ -184,17 +184,61 @@ def test_crash_retry_can_be_disabled(tmp_path, library, monkeypatch) -> None:
 def test_gdb_wrapper_strips_its_own_markers_and_parses_exit_signal(tmp_path, monkeypatch) -> None:
     # Exercises _run_findevil_under_gdb's own output parsing in isolation (without a real gdb
     # binary), since that parsing -- not gdb itself -- is what Kairon's code owns and can regress.
+    # Shaped like gdb's actual behavior when the debuggee was killed by a signal (verified
+    # against a real gdb): the literal part of the `printf "KAIRON_EXITCODE=%d\n", $_exitcode`
+    # format string (up to the %d) lands on stdout with no trailing newline, since $_exitcode is
+    # void and the command aborts before writing it; the conversion error itself goes to stderr
+    # separately, on its own line, without repeating the "KAIRON_EXITCODE=" prefix.
     def fake_run_isolated_process(argv, **kwargs):
         assert argv[0] == "/usr/bin/gdb"
         assert "--args" in argv
-        fake_gdb_stdout = (
-            b"real program output line\n"
-            b"KAIRON_EXITSIGNAL=11\n"
-            b"KAIRON_EXITCODE=Value can't be converted to integer.\n"
-        )
+        fake_gdb_stdout = b"real program output line\nKAIRON_EXITSIGNAL=11\nKAIRON_EXITCODE="
+        fake_gdb_stderr = b"Value can't be converted to integer.\n"
         crash_log = kwargs["work_dir"] / memprocfs_runner.CRASH_LOG_FILENAME
         crash_log.write_text("Program received signal SIGSEGV\n#0 0xdead in vmm_so_internal ()\n")
-        return fake_gdb_stdout, b"", 0, 42
+        return fake_gdb_stdout, fake_gdb_stderr, 0, 42
+
+    monkeypatch.setattr(memprocfs_runner, "run_isolated_process", fake_run_isolated_process)
+    stdout, stderr, exit_code, exit_signal, backtrace, duration_ms = memprocfs_runner._run_findevil_under_gdb(
+        ["python3", "-m", "app.services.memory.memprocfs_findevil"],
+        work_dir=tmp_path,
+        env={},
+        timeout_seconds=60,
+        max_output_bytes=1024,
+        gdb_executable="/usr/bin/gdb",
+        cancellation_check=None,
+    )
+    assert stdout == b"real program output line\n"
+    assert stderr == b""
+    assert exit_code is None
+    assert exit_signal == 11
+    assert "SIGSEGV" in backtrace
+    assert duration_ms == 42
+
+
+def test_gdb_wrapper_handles_markers_and_noise_on_stderr(tmp_path, monkeypatch) -> None:
+    # A multi-threaded crash (MemProcFS's forensic mode runs several worker threads) makes gdb
+    # print "Unable to fetch general registers: No such process" to its *own* stderr while trying
+    # to inspect threads that already exited mid-crash -- harmless gdb noise, not a real failure
+    # -- and gdb's own printf for the not-applicable variable (KAIRON_EXITCODE here, since the
+    # process was killed by a signal) goes to stderr too, not stdout. Reproduces what a real
+    # multi-threaded MemProcFS crash looked like in practice (see PROJECT_CONTEXT.md): the
+    # wrapper must still parse the signal correctly and must not leak either kind of noise into
+    # the stderr it hands back.
+    def fake_run_isolated_process(argv, **kwargs):
+        # KAIRON_EXITCODE='s prefix (no digits, no newline) lands on stdout -- gdb aborts the
+        # printf before writing them, since $_exitcode is void here -- while the conversion
+        # error itself goes to stderr on its own line, verified against a real gdb.
+        fake_gdb_stdout = b"real program output line\nKAIRON_EXITSIGNAL=11\nKAIRON_EXITCODE="
+        fake_gdb_stderr = (
+            b"warning: Error disabling address space randomization: Operation not permitted\n"
+            b"Unable to fetch general registers: No such process.\n"
+            b"Unable to fetch general registers: No such process.\n"
+            b"Value can't be converted to integer.\n"
+        )
+        crash_log = kwargs["work_dir"] / memprocfs_runner.CRASH_LOG_FILENAME
+        crash_log.write_text("Program received signal SIGSEGV\nThread 7 ...\n#0 0xdead in vmm_so_internal ()\n")
+        return fake_gdb_stdout, fake_gdb_stderr, 0, 77
 
     monkeypatch.setattr(memprocfs_runner, "run_isolated_process", fake_run_isolated_process)
     stdout, stderr, exit_code, exit_signal, backtrace, duration_ms = memprocfs_runner._run_findevil_under_gdb(
@@ -209,8 +253,28 @@ def test_gdb_wrapper_strips_its_own_markers_and_parses_exit_signal(tmp_path, mon
     assert stdout == b"real program output line\n"
     assert exit_code is None
     assert exit_signal == 11
+    assert b"KAIRON_EXITCODE" not in stderr
+    assert b"Unable to fetch general registers" in stderr  # kept in the raw stream; run_findevil decides whether to surface it
     assert "SIGSEGV" in backtrace
-    assert duration_ms == 42
+
+
+def test_crash_exposes_the_backtrace_not_gdbs_own_noisy_stderr(tmp_path, library, monkeypatch) -> None:
+    # Regression test for the real symptom reported from production: the plugin's error showed
+    # gdb's own "Couldn't get registers: No such process" noise as if it were useful diagnostic
+    # information. The backtrace -- not gdb's raw stderr -- must be what callers see.
+    monkeypatch.setattr(memprocfs_runner, "run_isolated_process", lambda argv, **kwargs: (b"", b"", -11, 10))
+    monkeypatch.setattr(memprocfs_runner, "_gdb_executable", lambda: "/usr/bin/gdb")
+    noisy_gdb_stderr = b"Unable to fetch general registers: No such process.\n" * 3
+    real_backtrace = "Program received signal SIGSEGV\nThread 7 (LWP 1234):\n#0 0xdead in vmm_so_internal ()\n"
+    monkeypatch.setattr(
+        memprocfs_runner,
+        "_run_findevil_under_gdb",
+        lambda argv, **kwargs: (b"", noisy_gdb_stderr, None, 11, real_backtrace, 50),
+    )
+    with pytest.raises(VolatilityRunnerError) as exc:
+        memprocfs_runner.run_findevil(tmp_path / "image.dmp", tmp_path, timeout_seconds=60, max_output_bytes=1024)
+    assert b"Unable to fetch general registers" not in exc.value.stderr
+    assert exc.value.stderr.decode() == real_backtrace
 
 
 def test_execution_sends_findevil_to_memprocfs_not_volatility(tmp_path, monkeypatch) -> None:
