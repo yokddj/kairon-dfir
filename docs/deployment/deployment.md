@@ -64,6 +64,24 @@ Default endpoints once the stack is up:
 - frontend: `http://localhost:5173`
 - backend docs: `http://localhost:8000/docs`
 
+## Deploy vs upgrade
+
+- **First install, or you intentionally want to reconfigure from scratch** (change deployment
+  mode, regenerate secrets, etc.): `bash scripts/setup.sh`. It runs the interactive wizard
+  (or `--non-interactive` with flags) and writes a new `.env`.
+- **An existing deployment that already has a working `.env`** (new Kairon version, a config
+  tweak like `KAIRON_API_PORT`, or just restarting after a host reboot): `./scripts/upgrade.sh`
+  instead. It pulls the latest code, preserves the existing `.env` and all its secrets, migrates
+  newly added settings into it, then rebuilds and restarts. It does not run the interactive
+  wizard and does not touch `KAIRON_DEPLOYMENT_MODE`, `KAIRON_PUBLIC_URL`, or any secret.
+
+Re-running `setup.sh`'s interactive wizard against an existing deployment also works (it detects
+the existing `.env` and offers to keep its secrets), but `upgrade.sh` is the more direct,
+scriptable path for a deployment that is already configured the way you want it. To change a
+single setting (e.g. a port) without going through either wizard, edit `.env` directly and run
+`docker compose up -d --build`, or use `./scripts/upgrade.sh` to also pick up any new upstream
+settings at the same time.
+
 ## Environment Variables Reference
 
 ### Database / queue

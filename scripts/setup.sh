@@ -149,34 +149,77 @@ port_in_use() {
   ss -tlnp 2>/dev/null | grep -q ":${port} " || lsof -i ":${port}" >/dev/null 2>&1
 }
 
-check_ports() {
-  # Skip entirely if this project's own containers are already up: a re-run
-  # of setup.sh against an already-running stack (no --upgrade, no
-  # --force-recreate) is a legitimate restart, and the ports in use are
-  # Kairon's own, not an external conflict.
-  if docker compose ps --services --status running 2>/dev/null | grep -q .; then
-    return 0
-  fi
+# True if the container currently publishing `port` (if any) is one of this project's own
+# compose containers. Checked per port (not "is anything of mine running at all"): one of our
+# own containers can already hold its own port (a legitimate restart) while a *different* port
+# this same run also needs is held by something unrelated (e.g. Splunk Web on 8000) -- that
+# combination previously made setup.sh skip the whole check and let docker compose up fail with
+# its own unhelpful "port is already allocated" partway through, after frontend/redis/etc had
+# already started.
+port_owned_by_this_project() {
+  local port="$1"
+  local owner_id project_ids
+  # --no-trunc on both: `docker ps -q` defaults to short (12-char) IDs while `docker compose
+  # ps -q` returns full 64-char IDs, so without this a real match always compares unequal.
+  owner_id=$(docker ps --no-trunc -q --filter "publish=${port}" | head -1)
+  [[ -z "$owner_id" ]] && return 1  # nothing has it published via Docker (a non-Docker process might still -- port_in_use covers that)
+  # --project-directory, not a bare `cd` beforehand: this must not affect the caller's cwd, and
+  # setup.sh is documented to run from the repo root anyway (same assumption every other docker
+  # compose call in this script already makes), but this specific check is cheap to make robust.
+  project_ids=$(docker compose --project-directory "$ROOT_DIR" ps -q 2>/dev/null)
+  [[ -z "$project_ids" ]] && return 1
+  grep -qx "$owner_id" <<<"$project_ids"
+}
 
+check_ports() {
   # 5173 (UI) always needs to be free. The API port is host-side only (see
   # KAIRON_API_BIND/KAIRON_API_PORT in docker-compose.yml) and configurable
   # via KAIRON_API_PORT for a machine where 8000 is already taken by
   # something unrelated to Kairon (e.g. Splunk Web, which also defaults to
   # 8000).
   local api_port="${KAIRON_API_PORT:-8000}"
-  if port_in_use 5173; then
-    echo "ERROR: Port 5173 (UI) is already in use." >&2
-    echo "Stop whatever is using it, or it will conflict with Kairon's frontend." >&2
+  if port_in_use 5173 && ! port_owned_by_this_project 5173; then
+    cat >&2 <<EOF
+ERROR: Port 5173 (UI) is already in use by something other than this Kairon deployment.
+It will conflict with Kairon's frontend. Find and stop whatever holds it, e.g.:
+    sudo lsof -i :5173
+    sudo ss -tlnp | grep :5173
+then re-run this command.
+EOF
     exit 1
   fi
-  if port_in_use "$api_port"; then
+  if port_in_use "$api_port" && ! port_owned_by_this_project "$api_port"; then
+    local env_file="$ROOT_DIR/.env"
     cat >&2 <<EOF
-ERROR: Port ${api_port} (API) is already in use.
-This is the backend's host-side port only (internal Docker traffic and the
-browser both go through the frontend's /api proxy on 5173, not this port
-directly), so it is safe to move: re-run with a free port, e.g.
+ERROR: Port ${api_port} (API) is already in use by something other than this Kairon deployment.
+Find out what holds it first:
+    sudo lsof -i :${api_port}
+    sudo ss -tlnp | grep :${api_port}
+(a common cause: another service on this host, e.g. Splunk Web, also
+defaults to port ${api_port}).
+
+This is the backend's host-side port only -- the browser and all internal
+traffic go through the frontend's /api proxy on 5173, not this port
+directly -- so it is safe to move to a free port instead of stopping the
+other service. Pick a free port (check with the commands above) and:
+EOF
+    if [[ -f "$env_file" ]]; then
+      cat >&2 <<EOF
+
+This machine already has a Kairon deployment (${env_file}). Run exactly:
+    echo "KAIRON_API_PORT=<free port>" >> ${env_file}
+    ./scripts/upgrade.sh
+(replace <free port> with the port number you picked, e.g. 8001; do not
+re-run setup.sh's interactive wizard for an existing deployment -- see
+"Deploy vs upgrade" in docs/deployment/deployment.md).
+EOF
+    else
+      cat >&2 <<EOF
+
+Run exactly (replace 8001 with the port number you picked):
     KAIRON_API_PORT=8001 bash scripts/setup.sh
 EOF
+    fi
     exit 1
   fi
 }
@@ -626,6 +669,7 @@ do_upgrade() {
   fi
 
   preserve_secrets_from_env "$ROOT_DIR/.env"
+  check_ports
 
   echo ""
   echo "Pulling latest code..."
