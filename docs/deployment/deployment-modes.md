@@ -23,7 +23,7 @@ The setup wizard generates:
 - `KAIRON_ALLOWED_ORIGINS=http://localhost:5173`
 - Secure cookies: disabled (HTTP only)
 
-The UI port (5173) is published on all interfaces, so other machines on the network can open it at `http://<this-machine's-address>:5173`. The API port (8000) is published on this machine only (`127.0.0.1`); browsers reach the API through the Nginx `/api` proxy. Set `KAIRON_API_BIND=0.0.0.0` only if something on another machine must call the API directly.
+The UI port (5173) is published on all interfaces, so other machines on the network can open it at `http://<this-machine's-address>:5173`. The API port (8000 by default) is published on this machine only (`127.0.0.1`); browsers reach the API through the Nginx `/api` proxy. Set `KAIRON_API_BIND=0.0.0.0` only if something on another machine must call the API directly. If port 8000 is already in use by something else on the host (e.g. Splunk Web, which also defaults to 8000), set `KAIRON_API_PORT` to a free port instead and re-run `scripts/setup.sh`; this only changes the host-side port, nothing else in the stack needs to change.
 
 ## LAN
 

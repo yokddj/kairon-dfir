@@ -74,7 +74,12 @@ services:
     ports:
       # The UI reaches the API through the frontend's /api proxy, so the API port is published on
       # this machine only. Other machines use the UI port. Set KAIRON_API_BIND=0.0.0.0 to expose it.
-      - "${KAIRON_API_BIND:-127.0.0.1}:8000:8000"
+      # Only the host-side port (left of the colon) is configurable via KAIRON_API_PORT, for
+      # machines where 8000 is already taken (e.g. Splunk Web uses 8000 by default); the container
+      # keeps listening on 8000 internally, so nothing else in the stack needs to change (nginx and
+      # service-to-service traffic reach the backend over the Docker network as "backend:8000",
+      # never through this host port mapping).
+      - "${KAIRON_API_BIND:-127.0.0.1}:${KAIRON_API_PORT:-8000}:8000"
     volumes:
       - ./data:/app/data
       - ./data/local-mounts/mnt-evidence:/mnt/evidence:ro

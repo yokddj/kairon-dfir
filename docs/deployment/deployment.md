@@ -203,7 +203,7 @@ If you change `OPENSEARCH_JAVA_HEAP`, recreate `opensearch`. If you change `BACK
 
 The stack is intended for a trusted private network, VPN, or authenticated reverse proxy.
 
-By default only the UI (`5173`) listens on the network; the API (`8000`) listens on this machine only (`KAIRON_API_BIND`), and OpenSearch, Postgres and Redis are not published at all. Kairon requires its own sign-in; see [Deployment Modes](deployment-modes.md#request-protection) for how requests and sign-in attempts are protected.
+By default only the UI (`5173`) listens on the network; the API (`8000` by default, override with `KAIRON_API_PORT` if already taken by something else, e.g. Splunk Web) listens on this machine only (`KAIRON_API_BIND`), and OpenSearch, Postgres and Redis are not published at all. Kairon requires its own sign-in; see [Deployment Modes](deployment-modes.md#request-protection) for how requests and sign-in attempts are protected.
 
 Do not expose these ports directly to the public Internet:
 

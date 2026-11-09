@@ -110,6 +110,8 @@ Environment variables (non-interactive mode):
   KAIRON_DEPLOYMENT_MODE
   KAIRON_PUBLIC_URL
   KAIRON_ENABLE_MEMORY
+  KAIRON_API_PORT   Host-side API port, default 8000 (set if already in use,
+                    e.g. by Splunk Web; the browser still uses 5173).
 EOF
   exit 0
 }
@@ -142,14 +144,41 @@ check_prerequisites() {
   fi
 }
 
+port_in_use() {
+  local port="$1"
+  ss -tlnp 2>/dev/null | grep -q ":${port} " || lsof -i ":${port}" >/dev/null 2>&1
+}
+
 check_ports() {
-  local ports=(5173)
-  for port in "${ports[@]}"; do
-    if ss -tlnp 2>/dev/null | grep -q ":$port " || lsof -i ":$port" >/dev/null 2>&1; then
-      echo "ERROR: Port $port is already in use." >&2
-      exit 1
-    fi
-  done
+  # Skip entirely if this project's own containers are already up: a re-run
+  # of setup.sh against an already-running stack (no --upgrade, no
+  # --force-recreate) is a legitimate restart, and the ports in use are
+  # Kairon's own, not an external conflict.
+  if docker compose ps --services --status running 2>/dev/null | grep -q .; then
+    return 0
+  fi
+
+  # 5173 (UI) always needs to be free. The API port is host-side only (see
+  # KAIRON_API_BIND/KAIRON_API_PORT in docker-compose.yml) and configurable
+  # via KAIRON_API_PORT for a machine where 8000 is already taken by
+  # something unrelated to Kairon (e.g. Splunk Web, which also defaults to
+  # 8000).
+  local api_port="${KAIRON_API_PORT:-8000}"
+  if port_in_use 5173; then
+    echo "ERROR: Port 5173 (UI) is already in use." >&2
+    echo "Stop whatever is using it, or it will conflict with Kairon's frontend." >&2
+    exit 1
+  fi
+  if port_in_use "$api_port"; then
+    cat >&2 <<EOF
+ERROR: Port ${api_port} (API) is already in use.
+This is the backend's host-side port only (internal Docker traffic and the
+browser both go through the frontend's /api proxy on 5173, not this port
+directly), so it is safe to move: re-run with a free port, e.g.
+    KAIRON_API_PORT=8001 bash scripts/setup.sh
+EOF
+    exit 1
+  fi
 }
 
 preserve_secrets_from_env() {
@@ -172,6 +201,11 @@ preserve_secrets_from_env() {
   # Read existing feature flags
   ENABLE_MEMORY_EXISTING=$(grep '^KAIRON_ENABLE_MEMORY=' "$env_file" | sed 's/^KAIRON_ENABLE_MEMORY=//' || echo "false")
 
+  # Preserved so a machine that needed a non-default API port (e.g. 8000
+  # already taken by something else) keeps using it on every re-run, without
+  # the caller having to remember and repeat KAIRON_API_PORT= each time.
+  KAIRON_API_PORT_EXISTING=$(grep '^KAIRON_API_PORT=' "$env_file" | sed 's/^KAIRON_API_PORT=//' || echo "")
+
   # Preserved across runs so the host directories' group ownership (set by
   # prepare_memory_storage_permissions.sh) and docker-compose's
   # `group_add:` for the memory containers always agree on the same GID.
@@ -183,6 +217,19 @@ preserve_secrets_from_env() {
   export OPENSEARCH_INITIAL_ADMIN_PASSWORD_EXISTING
   export MEMORY_EVIDENCE_SHARED_GID_EXISTING
   [[ -n "$ENABLE_MEMORY_EXISTING" ]] && ENABLE_MEMORY="$ENABLE_MEMORY_EXISTING"
+  # An explicit KAIRON_API_PORT in the environment always wins (so a caller
+  # fixing a port conflict on this run is never silently overridden by an
+  # older value from a previous .env); otherwise reuse the preserved one.
+  # Written with `|| true` (not `cond && cond && x=y` as a bare statement):
+  # under `set -e`, a function's exit status is that of its last command,
+  # so a bare `&&` chain whose final test is false here (KAIRON_API_PORT_EXISTING
+  # empty, a perfectly normal case) would silently abort the whole script in
+  # the caller, with no error message -- this bit the test suite in exactly
+  # this spot.
+  if [[ -z "${KAIRON_API_PORT:-}" ]] && [[ -n "$KAIRON_API_PORT_EXISTING" ]]; then
+    KAIRON_API_PORT="$KAIRON_API_PORT_EXISTING"
+  fi
+  true
 }
 
 write_env() {
@@ -234,6 +281,12 @@ write_env() {
 KAIRON_DEPLOYMENT_MODE=${DEPLOYMENT_MODE}
 KAIRON_PUBLIC_URL=${derived_url}
 KAIRON_AUTH_ENABLED=${AUTH_ENABLED}
+
+# Host-side port for the API container (internal Docker traffic and the
+# browser both go through the frontend's /api proxy on 5173, not this port
+# directly). Only matters if something else on this machine already uses
+# 8000 (e.g. Splunk Web); change and re-run setup.sh if so.
+KAIRON_API_PORT=${KAIRON_API_PORT:-8000}
 
 # ---- Secrets ----
 KAIRON_SESSION_SECRET=${session_secret}
@@ -328,7 +381,7 @@ wait_for_health() {
   
   while [[ $SECONDS -lt $deadline ]]; do
     if [[ "$backend_ok" != true ]]; then
-      if version=$(curl -s -m 5 http://localhost:8000/api/system/version 2>/dev/null); then
+      if version=$(curl -s -m 5 "http://localhost:${KAIRON_API_PORT:-8000}/api/system/version" 2>/dev/null); then
         echo "Backend: healthy"
         backend_ok=true
       fi
@@ -378,6 +431,9 @@ show_planned_actions() {
   echo "  Force recreate:         $([[ "$FORCE_RECREATE" == true ]] && echo yes || echo no)"
   echo "  Compose profiles:       $profiles"
   echo "  Public URL:             ${PUBLIC_URL:-auto}"
+  if [[ -n "${KAIRON_API_PORT:-}" ]] && [[ "${KAIRON_API_PORT}" != "8000" ]]; then
+    echo "  API host port:          ${KAIRON_API_PORT} (default 8000 overridden)"
+  fi
   echo "  Existing .env:          $has_env"
   echo "  Existing containers:    $has_data"
   echo "  Destructive actions:    no"
@@ -657,6 +713,12 @@ else
   check_existing_env
   non_interactive_mode
 fi
+
+# After interactive_mode/non_interactive_mode, so DO_START reflects the
+# user's actual choice (interactive mode only asks "start now?" partway
+# through) -- checking ports is pointless, and wrongly blocks a --no-start
+# .env-only run or test, if nothing is actually going to be started.
+[[ "$DO_START" == true ]] && check_ports
 
 show_planned_actions
 write_env
