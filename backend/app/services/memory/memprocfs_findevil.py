@@ -14,6 +14,21 @@ command-line tool needs FUSE to expose its file system, which the hardened worke
 have. The scan runs with the Microsoft symbol server disabled (MemProcFS's bundled info.db
 covers the kernel structures FindEvil needs), so the worker stays offline.
 
+MemProcFS has its own, separate Python plugin sub-system (vmmpyc.so), used only for optional
+user-written forensic plugins -- never needed here, since FindEvil/forensic/timeline data all
+come back through the C API above. Left enabled, VMMDLL_Initialize tries to embed its own
+Python interpreter inside this already-running Python process (same libpython3.12.so.1.0,
+since vmmpyc.so dynamically links against it): this is the root cause of an intermittent
+SIGSEGV observed in production, consistently inside Util_PyAddSysPath -> vmmpyc.so's own
+startup path -- i.e. MemProcFS's plugin sub-system, trying to set up sys.path for an
+interpreter that already exists and is already running *this very code*, not a crash
+anywhere in FindEvil/forensic scanning itself (confirmed from a full gdb backtrace: every
+MemProcFS worker thread was idle, waiting on its own work queue, when this happened).
+``-disable-python`` (documented at
+https://github.com/ufrisk/MemProcFS/wiki/_CommandLine#-disable-python) skips that embedded
+interpreter entirely, which is safe here: nothing in this file or in Kairon's memory pipeline
+uses MemProcFS's Python plugins.
+
 Output on stdout: a JSON list of {"PID", "Process", "Type", "Address", "Description"} rows,
 the columns of MemProcFS's forensic/csv/findevil.csv. Exit codes name the failure for the
 runner: 3 library unavailable, 4 image not opened, 5 forensic scan unavailable, 6 FindEvil
@@ -213,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"MemProcFS library could not be loaded: {exc}", file=sys.stderr)
         return EXIT_LIBRARY_UNAVAILABLE
 
-    options = ["", "-device", args.evidence, "-forensic", "1", "-disable-symbolserver"]
+    options = ["", "-device", args.evidence, "-forensic", "1", "-disable-symbolserver", "-disable-python"]
     handle = lib.VMMDLL_Initialize(len(options), (ctypes.c_char_p * len(options))(*[item.encode("utf-8") for item in options]))
     if not handle:
         print("MemProcFS could not open this memory image (not a supported Windows image, or damaged).", file=sys.stderr)

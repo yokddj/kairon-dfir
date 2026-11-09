@@ -118,23 +118,31 @@ The default symbol policy is offline only. Kairon does not silently download sym
 
 ### `memprocfs.findevil` crashes (`PLUGIN_CRASHED`)
 
-MemProcFS's own `vmm.so` has an intermittent native crash (observed: SIGSEGV inside
-`VMMDLL_Initialize`'s forensic mode) on some amd64 hosts -- a bug in MemProcFS itself, not in
-Kairon. It degrades gracefully: the run completes as `completed_with_errors`, `windows.info` and
-Kairon's own Find Evil (`kairon.findevil`) still run and index normally, and only the MemProcFS
-FindEvil plugin is affected.
+Root cause identified and fixed: MemProcFS has its own, separate Python plugin sub-system
+(`vmmpyc.so`), used only for optional user-written forensic plugins and never needed by Kairon
+(FindEvil/forensic/timeline data all come back through MemProcFS's C API). Left enabled,
+`VMMDLL_Initialize` tried to embed its own Python interpreter inside the already-running one in
+the memory worker's child process (both link against the same `libpython3.12.so.1.0`), which
+intermittently segfaulted inside `vmmpyc.so`'s own startup path (`Util_PyAddSysPath`) -- confirmed
+from a full gdb backtrace showing every MemProcFS worker thread idle at the time, i.e. not a
+crash anywhere in FindEvil/forensic scanning itself. Fixed by passing MemProcFS's own
+`-disable-python` flag (documented at
+`github.com/ufrisk/MemProcFS/wiki/_CommandLine#-disable-python`), which skips that embedded
+interpreter entirely.
 
-When this happens, Kairon automatically retries the plugin once under `gdb` (if installed in
-the memory worker image; it is, by default). This sometimes lets the retried run complete
-instead of crashing again -- `gdb` attaching changes the process's timing enough to dodge the
-same race condition -- and, if it crashes again, captures a real native backtrace instead of an
-empty stderr. The backtrace is logged by the memory worker (`docker compose logs memory-worker`,
-search for "MemProcFS FindEvil crash backtrace") and also left at
-`<run output dir>/memprocfs_findevil_crash.log`, next to the run's other artifacts
-(`output_dir` on the run record).
+If `memprocfs.findevil` still crashes after upgrading past this fix, it degrades gracefully
+either way: the run completes as `completed_with_errors`, `windows.info` and Kairon's own Find
+Evil (`kairon.findevil`) still run and index normally, and only the MemProcFS FindEvil plugin is
+affected. Kairon also automatically retries the plugin once under `gdb` (if installed in the
+memory worker image; it is, by default): this sometimes lets the retried run complete instead of
+crashing again, and if it crashes again, captures a real native backtrace instead of an empty
+stderr. The backtrace is logged by the memory worker (`docker compose logs memory-worker`, search
+for "MemProcFS FindEvil crash backtrace") and also left at
+`<run output dir>/memprocfs_findevil_crash.log`, next to the run's other artifacts (`output_dir`
+on the run record).
 
-If this happens reliably on a specific image (not just occasionally), it is worth reporting
-upstream at `github.com/ufrisk/MemProcFS/issues` with the backtrace -- do not attach the memory
-image itself to a public issue; the upstream maintainer has fixed similar forensic-mode crashes
-quickly when given a reproducer. Setting `memprocfs_crash_retry_enabled=false` disables the
-retry (falls back to the previous behavior: the crash is reported immediately, no backtrace).
+If this happens reliably on a specific image, it is worth reporting upstream at
+`github.com/ufrisk/MemProcFS/issues` with the backtrace -- do not attach the memory image itself
+to a public issue; the upstream maintainer has fixed similar forensic-mode crashes quickly when
+given a reproducer. Setting `memprocfs_crash_retry_enabled=false` disables the gdb retry (falls
+back to reporting the crash immediately, no backtrace).

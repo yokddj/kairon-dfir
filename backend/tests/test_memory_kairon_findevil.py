@@ -182,6 +182,37 @@ def test_execution_sends_kairon_findevil_to_its_runner(tmp_path, monkeypatch) ->
     assert payload == [] and argv == ["kairon-findevil"]
 
 
+# --- MemProcFS: Python plugin sub-system disabled (root cause of a real production SIGSEGV) ---
+
+
+def test_memprocfs_child_disables_memprocfs_own_python_plugins(monkeypatch) -> None:
+    # Regression test for a real production crash: MemProcFS's own Python plugin sub-system
+    # (vmmpyc.so) tries to embed a second Python interpreter inside this already-running one at
+    # VMMDLL_Initialize time, which segfaulted inside vmmpyc.so's own startup path
+    # (Util_PyAddSysPath) -- confirmed via a full gdb backtrace showing every MemProcFS worker
+    # thread idle at the time. Kairon never uses MemProcFS's Python plugins (FindEvil/forensic/
+    # timeline data all come back through the C API), so -disable-python removes the whole
+    # sub-system instead of only working around its crash.
+    from app.services.memory import memprocfs_findevil as child
+
+    captured_options = {}
+
+    class _Lib:
+        def VMMDLL_Initialize(self, count, options):
+            captured_options["argv"] = [options[i].decode("utf-8") for i in range(count)]
+            return None  # fail fast: this test only cares about the argv VMMDLL_Initialize got
+
+        def VMMDLL_Close(self, handle):
+            pass
+
+    monkeypatch.setattr(child, "_die_with_parent", lambda: None)
+    monkeypatch.setattr(child._Watchdog, "start", lambda self: None)
+    monkeypatch.setattr(child, "_load", lambda library: _Lib())
+    code = child.main(["--library", "vmm.so", "--evidence", "image.dmp"])
+    assert code == child.EXIT_IMAGE_NOT_OPENED  # VMMDLL_Initialize returning None/0 -> no handle
+    assert "-disable-python" in captured_options["argv"]
+
+
 # --- MemProcFS: a scan that stops making progress ends, and does not wait in VMMDLL_Close ---
 
 
