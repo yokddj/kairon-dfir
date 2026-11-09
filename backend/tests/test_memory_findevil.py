@@ -104,13 +104,113 @@ def test_runner_starts_the_child_contained_and_returns_its_rows(tmp_path, librar
 
 @pytest.mark.parametrize(
     "returncode, code",
-    [(3, "MEMPROCFS_UNAVAILABLE"), (4, "UNSUPPORTED_MEMORY_IMAGE"), (5, "PLUGIN_REQUIREMENTS_UNSATISFIED"), (6, "PLUGIN_UNSUPPORTED_WINDOWS_BUILD"), (1, "PLUGIN_FAILED"), (-11, "PLUGIN_FAILED")],
+    [(3, "MEMPROCFS_UNAVAILABLE"), (4, "UNSUPPORTED_MEMORY_IMAGE"), (5, "PLUGIN_REQUIREMENTS_UNSATISFIED"), (6, "PLUGIN_UNSUPPORTED_WINDOWS_BUILD"), (1, "PLUGIN_FAILED")],
 )
 def test_child_exit_codes_map_to_pipeline_errors(tmp_path, library, monkeypatch, returncode, code) -> None:
     monkeypatch.setattr(memprocfs_runner, "run_isolated_process", lambda argv, **kwargs: (b"", b"MemProcFS said why\n", returncode, 10))
     with pytest.raises(VolatilityRunnerError) as exc:
         memprocfs_runner.run_findevil(tmp_path / "image.dmp", tmp_path, timeout_seconds=60, max_output_bytes=1024)
     assert exc.value.code == code
+
+
+# --- crash retry (gdb) --------------------------------------------------------------------------
+# MemProcFS's vmm.so has a real, intermittent native crash (SIGSEGV inside VMMDLL_Initialize's
+# forensic mode) on some amd64 hosts -- see PROJECT_CONTEXT.md. A negative returncode is Python
+# subprocess's convention for "killed by signal -returncode" (POSIX), distinct from MemProcFS's
+# own documented exit codes (3-6) above, which are normal, non-crash exits.
+
+
+def test_signal_without_gdb_is_reported_as_crashed_not_generic_failure(tmp_path, library, monkeypatch) -> None:
+    # No gdb installed (shutil.which returns None): the crash is still reported distinctly from
+    # a generic PLUGIN_FAILED, with no attempt to retry or find a backtrace.
+    monkeypatch.setattr(memprocfs_runner, "run_isolated_process", lambda argv, **kwargs: (b"", b"", -11, 10))
+    monkeypatch.setattr(memprocfs_runner, "_gdb_executable", lambda: None)
+    with pytest.raises(VolatilityRunnerError) as exc:
+        memprocfs_runner.run_findevil(tmp_path / "image.dmp", tmp_path, timeout_seconds=60, max_output_bytes=1024)
+    assert exc.value.code == "PLUGIN_CRASHED"
+    assert "SIGSEGV" in exc.value.message
+    assert exc.value.return_code == -11
+
+
+def test_signal_retries_under_gdb_and_uses_its_result_if_it_succeeds(tmp_path, library, monkeypatch) -> None:
+    # The first (plain) run crashes; the gdb-retried run completes normally this time (observed
+    # in practice: ptrace-attaching changes the process's timing enough to dodge the race).
+    monkeypatch.setattr(memprocfs_runner, "run_isolated_process", lambda argv, **kwargs: (b"", b"", -11, 10))
+    monkeypatch.setattr(memprocfs_runner, "_gdb_executable", lambda: "/usr/bin/gdb")
+    recovered_stdout = json.dumps(findevil_rows(CSV)).encode()
+    monkeypatch.setattr(
+        memprocfs_runner,
+        "_run_findevil_under_gdb",
+        lambda argv, **kwargs: (recovered_stdout, b"", 0, None, "", 50),
+    )
+    result = memprocfs_runner.run_findevil(tmp_path / "image.dmp", tmp_path, timeout_seconds=60, max_output_bytes=1024)
+    assert len(json.loads(result.stdout)) == 6
+
+
+def test_signal_retries_under_gdb_and_reports_crashed_with_backtrace_if_it_crashes_again(tmp_path, library, monkeypatch) -> None:
+    monkeypatch.setattr(memprocfs_runner, "run_isolated_process", lambda argv, **kwargs: (b"", b"", -11, 10))
+    monkeypatch.setattr(memprocfs_runner, "_gdb_executable", lambda: "/usr/bin/gdb")
+    monkeypatch.setattr(
+        memprocfs_runner,
+        "_run_findevil_under_gdb",
+        lambda argv, **kwargs: (b"", b"", None, 11, "Program received signal SIGSEGV\n#0 0xdead in vmm_so_internal ()", 50),
+    )
+    with pytest.raises(VolatilityRunnerError) as exc:
+        memprocfs_runner.run_findevil(tmp_path / "image.dmp", tmp_path, timeout_seconds=60, max_output_bytes=1024)
+    assert exc.value.code == "PLUGIN_CRASHED"
+    assert exc.value.return_code == -11
+    assert "backtrace was captured" in exc.value.message
+
+
+def test_crash_retry_can_be_disabled(tmp_path, library, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(memprocfs_runner, "run_isolated_process", lambda argv, **kwargs: (b"", b"", -11, 10))
+    called = {"gdb_checked": False}
+
+    def fail_if_called():
+        called["gdb_checked"] = True
+        return "/usr/bin/gdb"
+
+    monkeypatch.setattr(memprocfs_runner, "_gdb_executable", fail_if_called)
+    disabled_settings = SimpleNamespace(memprocfs_crash_retry_enabled=False, memprocfs_gdb_command="gdb")
+    monkeypatch.setattr(memprocfs_runner, "get_settings", lambda: disabled_settings)
+    with pytest.raises(VolatilityRunnerError) as exc:
+        memprocfs_runner.run_findevil(tmp_path / "image.dmp", tmp_path, timeout_seconds=60, max_output_bytes=1024)
+    assert exc.value.code == "PLUGIN_CRASHED"
+    assert called["gdb_checked"] is False
+
+
+def test_gdb_wrapper_strips_its_own_markers_and_parses_exit_signal(tmp_path, monkeypatch) -> None:
+    # Exercises _run_findevil_under_gdb's own output parsing in isolation (without a real gdb
+    # binary), since that parsing -- not gdb itself -- is what Kairon's code owns and can regress.
+    def fake_run_isolated_process(argv, **kwargs):
+        assert argv[0] == "/usr/bin/gdb"
+        assert "--args" in argv
+        fake_gdb_stdout = (
+            b"real program output line\n"
+            b"KAIRON_EXITSIGNAL=11\n"
+            b"KAIRON_EXITCODE=Value can't be converted to integer.\n"
+        )
+        crash_log = kwargs["work_dir"] / memprocfs_runner.CRASH_LOG_FILENAME
+        crash_log.write_text("Program received signal SIGSEGV\n#0 0xdead in vmm_so_internal ()\n")
+        return fake_gdb_stdout, b"", 0, 42
+
+    monkeypatch.setattr(memprocfs_runner, "run_isolated_process", fake_run_isolated_process)
+    stdout, stderr, exit_code, exit_signal, backtrace, duration_ms = memprocfs_runner._run_findevil_under_gdb(
+        ["python3", "-m", "app.services.memory.memprocfs_findevil"],
+        work_dir=tmp_path,
+        env={},
+        timeout_seconds=60,
+        max_output_bytes=1024,
+        gdb_executable="/usr/bin/gdb",
+        cancellation_check=None,
+    )
+    assert stdout == b"real program output line\n"
+    assert exit_code is None
+    assert exit_signal == 11
+    assert "SIGSEGV" in backtrace
+    assert duration_ms == 42
 
 
 def test_execution_sends_findevil_to_memprocfs_not_volatility(tmp_path, monkeypatch) -> None:

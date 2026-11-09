@@ -115,3 +115,26 @@ The default symbol policy is offline only. Kairon does not silently download sym
 - Worker offline: check `docker compose --profile memory ps memory-worker` and `/api/memory/backends`.
 - Queue not moving: the normal worker does not consume the memory queue; the dedicated memory worker must be healthy.
 - Do not attach RAM images, real Volatility JSON, command lines, symbols, or credentials to public GitHub issues.
+
+### `memprocfs.findevil` crashes (`PLUGIN_CRASHED`)
+
+MemProcFS's own `vmm.so` has an intermittent native crash (observed: SIGSEGV inside
+`VMMDLL_Initialize`'s forensic mode) on some amd64 hosts -- a bug in MemProcFS itself, not in
+Kairon. It degrades gracefully: the run completes as `completed_with_errors`, `windows.info` and
+Kairon's own Find Evil (`kairon.findevil`) still run and index normally, and only the MemProcFS
+FindEvil plugin is affected.
+
+When this happens, Kairon automatically retries the plugin once under `gdb` (if installed in
+the memory worker image; it is, by default). This sometimes lets the retried run complete
+instead of crashing again -- `gdb` attaching changes the process's timing enough to dodge the
+same race condition -- and, if it crashes again, captures a real native backtrace instead of an
+empty stderr. The backtrace is logged by the memory worker (`docker compose logs memory-worker`,
+search for "MemProcFS FindEvil crash backtrace") and also left at
+`<run output dir>/memprocfs_findevil_crash.log`, next to the run's other artifacts
+(`output_dir` on the run record).
+
+If this happens reliably on a specific image (not just occasionally), it is worth reporting
+upstream at `github.com/ufrisk/MemProcFS/issues` with the backtrace -- do not attach the memory
+image itself to a public issue; the upstream maintainer has fixed similar forensic-mode crashes
+quickly when given a reproducer. Setting `memprocfs_crash_retry_enabled=false` disables the
+retry (falls back to the previous behavior: the crash is reported immediately, no backtrace).

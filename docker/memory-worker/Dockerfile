@@ -44,8 +44,19 @@ WORKDIR /app
 # which already carries this toolchain; memory-worker never needed it
 # until libewf-python was added as a dependency for disk-image EWF
 # streaming, unrelated to memory analysis itself.
+#
+# gdb: optional, best-effort diagnostic for memprocfs.findevil (see
+# app/services/memory/memprocfs_runner.py). MemProcFS's own vmm.so has an
+# intermittent native crash (SIGSEGV inside VMMDLL_Initialize's forensic
+# mode) on some amd64 hosts; attaching gdb to a retried run both sometimes
+# avoids the same timing-sensitive race and, if it crashes again, captures
+# a real backtrace instead of an empty stderr. ptrace-attaching to one's
+# own child process (same UID, direct parent) does not need CAP_SYS_PTRACE
+# and works fine under this container's cap_drop: ALL + no-new-privileges
+# (verified manually); its absence (e.g. a minimal custom image) only
+# disables the retry/backtrace, never a normal run.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential pkg-config libusb-1.0-0 \
+    && apt-get install -y --no-install-recommends build-essential pkg-config libusb-1.0-0 gdb \
     && rm -rf /var/lib/apt/lists/*
 
 # MemProcFS's library (vmm.so) is loaded by app/services/memory/memprocfs_findevil.py in a child

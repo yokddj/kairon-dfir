@@ -72,6 +72,16 @@ class Settings(BaseSettings):
     # MemProcFS's library, loaded in a child process for FindEvil (see
     # app/services/memory/memprocfs_runner.py). The memory-worker image installs it here.
     memprocfs_library: str = "/opt/memprocfs/vmm.so"
+    # If the MemProcFS FindEvil child is killed by a signal (observed: SIGSEGV inside
+    # VMMDLL_Initialize's forensic mode on some amd64 hosts, intermittent, see
+    # PROJECT_CONTEXT.md), retry it once under gdb: a ptrace'd process is already known
+    # to sometimes dodge the same race condition (timing-sensitive crash), and if it
+    # crashes again under gdb, a real native backtrace is captured for diagnosis instead
+    # of only "killed by signal 11" with empty stderr. gdb must be present in the image
+    # (docker/memory-worker/Dockerfile) for this to do anything; if it is missing, the
+    # retry is skipped and the original signal is reported as before.
+    memprocfs_crash_retry_enabled: bool = True
+    memprocfs_gdb_command: str = "gdb"
     memory_tools_auto_install_enabled: bool = False
     memory_allow_external_tool_execution: bool = False
     memory_backend_check_timeout_seconds: int = 10
