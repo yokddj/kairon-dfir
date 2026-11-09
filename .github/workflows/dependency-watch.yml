@@ -1,0 +1,80 @@
+name: Dependency watch
+
+# Upstream dependencies that are pinned by exact file name (not a mutable
+# "latest" pointer) can go stale without any change in this repo: the
+# upstream project deletes or replaces the asset under the same tag. This
+# workflow checks those pins on a schedule so a broken pin is caught and
+# fixed before a new user hits a 404 during `scripts/setup.sh` or
+# `scripts/upgrade.sh`. It does not run on every push/PR, so it never
+# blocks normal development.
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'  # Weekly on Monday at 08:00 UTC
+  workflow_dispatch: {}
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'docker/memory-worker/Dockerfile'
+      - 'scripts/check-memprocfs-asset.sh'
+
+jobs:
+  memprocfs-asset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check pinned MemProcFS release asset is still downloadable
+        id: check
+        run: bash scripts/check-memprocfs-asset.sh
+
+      - name: Open issue if the pin is broken
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = "MemProcFS pinned asset is no longer downloadable";
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "dependency-watch",
+            });
+            if (existing.some(i => i.title === title)) {
+              console.log("Issue already open, not creating a duplicate.");
+              return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              labels: ["dependency-watch"],
+              body: [
+                "The weekly dependency watch found that the MemProcFS release asset",
+                "pinned in `docker/memory-worker/Dockerfile` is no longer downloadable.",
+                "",
+                "Upstream (ufrisk/MemProcFS) reuses the same release tag across",
+                "builds and deletes the previous build's assets, so this breaks",
+                "`scripts/setup.sh` / `scripts/upgrade.sh` for every new user until",
+                "the pin is updated. This has happened before (see",
+                "PROJECT_CONTEXT.md, entries for 2026-10-15 and 2026-11-03).",
+                "",
+                "To fix, run locally:",
+                "",
+                "```",
+                "bash scripts/check-memprocfs-asset.sh",
+                "```",
+                "",
+                "and follow the steps it prints (check the current release at",
+                "https://github.com/ufrisk/MemProcFS/releases/tag/v5.19, download",
+                "the new linux_x64/linux_aarch64 assets, verify SHA-256, update the",
+                "`ARG`s in `docker/memory-worker/Dockerfile` and the notice in",
+                "`docker/memory-worker/THIRD_PARTY_NOTICES.md`, then rebuild",
+                "`memory-worker` locally before merging).",
+                "",
+                `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ].join("\n"),
+            });
