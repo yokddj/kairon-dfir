@@ -23,6 +23,20 @@ Rules, reports, parser rebuilds and SRUM Windows-worker parsing are not part of 
 - Persistent disk sized for evidence plus indexed data. For validation or training evidence, size storage according to the dataset owner's guidance.
 - Private network access only. Do not expose the stack directly to the Internet.
 
+If your user cannot run `docker` without `sudo` (not a member of the `docker` group), add it
+once instead of prefixing every command with `sudo`:
+
+```bash
+sudo usermod -aG docker "$USER"
+# log out and back in (or `newgrp docker`) for the group change to take effect
+```
+
+Always run `scripts/setup.sh`/`scripts/upgrade.sh` and `docker compose` the same way every time
+(either always with `sudo`, or never). Mixing the two makes `.env` (written `chmod 600`, owner-only)
+unreadable to whichever one you ran it without: the file is still there, but `sudo cat .env` works
+while a plain `cat .env` reports "permission denied", or vice versa, depending on which run created
+it last.
+
 ## First-Time Setup
 
 1. Run the setup script, which generates `.env` with real random secrets
