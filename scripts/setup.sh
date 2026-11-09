@@ -390,10 +390,19 @@ build_and_start() {
       sh "$SCRIPT_DIR/prepare_memory_storage_permissions.sh"
   fi
 
+  # --pull alone (no --no-cache) already keeps this fresh: it always re-checks the base images
+  # (python:3.12-slim etc.) against the registry, and Docker's own layer cache is itself keyed
+  # on the parent layer's digest, so a changed base image invalidates every layer built on top
+  # of it automatically -- there is no stale-cache risk --no-cache was protecting against here.
+  # What --no-cache did cost: every --upgrade or --force-recreate re-ran every RUN step from
+  # scratch (apt-get install, pip install, the MemProcFS download...) even when nothing in the
+  # Dockerfile or its build context had changed, which is the bulk of a normal patch-version
+  # upgrade. On a machine with slow/flaky network to Debian's mirrors this alone has taken
+  # 900+ seconds (see PROJECT_CONTEXT.md); --pull-only reproduces the exact same build in ~2s
+  # when truly nothing relevant changed (verified manually), while still rebuilding exactly the
+  # affected layers (and everything after them) when something does -- e.g. a new Dockerfile
+  # line, an updated requirements.lock, or a genuinely new base image digest.
   local build_args=(--pull)
-  if [[ "$FORCE_RECREATE" == true ]] || [[ "$DO_UPGRADE" == true ]]; then
-    build_args=(--no-cache --pull)
-  fi
   docker compose ${compose_args[@]+"${compose_args[@]}"} build "${build_args[@]}"
   echo "Build complete."
 
