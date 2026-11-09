@@ -2,12 +2,23 @@ ARG PYTHON_IMAGE=python:3.12-slim
 FROM ${PYTHON_IMAGE}
 
 ARG VOLATILITY3_VERSION=2.28.0
-# MemProcFS (FindEvil). Release binaries, pinned by version and SHA-256 per architecture.
-ARG MEMPROCFS_VERSION=5.19.3
+# MemProcFS (FindEvil). The release *tag* (MEMPROCFS_TAG) is the pin an
+# operator controls; the exact build within that tag is resolved at build
+# time from the GitHub Releases API (see fetch_memprocfs.py), because
+# upstream reuses the same tag across builds and deletes previous build
+# assets, which repeatedly broke a hardcoded build date + SHA-256 (see
+# PROJECT_CONTEXT.md). MEMPROCFS_VERSION/BUILD/SHA256_* below are only a
+# fallback used if the API is unreachable at build time (e.g. offline
+# build); keep them reasonably current but they are not required to be.
 ARG MEMPROCFS_TAG=v5.19
-ARG MEMPROCFS_BUILD=20261107
-ARG MEMPROCFS_SHA256_AMD64=1c6285f7d3005f82e5b28cc9df058b2f95a28839c2d0747debf8929cc4c393c8
-ARG MEMPROCFS_SHA256_ARM64=f8971c2f52f456a6a90edeedcb4e79e4b49a7b2a3b7107f8fc574f2f6a0810bb
+ARG MEMPROCFS_VERSION=9.9.9
+ARG MEMPROCFS_BUILD=99999999
+ARG MEMPROCFS_SHA256_AMD64=aaaa
+ARG MEMPROCFS_SHA256_ARM64=bbbb
+# Set to "1" to skip the GitHub API lookup and use the fallback pin directly
+# (genuinely offline/air-gapped builds; also used by CI to verify the
+# fallback pin on its own).
+ARG MEMPROCFS_FORCE_FALLBACK=0
 ARG TARGETARCH
 
 LABEL org.opencontainers.image.title="Kairon optional Volatility memory worker" \
@@ -15,7 +26,11 @@ LABEL org.opencontainers.image.title="Kairon optional Volatility memory worker" 
       org.opencontainers.image.source="https://github.com/yokddj/kairon-dfir" \
       org.opencontainers.image.licenses="Kairon project license: see repository LICENSE; bundled-at-build dependency: Volatility 3, Volatility Software License 1.0" \
       org.kairon.volatility3.version="${VOLATILITY3_VERSION}" \
-      org.kairon.memprocfs.version="${MEMPROCFS_VERSION}"
+      org.kairon.memprocfs.tag="${MEMPROCFS_TAG}"
+      # Note: the exact MemProcFS build/version is resolved at build time (see
+      # fetch_memprocfs.py below) and recorded in
+      # /opt/memprocfs/KAIRON_RESOLVED_VERSION.txt inside the image, not in a
+      # label, since it is not known until that RUN step executes.
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -34,21 +49,32 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # MemProcFS's library (vmm.so) is loaded by app/services/memory/memprocfs_findevil.py in a child
-# process. The download is checked against the pinned SHA-256 before it is unpacked; any other
-# architecture fails the build instead of shipping without it silently.
+# process. fetch_memprocfs.py resolves the current build for MEMPROCFS_TAG against the GitHub
+# Releases API (falling back to the pinned MEMPROCFS_VERSION/BUILD/SHA256_* above if the API is
+# unreachable), downloads it, and verifies it against the SHA-256 GitHub itself reports for that
+# asset before it is unpacked; any other architecture, or any hash mismatch, fails the build
+# instead of shipping without it or with a corrupted copy silently.
+COPY docker/memory-worker/fetch_memprocfs.py /tmp/fetch_memprocfs.py
 RUN set -eu; \
     case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
-      amd64) asset=linux_x64; sha="${MEMPROCFS_SHA256_AMD64}" ;; \
-      arm64) asset=linux_aarch64; sha="${MEMPROCFS_SHA256_ARM64}" ;; \
+      amd64) sha="${MEMPROCFS_SHA256_AMD64}" ;; \
+      arm64) sha="${MEMPROCFS_SHA256_ARM64}" ;; \
       *) echo "MemProcFS: unsupported architecture ${TARGETARCH:-unknown}" >&2; exit 1 ;; \
     esac; \
-    url="https://github.com/ufrisk/MemProcFS/releases/download/${MEMPROCFS_TAG}/MemProcFS_files_and_binaries_v${MEMPROCFS_VERSION}-${asset}-${MEMPROCFS_BUILD}.tar.gz"; \
-    python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], '/tmp/memprocfs.tgz')" "$url"; \
-    echo "${sha}  /tmp/memprocfs.tgz" | sha256sum -c -; \
     mkdir -p /opt/memprocfs /licenses/memprocfs; \
-    tar -xzf /tmp/memprocfs.tgz -C /opt/memprocfs; \
-    rm /tmp/memprocfs.tgz; \
+    force_flag=""; \
+    if [ "${MEMPROCFS_FORCE_FALLBACK}" = "1" ]; then force_flag="--force-fallback"; fi; \
+    python /tmp/fetch_memprocfs.py \
+      --tag "${MEMPROCFS_TAG}" \
+      --target-arch "${TARGETARCH:-$(dpkg --print-architecture)}" \
+      --dest-dir /opt/memprocfs \
+      --fallback-version "${MEMPROCFS_VERSION}" \
+      --fallback-build "${MEMPROCFS_BUILD}" \
+      --fallback-sha256 "${sha}" \
+      ${force_flag}; \
+    rm /tmp/fetch_memprocfs.py; \
     cp /opt/memprocfs/LICENSE.txt /opt/memprocfs/license_*.txt /licenses/memprocfs/; \
+    cp /opt/memprocfs/KAIRON_RESOLVED_VERSION.txt /licenses/memprocfs/; \
     chmod -R a+rX /opt/memprocfs; \
     test -f /opt/memprocfs/vmm.so
 

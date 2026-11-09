@@ -3,17 +3,21 @@ set -euo pipefail
 # Check that the MemProcFS release asset pinned in docker/memory-worker/Dockerfile
 # still exists upstream.
 #
-# Why this exists: MemProcFS (github.com/ufrisk/MemProcFS) does not cut a new
-# tag for every build. It re-publishes binaries under the *same* release tag
-# (e.g. "v5.19") and deletes the previous build's assets. Kairon pins an exact
-# build date + SHA-256 for integrity, so when upstream replaces the assets,
-# every new `docker compose build memory-worker` (first install or
-# scripts/upgrade.sh) starts getting a 404 until someone repins. This has
-# already happened twice (see PROJECT_CONTEXT.md, 2026-10-15 and 2026-11-03).
+# Context: docker/memory-worker/Dockerfile no longer depends on this pin for a
+# normal build -- fetch_memprocfs.py resolves the current build for the pinned
+# release *tag* from the GitHub Releases API at build time (and verifies the
+# SHA-256 GitHub itself reports for that asset), so a build keeps working even
+# if the values below go stale, which they will: upstream republishes
+# binaries under the same tag instead of cutting a new one per build, and
+# deletes the previous build's assets (this has broken a hardcoded pin three
+# times, see PROJECT_CONTEXT.md).
 #
-# This script lets CI catch that *before* a user hits it: run it on a weekly
-# schedule and open an issue automatically if it fails (see
-# .github/workflows/dependency-watch.yml). It can also be run locally.
+# This script instead guards the *fallback* path: the one case where these
+# values still matter is a build where the GitHub API is unreachable (e.g. an
+# offline/air-gapped build, or the API is rate-limited/down). If this check
+# fails, the primary (online, API-resolved) build path still works fine --
+# only that degraded fallback path is stale. Repin when convenient, no need to
+# treat it as an emergency.
 #
 # Run: bash scripts/check-memprocfs-asset.sh
 
@@ -59,9 +63,12 @@ done
 echo ""
 if [ "$FAIL" -ne 0 ]; then
     cat <<'EOF'
-FAIL: pinned MemProcFS asset is missing upstream.
+FAIL: the fallback-pinned MemProcFS asset is missing upstream.
 
-Upstream likely replaced the build under the same release tag. To fix:
+This only affects builds where the GitHub API is unreachable (offline
+builds, API rate-limited/down); a normal online build still resolves the
+current asset automatically via fetch_memprocfs.py and is unaffected. To
+refresh the fallback pin anyway:
   1. curl -s https://api.github.com/repos/ufrisk/MemProcFS/releases/tags/v5.19
      (or check https://github.com/ufrisk/MemProcFS/releases/tag/v5.19 for the
      current asset names and build date)
@@ -76,4 +83,4 @@ EOF
     exit 1
 fi
 
-echo "PASS: pinned MemProcFS asset is reachable for both architectures"
+echo "PASS: fallback-pinned MemProcFS asset is reachable for both architectures"
