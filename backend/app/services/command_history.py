@@ -14,6 +14,7 @@ from app.core.opensearch import get_events_index, search_documents
 from app.ingest.normalization.registry_modifications import correlate_registry_commands, detect_registry_command
 from app.services.command_risk import score_command
 from app.services.host_identity import normalize_host_alias
+from app.services.search_service import build_text_query_for_mode
 from app.services.investigation_memory import memory_command_history, wants_memory_source, wants_non_memory_source
 from app.services.windows_accounts import accounts_from_events, canonical_accounts
 
@@ -287,7 +288,9 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> tuple[list[
     )
     must = []
     if q:
-        must.append({"simple_query_string": {"query": q, "fields": ["process.command_line", "powershell.command", "powershell.command_preview", "task.command", "linux.command", "search_text"], "default_operator": "and"}})
+        # Same text semantics as Search/Timeline/Artifact Views (smart by
+        # default: "comsvcs" finds "comsvcs.dll"; contains / exact on request).
+        must.append(build_text_query_for_mode(q, params.get("search_mode")))
     index = get_events_index(case_id)
     events: list[dict[str, Any]] = []
     # Fetch in the same direction the caller asked to sort by. The fetch is

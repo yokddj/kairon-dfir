@@ -14,6 +14,37 @@
 - event detail with pivots.
 - links to Command History, Execution Story, Search Timeline, Findings and Reports.
 
+## Case time window
+
+The time range is one window per case, shared by Search, Timeline, Artifact Views, Command History and Linux Authentication: set it on any of them and it still applies after moving to another. While it is set, the top bar shows it as a `Time: … → …` chip; its ✕ clears it everywhere. *Clear time* and *Clear filters* clear it too.
+
+- It is kept per case (a window from one incident means nothing in another) and survives a reload.
+- A link that carries `time_from`/`time_to` (for example *events around this one*) replaces the window; a link without them keeps it.
+- The From/To inputs are read and shown in the timezone selected in the top bar (user, case or UTC), the same one result timestamps use; the API always receives UTC.
+- Documents without a valid forensic timestamp are excluded while a window is set.
+
+## Text match modes
+
+Search, Timeline, Artifact Views and Command History use the same text engine, with the same three modes (`search_mode` in the API):
+
+| Mode | Matches | Example |
+| --- | --- | --- |
+| **Smart** (default) | words in any order; detects hashes, IPs, domains, paths, SIDs and commands; a bare stem also matches inside longer values; supports the field syntax below | `comsvcs` finds `comsvcs.dll` |
+| **Contains** | the whole text as a case-insensitive substring (128 characters max); field syntax is taken literally | `invoke-webrequest http` |
+| **Exact** | the whole text as an exact phrase, or an exact hash / IP / SID / GUID | `powershell -enc` |
+
+A bare Windows event ID (`4624`) is always matched as an event ID.
+
+## Quick filters
+
+| Quick filter | Matches |
+| --- | --- |
+| Downloads | browser downloads, BITS transfers (job database and BITS-Client log), interrupted/started downloads and Zone.Identifier (MOTW) marks |
+| Process executions | process creation (4688, Sysmon 1) and execution evidence (Prefetch run times) |
+| PowerShell activity | PowerShell's own logs (4103/4104/400/800, PSReadLine history) **or** any event of `powershell.exe`/`pwsh.exe`, written into the query box as field syntax so it stays visible and editable |
+
+Applying a quick filter replaces the previous one; the query text you typed yourself is kept.
+
 ## Command and path queries
 
 Search treats command flags as literal text. These examples should search for text/technical fields, not negative operators:

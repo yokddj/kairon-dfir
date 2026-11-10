@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services import command_history
+from app.services.search_service import build_text_query_for_mode
 
 
 def _event(event_id: int, **overrides):
@@ -322,9 +323,10 @@ def test_candidate_query_includes_linux_shell_history(monkeypatch) -> None:
     # The q text filter must be a required "must" clause, not another
     # "should" option -- see _fetch_candidate_events's comment on why an
     # OR'd text filter is a no-op for narrowing the fetch.
+    # It is the same text query Search and Timeline build, so a text means
+    # the same thing in Command History as on every other screen.
     must = captured["body"]["query"]["bool"]["must"]
-    q_clause = [clause for clause in must if "simple_query_string" in clause][0]
-    assert "linux.command" in q_clause["simple_query_string"]["fields"]
+    assert build_text_query_for_mode("whoami", "smart") in must
 
 
 def test_linux_shell_history_maps_to_command_history_response_model() -> None:

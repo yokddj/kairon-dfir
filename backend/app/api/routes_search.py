@@ -27,7 +27,7 @@ from app.ingest.normalization.registry_modifications import enrich_registry_comm
 from app.ingest.powershell.entity_normalization import normalize_powershell_entities
 from app.ingest.powershell.semantic_evtx import normalize_powershell_evtx_semantics
 from app.services.host_identity import expand_host_filter, normalize_host_alias, resolve_canonical_host
-from app.services.search_service import DOMAIN_FIELDS, FILENAME_FIELDS, HASH_FIELDS, IP_FIELDS, PATH_FIELDS, build_search_v2_params, event_context as event_context_v2, quick_filters as search_quick_filters, search_around_event as search_around_event_v2, search_case_v2, search_related_to_finding as search_related_to_finding_v2
+from app.services.search_service import build_text_query_for_mode, normalize_text_match_mode, DOMAIN_FIELDS, FILENAME_FIELDS, HASH_FIELDS, IP_FIELDS, PATH_FIELDS, build_search_v2_params, event_context as event_context_v2, quick_filters as search_quick_filters, search_around_event as search_around_event_v2, search_case_v2, search_related_to_finding as search_related_to_finding_v2
 
 
 router = APIRouter(tags=["search"])
@@ -685,44 +685,19 @@ def _build_text_query(payload: SearchRequest) -> dict:
     query = (payload.query or "").strip()
     if not query or query == "*":
         return {"match_all": {}}
-    mode = payload.search_mode
-    if mode == "ioc":
+    raw_mode = str(payload.search_mode or "smart").strip().lower()
+    if raw_mode == "ioc":
         return _build_ioc_query(query)
-    if mode == "exact":
-        if _query_looks_like_event_id(query):
-            return _build_ioc_query(query)
-        return {"multi_match": {"query": query, "type": "phrase", "fields": TEXT_SEARCH_FIELDS}}
-    if mode == "contains":
-        if _query_looks_like_event_id(query):
-            return _build_ioc_query(query)
-        if len(query) > 128:
-            raise HTTPException(status_code=400, detail="Contains queries must be 128 characters or fewer.")
-        escaped = _escape_wildcard_term(query.lower())
-        return {
-            "bool": {
-                "should": [
-                    search_text_substring_clause(f"*{escaped}*"),
-                {"wildcard": {"file.name": {"value": f"*{escaped}*", "case_insensitive": True}}},
-                {"wildcard": {"file.path": {"value": f"*{escaped}*", "case_insensitive": True}}},
-                {"wildcard": {"artifact.name": {"value": f"*{escaped}*", "case_insensitive": True}}},
-                {"wildcard": {"process.name": {"value": f"*{escaped}*", "case_insensitive": True}}},
-                {"wildcard": {"browser.domain": {"value": f"*{escaped}*", "case_insensitive": True}}},
-                {"wildcard": {"browser.search_terms": {"value": f"*{escaped}*", "case_insensitive": True}}},
-                {"wildcard": {"download.file_name": {"value": f"*{escaped}*", "case_insensitive": True}}},
-                {"wildcard": {"download.target_path": {"value": f"*{escaped}*", "case_insensitive": True}}},
-                {"wildcard": {"url.domain": {"value": f"*{escaped}*", "case_insensitive": True}}},
-                {"wildcard": {"network.domain": {"value": f"*{escaped}*", "case_insensitive": True}}},
-            ],
-                "minimum_should_match": 1,
-            }
-        }
-    if any(char in query for char in "*?"):
+    # Bare Windows event IDs ("4624") are a term match on the event-id fields
+    # in every mode; a substring or phrase over all text would drown them.
+    if _query_looks_like_event_id(query):
+        return _build_ioc_query(query)
+    mode = normalize_text_match_mode(raw_mode)
+    if mode == "smart" and any(char in query for char in "*?"):
         return {"query_string": {"query": query, "fields": TEXT_SEARCH_FIELDS, "default_operator": "AND"}}
-    if _query_looks_command_like(query):
-        return _build_command_like_query(query)
-    if _query_looks_like_event_id(query) or _query_looks_like_hash(query) or _query_looks_like_ip(query) or _query_looks_like_windows_path(query):
-        return _build_ioc_query(query)
-    return {"multi_match": {"query": query, "fields": TEXT_SEARCH_FIELDS, "operator": "and", "type": "best_fields"}}
+    # Same engine as Search, Timeline and Command History (GET endpoints), so
+    # a text means the same thing in Artifact Views as everywhere else.
+    return build_text_query_for_mode(query, mode)
 
 
 def _recommended_view(artifact_types: set[str], categories: set[str]) -> str:
@@ -1358,6 +1333,7 @@ def search_events(payload: SearchRequest) -> SearchResponse:
 def search_case_events_and_findings(
     case_id: str,
     q: str = Query(default=""),
+    search_mode: str = Query(default="smart"),
     exclude_q: str = Query(default=""),
     filters: str | None = Query(default=None),
     scope: str = Query(default="all"),
@@ -1412,6 +1388,7 @@ def search_case_events_and_findings(
 ) -> dict:
     params = build_search_v2_params(
         q=q,
+        search_mode=search_mode,
         exclude_q=exclude_q,
         filters=filters,
         scope=scope,

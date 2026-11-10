@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { useParams, useSearchParams } from "react-router-dom";
-import { api, type EmailArtifactItem, type MotwItem, type StartupPersistenceItem } from "../api/client";
+import { api, type EmailArtifactItem, type MotwItem, type StartupPersistenceItem, type TextMatchMode } from "../api/client";
 import CreateFindingDialog from "../components/CreateFindingDialog";
 import EmptyState from "../components/EmptyState";
 import EventTable, { type EventView, type SortField, type SortOrder } from "../components/EventTable";
@@ -10,7 +10,9 @@ import { SelectField, TextField } from "../components/FilterField";
 import IndicatorResolutionPanel from "../components/IndicatorResolutionPanel";
 import PaginationControls from "../components/PaginationControls";
 import ResponsiveDetailPanel from "../components/ResponsiveDetailPanel";
-import TimeField from "../components/TimeField";
+import TextMatchModeSelect, { parseTextMatchMode } from "../components/TextMatchModeSelect";
+import TimeRangeFilter from "../components/TimeRangeFilter";
+import { useGlobalTimeRange } from "../hooks/useGlobalTimeRange";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { resolveHost, useHostContext } from "../hooks/useHostContext";
@@ -666,9 +668,8 @@ export default function ArtifactExplorer() {
   const artifactType = canonicalArtifactView(artifactTypeFilter);
   const [artifactName, setArtifactName] = useState("");
   const [query, setQuery] = useState(searchParams.get("q") ?? "");
-  const [searchMode, setSearchMode] = useState<"smart" | "contains" | "ioc">("smart");
-  const [timeFrom, setTimeFrom] = useState(searchParams.get("time_from") ?? "");
-  const [timeTo, setTimeTo] = useState(searchParams.get("time_to") ?? "");
+  const [searchMode, setSearchMode] = useState<TextMatchMode>(parseTextMatchMode(searchParams.get("search_mode")));
+  const { timeFrom, timeTo, timeRangeInvalid, setTimeRange } = useGlobalTimeRange();
   const [mftDeletedOnly, setMftDeletedOnly] = useState(false);
   const [mftSuspiciousPathsOnly, setMftSuspiciousPathsOnly] = useState(false);
   const [mftExtension, setMftExtension] = useState("");
@@ -966,7 +967,7 @@ export default function ArtifactExplorer() {
 
   useEffect(() => {
     setPage(1);
-  }, [artifactName, artifactTypeFilter, backendVariant, caseId, pageSize, query, searchMode, persistenceType, persistenceSource, persistenceSuspiciousOnly, persistenceRiskMin, motwZoneId, motwExtension, motwRiskMin, emailType, emailClient, emailInterestingOnly, emailRiskMin]);
+  }, [artifactName, artifactTypeFilter, backendVariant, caseId, pageSize, query, searchMode, timeFrom, timeTo, persistenceType, persistenceSource, persistenceSuspiciousOnly, persistenceRiskMin, motwZoneId, motwExtension, motwRiskMin, emailType, emailClient, emailInterestingOnly, emailRiskMin]);
 
   const contextualPlaceholder =
     artifactType === "mft" || artifactType === "ntfs"
@@ -1095,7 +1096,7 @@ export default function ArtifactExplorer() {
             ))}
           </div>
         ) : null}
-        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_9rem_auto]">
           <label className="block">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact type</span>
             <select aria-label="Artifact view" value={artifactTypeFilter} onChange={(event) => setArtifactTypeFilter(event.target.value)} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50">
@@ -1104,28 +1105,23 @@ export default function ArtifactExplorer() {
             </select>
           </label>
           <TextField label="Search" value={query} onChange={setQuery} placeholder={contextualPlaceholder} />
+          <TextMatchModeSelect value={searchMode} onChange={setSearchMode} />
           <button disabled={!caseId || !selectedEventIds.length} onClick={() => setFindingDialogOpen(true)} className="self-end rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-muted disabled:opacity-50">
             Create Finding from selected events
           </button>
         </div>
         {!isStartupPersistenceView && !isMotwView && !isEmailView ? (
           <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <TimeField label="Time from" value={timeFrom} onChange={setTimeFrom} />
-            <TimeField label="Time to" value={timeTo} onChange={setTimeTo} />
-            {timeFrom || timeTo ? (
-              <button type="button" onClick={() => { setTimeFrom(""); setTimeTo(""); }} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-muted hover:text-accent">
-                Clear time filter
-              </button>
-            ) : null}
+            <TimeRangeFilter className="md:col-span-2" timeFrom={timeFrom} timeTo={timeTo} invalid={timeRangeInvalid} onChange={setTimeRange} />
           </div>
         ) : (timeFrom || timeTo) ? (
           <p className="mt-3 text-xs text-amber-300">Time filter isn&apos;t supported by this specialized view yet — switch to a general artifact type or use Search.</p>
         ) : null}
 
-        <details className="mt-4 rounded-2xl border border-line bg-abyss/60" open={Boolean(artifactName || searchMode !== "smart" || backendVariant !== "default")} data-testid="artifact-explorer-more-filters">
+        <details className="mt-4 rounded-2xl border border-line bg-abyss/60" open={Boolean(artifactName || backendVariant !== "default")} data-testid="artifact-explorer-more-filters">
           <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-sm text-ink">
             <span>More filters</span>
-            <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">Artifact name &middot; Search mode &middot; Backend</span>
+            <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">Artifact name &middot; Backend</span>
           </summary>
           <div className="grid gap-4 px-4 pb-4 md:grid-cols-2 xl:grid-cols-3">
             <label className="block">
@@ -1135,7 +1131,6 @@ export default function ArtifactExplorer() {
                 {artifactNameOptions.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
             </label>
-            <SelectField label="Search mode" value={searchMode === "smart" ? "" : searchMode} options={["contains", "ioc"]} emptyLabel="smart" onChange={(value) => setSearchMode((value || "smart") as "smart" | "contains" | "ioc")} />
             <SelectField label="Backend variant" value={backendVariant === "default" ? "" : backendVariant} options={["advanced", "all"]} emptyLabel="Default" onChange={(value) => setBackendVariant((value || "default") as "default" | "advanced" | "all")} />
           </div>
         </details>
@@ -1493,8 +1488,7 @@ export default function ArtifactExplorer() {
             onAroundEvent={(item, windowMs) => {
               const parsed = new Date(String(item["@timestamp"] ?? "")).getTime();
               if (Number.isNaN(parsed)) return;
-              setTimeFrom(new Date(parsed - windowMs).toISOString());
-              setTimeTo(new Date(parsed + windowMs).toISOString());
+              setTimeRange({ from: new Date(parsed - windowMs).toISOString(), to: new Date(parsed + windowMs).toISOString() });
               setPage(1);
             }}
             onFilterField={handleFilterField}

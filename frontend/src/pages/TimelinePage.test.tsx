@@ -45,7 +45,8 @@ vi.mock("../context/TimezoneContext", () => ({
   }),
 }));
 
-vi.mock("../lib/time", () => ({
+vi.mock("../lib/time", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/time")>()),
   formatTimestamp: (value: string) => value,
 }));
 

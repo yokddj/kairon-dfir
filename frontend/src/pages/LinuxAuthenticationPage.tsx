@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router-dom";
@@ -18,6 +18,9 @@ import {
 } from "../api/client";
 import { InvestigationBreadcrumbs } from "../components/InvestigationContext";
 import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
+import { useEffectiveTimezone } from "../hooks/useEffectiveTimezone";
+import { useGlobalTimeRange } from "../hooks/useGlobalTimeRange";
+import { fromDateTimeLocalValue, toDateTimeLocalValue } from "../lib/time";
 
 const TABS = [
   { key: "overview", label: "Overview" },
@@ -106,11 +109,14 @@ export default function LinuxAuthenticationPage() {
   const [sourceIp, setSourceIp] = useState("");
   const [result, setResult] = useState("");
   const [service, setService] = useState("");
-  const [timeFrom, setTimeFrom] = useState("");
-  const [timeTo, setTimeTo] = useState("");
+  const { timeFrom, timeTo, setTimeRange, setTimeFrom, setTimeTo } = useGlobalTimeRange();
+  const timezone = useEffectiveTimezone();
   const [showMore, setShowMore] = useState(false);
   const [eventGroup, setEventGroup] = useState("");
   const [eventOffset, setEventOffset] = useState(0);
+
+  // A new time window (here, in another view or from the top bar) restarts the event list.
+  useEffect(() => setEventOffset(0), [timeFrom, timeTo]);
 
   const params = useMemo(() => ({
     username: username.trim() || undefined,
@@ -167,15 +173,15 @@ export default function LinuxAuthenticationPage() {
           <input aria-label="Account" value={username} onChange={(event) => { setUsername(event.target.value); setEventOffset(0); }} placeholder="account" className="w-40 rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm" />
           <input aria-label="Source IP" value={sourceIp} onChange={(event) => { setSourceIp(event.target.value); setEventOffset(0); }} placeholder="source IP" className="w-40 rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm" />
           <select aria-label="Result" value={result} onChange={(event) => { setResult(event.target.value); setEventOffset(0); }} className="rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm"><option value="">Any result</option><option value="success">Success</option><option value="failure">Failure</option></select>
-          <input aria-label="From" type="datetime-local" value={timeFrom} onChange={(event) => { setTimeFrom(event.target.value); setEventOffset(0); }} className="rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm" />
-          <input aria-label="To" type="datetime-local" value={timeTo} onChange={(event) => { setTimeTo(event.target.value); setEventOffset(0); }} className="rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm" />
+          <input aria-label="From" type="datetime-local" step="1" title={`Interpreted in ${timezone}`} value={toDateTimeLocalValue(timeFrom, timezone)} onChange={(event) => setTimeFrom(fromDateTimeLocalValue(event.target.value, timezone))} className="rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm" />
+          <input aria-label="To" type="datetime-local" step="1" title={`Interpreted in ${timezone}`} value={toDateTimeLocalValue(timeTo, timezone)} onChange={(event) => setTimeTo(fromDateTimeLocalValue(event.target.value, timezone))} className="rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm" />
           <button type="button" onClick={() => setShowMore((value) => !value)} className="rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">{showMore ? "Fewer filters" : "More filters"}</button>
           {showMore ? <input aria-label="Service" value={service} onChange={(event) => { setService(event.target.value); setEventOffset(0); }} placeholder="service (sshd, login, su...)" className="w-56 rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm" /> : null}
         </div>
         {activeFilters.length ? (
           <div className="mt-3 flex flex-wrap items-center gap-2" data-testid="active-filters">
             {activeFilters.map((filter) => <button key={filter.label} type="button" onClick={filter.clear} className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 text-xs text-accent">{filter.label} ×</button>)}
-            <button type="button" onClick={() => { setUsername(""); setSourceIp(""); setResult(""); setService(""); setTimeFrom(""); setTimeTo(""); setEventOffset(0); }} className="text-xs text-muted underline">Clear all</button>
+            <button type="button" onClick={() => { setUsername(""); setSourceIp(""); setResult(""); setService(""); setTimeRange({ from: "", to: "" }); setEventOffset(0); }} className="text-xs text-muted underline">Clear all</button>
           </div>
         ) : null}
         <div className="mt-5 flex flex-wrap gap-2" role="tablist" aria-label="Authentication sections">

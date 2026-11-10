@@ -59,7 +59,7 @@ Tip:
 
 1. Open `Search`.
 2. Leave the query empty to see overall volume.
-3. Use `Search mode = IOC` or `smart` for specific EventIDs.
+3. Type the EventID: every match mode (Smart, Contains, Exact) matches a bare EventID as an EventID.
 4. If you need extra precision, filter by `artifact.type = evtx`.
 
 ## 7. How to Open an Event's Detail

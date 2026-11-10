@@ -4,6 +4,9 @@
 
 ### Added
 
+- **Case time window shared by every event view**: the time range set in Search, Timeline, Artifact Views, Command History or Linux Authentication now applies to all of them, per case, and survives a reload. A top-bar chip shows it and clears it everywhere. Links that carry `time_from`/`time_to` replace it; links without them keep it. See [docs/search-and-investigation/search.md](docs/search-and-investigation/search.md#case-time-window).
+- **Text match mode on every screen**: Search, Timeline, Artifact Views and Command History offer the same Smart / Contains / Exact selector (`search_mode` on the GET search, timeline and command-history endpoints) backed by one engine.
+
 - **Memory event log copies of disk records are hidden in the Timeline**: a MemProcFS event log record that a disk collection of the same host also holds is marked `memprocfs.on_disk` and hidden from the default Timeline (filter by the MemProcFS event log type to see them), whichever evidence was loaded first. On a test case 97-100 % of the memory records of three hosts were such copies; the records only memory still holds stay visible. `memprocfs.source` and `memprocfs.timeline` are now searchable fields.
 - **Import evidence from S3**: the evidence wizard can browse an S3 bucket (AWS or S3-compatible: MinIO, Ceph, Wasabi...) and import one object; the server downloads it into a normal upload session and it goes through the same hashing, preflight and registration as a browser upload. Off by default (`S3_SOURCE_ENABLED=true` to turn it on); an administrator sets the credentials under **S3 Source**, with the secret encrypted at rest. See [docs/evidence/s3-import.md](docs/evidence/s3-import.md).
 - **Console text from MemProcFS in Shell History** (`memprocfs.console`, part of `shell_history_basic`): commands typed in conhost.exe windows and in the PowerShell/cmd.exe sessions inside Windows Terminal, read from the console text MemProcFS rebuilds from memory. On Windows 11 24H2 `windows.consoles` and `windows.cmdscan` find nothing there; on a 24H2 test image this source recovered 8 commands where Shell History had none. Installs with the default plugin list pick it up automatically.
@@ -25,6 +28,11 @@
 
 ### Changed
 
+- **Time inputs use the display timezone**: From/To are read and shown in the timezone selected in the top bar (user, case or UTC). Before, Timeline sent the typed time without a zone (taken as UTC) and Search/Artifact Views used the browser's zone, so the same window filtered differently per screen and differed from the timestamps shown.
+- **One text engine**: Artifact Views' smart mode now matches like Search (a bare stem such as `comsvcs` finds `comsvcs.dll`), and Command History's text search, which only matched whole tokens, uses the same engine. Artifact Views' former `ioc` mode is the `Exact` mode.
+- **Quick filters match what parsers index**: *Downloads* also covers BITS transfers, started/interrupted downloads and Zone.Identifier (MOTW) marks (before: browser `file_downloaded` only); *Process executions* adds Sysmon 1 and Prefetch run times (before: `process_start` only); *PowerShell activity* is PowerShell's own logs or any `powershell.exe`/`pwsh.exe` event (before: process name only, which missed the 4103/4104 logs and PSReadLine history). Applying a quick filter replaces the previous one instead of AND-ing with it.
+- Search's *Last 24h / 7d / 30d* presets, relative to the current date and so empty on any past incident, are removed.
+
 - **Recommended follow-up indexing runs on its own** after an evidence's core ingest: user activity from the registry hives (RECmd), Shellbags, SRUM and Defender start in sequence when the evidence holds their sources, as **Run recommended indexing** did by hand. Heavy steps (Full MFT) stay on demand, and so does everything in usable-search mode.
 - Resumable uploads read each 64 MB chunk into memory before sending it, instead of letting the browser stream it from disk during the request. A file the browser can no longer read (moved, renamed, permission lost) now says so instead of failing as a network error.
 - Shellbags: the drive or UNC path is derived from SBECmd's shell-namespace path (`Desktop\This PC\C:\Users` -> `C:\Users`, `...\Computers and Devices\srv01\srv01\share` -> `\\srv01\share`), so network shares, user folders and suspicious folders are recognised; folders browsed on the RDP client's drive (`\\tsclient\...`) are tagged `rdp_client_drive`.
@@ -33,6 +41,7 @@
 
 ### Fixed
 
+- Windows capability presets in Search filtered by artifact types no parser produces (`process_execution`, `powershell_activity`, `program_executions`, `registry_run_key`...) and by `autoruns` while Autoruns events are indexed as `autorun`; they now use the indexed types, and `autoruns` matches `autorun`. The Linux *Failed SSH logins* preset's query text was ignored by the Search page.
 - **Security**: `PATCH /api/system/settings` and `POST /api/system/settings/reset` were open to any signed-in user and accepted any setting key, so a non-admin could overwrite or wipe the AI assistant and S3 configuration. Both now require an administrator, only accept tuning and deployment settings, and a reset leaves feature configuration alone.
 - The evidence wizard's **Import from existing server path** option sent the (empty) file selection instead of the path, so it never reached the server.
 - Memory Find Evil (MemProcFS) crashed silently (no stderr, no recognized exit code) on Windows crash dumps after pinning MemProcFS 5.19.1: the memory-worker image rebuilt `vmm.so` from an older source checkout with Kairon's own DNS-loop patch, linked against the newer release's `leechcore.so` -- an ABI mismatch between the two. Upstream fixed the same DNS-loop bug its own way in 5.19.1, so the patch and the rebuild step are dropped; the release's own unmodified `vmm.so` is used, matching the version of every other MemProcFS binary in the image.

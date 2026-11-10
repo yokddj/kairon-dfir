@@ -13,6 +13,9 @@ import { artifactLabel } from "../lib/artifactRegistry";
 import { windowsExecutionStoriesRoute } from "../lib/canonicalRoutes";
 import { compareValues, nextSortDirection, type SortDirection } from "../lib/sorting";
 import { formatTimestamp } from "../lib/time";
+import TextMatchModeSelect, { parseTextMatchMode } from "../components/TextMatchModeSelect";
+import TimeRangeFilter from "../components/TimeRangeFilter";
+import { useGlobalTimeRange } from "../hooks/useGlobalTimeRange";
 
 
 function riskTone(score: number) {
@@ -105,9 +108,9 @@ function TimelinePage() {
   const resolvedEvidenceId = requestedEvidenceId || selectedEvidenceId || "";
   const mode = (searchParams.get("mode") as TimelineMode | null) ?? "investigation";
   const [query, setQuery] = useState(searchParams.get("q") ?? "");
+  const [searchMode, setSearchMode] = useState(parseTextMatchMode(searchParams.get("search_mode")));
   const [sort, setSort] = useState(searchParams.get("sort") ?? "timestamp_desc");
-  const [timeFrom, setTimeFrom] = useState(searchParams.get("time_from") ?? "");
-  const [timeTo, setTimeTo] = useState(searchParams.get("time_to") ?? "");
+  const { timeFrom, timeTo, timeRangeInvalid, setTimeRange } = useGlobalTimeRange();
   const [riskMin, setRiskMin] = useState(searchParams.get("risk_min") ?? (mode === "investigation" ? "40" : ""));
   const [groupBy, setGroupBy] = useState(searchParams.get("group_by") ?? "hour");
   const [hostId, setHostId] = useState(searchParams.get("host_id") ?? "");
@@ -123,6 +126,8 @@ function TimelinePage() {
     importance: "medium",
   });
   const [cursorStack, setCursorStack] = useState<string[]>([]);
+  // A new time window (here or from another view / the top bar) starts again from the first page.
+  useEffect(() => setCursorStack([]), [timeFrom, timeTo]);
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [showHidden, setShowHidden] = useState(false);
   const focusedContextRef = useRef<string>("");
@@ -147,6 +152,7 @@ function TimelinePage() {
       evidence_id: resolvedEvidenceId || undefined,
       mode,
       q: query || undefined,
+      search_mode: query && searchMode !== "smart" ? searchMode : undefined,
       artifact_type: paramValues(searchParams, "artifact_type"),
       event_type: paramValues(searchParams, "event_type"),
       event_category: paramValues(searchParams, "event_category"),
@@ -166,7 +172,7 @@ function TimelinePage() {
       key_events_only: searchParams.get("key_events_only") === "true" || undefined,
       hide_routine: searchParams.get("hide_routine") === "true" || undefined,
     }),
-    [selectedHost, resolvedEvidenceId, mode, query, riskMin, timeFrom, timeTo, sort, cursorStack, groupBy, searchParams],
+    [selectedHost, resolvedEvidenceId, mode, query, searchMode, riskMin, timeFrom, timeTo, sort, cursorStack, groupBy, searchParams],
   );
 
   const timelineQuery = useQuery({
@@ -382,16 +388,15 @@ function TimelinePage() {
   useEffect(() => {
     const params = new URLSearchParams(searchParams);
     if (query) params.set("q", query); else params.delete("q");
+    if (searchMode !== "smart") params.set("search_mode", searchMode); else params.delete("search_mode");
     params.set("mode", mode);
     params.set("sort", sort);
-    if (timeFrom) params.set("time_from", timeFrom); else params.delete("time_from");
-    if (timeTo) params.set("time_to", timeTo); else params.delete("time_to");
     if (riskMin) params.set("risk_min", riskMin); else params.delete("risk_min");
     if (groupBy) params.set("group_by", groupBy); else params.delete("group_by");
     if (selectedId) params.set("selected", selectedId); else params.delete("selected");
     if (hostId) params.set("host_id", hostId); else params.delete("host_id");
     setSearchParams(params, { replace: true });
-  }, [groupBy, mode, query, riskMin, searchParams, selectedId, setSearchParams, sort, timeFrom, timeTo]);
+  }, [groupBy, mode, query, riskMin, searchMode, searchParams, selectedId, setSearchParams, sort]);
 
   useEffect(() => {
     if (selectedId && !(timelineQuery.data?.items ?? []).some((item) => item.id === selectedId)) {
@@ -547,7 +552,7 @@ function TimelinePage() {
           </div>
         </div>
 
-        <div className="mt-5 grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
+        <div className="mt-5 grid gap-3 xl:grid-cols-[minmax(0,1fr)_8rem_minmax(0,1.4fr)_auto]">
           <label className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Search</span>
             <div className="flex items-center gap-2">
@@ -555,14 +560,8 @@ function TimelinePage() {
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="payload.exe, powershell.exe, duckdns.org..." className="w-full bg-transparent outline-none" />
             </div>
           </label>
-          <label className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
-            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Time from</span>
-            <input type="datetime-local" step="1" value={timeFrom} onChange={(event) => setTimeFrom(event.target.value)} className="w-full bg-transparent outline-none" />
-          </label>
-          <label className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
-            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Time to</span>
-            <input type="datetime-local" step="1" value={timeTo} onChange={(event) => setTimeTo(event.target.value)} className="w-full bg-transparent outline-none" />
-          </label>
+          <TextMatchModeSelect compact value={searchMode} onChange={(next) => { setCursorStack([]); setSearchMode(next); }} />
+          <TimeRangeFilter compact timeFrom={timeFrom} timeTo={timeTo} invalid={timeRangeInvalid} onChange={(range) => { setCursorStack([]); setTimeRange(range); }} />
           <div className="flex flex-wrap gap-2">
             <label className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
               <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Risk min</span>
