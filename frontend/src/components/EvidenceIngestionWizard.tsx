@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
-import { api, type Evidence, type EvidenceIntent, type EvidencePlatform, type EvidenceUploadSessionCreateResponse, type EvidenceUploadSessionRead, type EvtxProfile, type IngestMode, type MemoryUploadStatus, type PreflightReport, type ResumableUploadSessionRead } from "../api/client";
+import { api, type Evidence, type EvidenceIntent, type EvidencePlatform, type EvidenceUploadSessionCreateResponse, type EvidenceUploadSessionRead, type EvtxProfile, type IngestMode, type MemoryUploadStatus, type PreflightReport, type ResumableUploadSessionRead, type S3ObjectEntry } from "../api/client";
 import { useNotifications } from "../context/NotificationsContext";
 import { MemoryEvidencePreparationCard } from "./memory/MemoryEvidencePreparationCard";
 import { MemoryInitialAnalysisAction } from "./memory/MemoryInitialAnalysisAction";
+import { S3ObjectPicker } from "./S3ObjectPicker";
 import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
 import { memoryEvidenceRoute } from "../lib/canonicalRoutes";
 import { zipFolder } from "../lib/folderZip";
@@ -14,7 +15,7 @@ import { hashBlob } from "../lib/sha256";
 type IntakeType = "disk_image" | "memory_dump" | "artifact_collection" | "folder" | "server_path";
 type WizardStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 type ProcessingMode = "recommended" | "custom" | "skip";
-type AcquisitionSource = "files" | "server_path";
+type AcquisitionSource = "files" | "server_path" | "s3";
 type HostChoice = "auto" | "__create__" | "__unassigned__" | string;
 type InspectionState = "idle" | "uploading" | "finalizing_upload" | "preflight_running" | "complete" | "failed";
 type ForcedRoute = "disk_image" | "memory_dump" | "collection" | "archive" | "unknown";
@@ -295,6 +296,9 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [folderPackProgress, setFolderPackProgress] = useState<number | null>(null);
   const [acquisitionSource, setAcquisitionSource] = useState<AcquisitionSource>("files");
   const [serverPath, setServerPath] = useState("");
+  const [s3Selection, setS3Selection] = useState<{ bucket: string; object: S3ObjectEntry } | null>(null);
+  // Set when the wizard closes, so a running S3 import stops waiting for its session.
+  const s3AbortRef = useRef(false);
   const [session, setSession] = useState<EvidenceUploadSessionRead | null>(null);
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
   // Step 6 only: the just-registered memory evidence, shown in a
@@ -362,6 +366,9 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [resumeFolderPackProgress, setResumeFolderPackProgress] = useState<number | null>(null);
 
   const requiresPathInput = acquisitionSource === "server_path";
+  const importsFromS3 = acquisitionSource === "s3";
+  const s3StatusQuery = useQuery({ queryKey: ["s3-status", caseId], queryFn: () => api.getS3Status(caseId), enabled: open, retry: false, staleTime: 60_000 });
+  const s3Available = Boolean(s3StatusQuery.data?.enabled && s3StatusQuery.data.configured);
   const requiresFolderInput = folderUploadSelected;
   const activePreflightReports = batchItems.length ? batchItems.map((item) => item.preflight) : preflight ? [preflight] : [];
   // Auxiliary support files (symbol bundles, Volatility profiles...) are never promoted, so their
@@ -462,6 +469,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setFolderPackProgress(null);
     setAcquisitionSource("files");
     setServerPath("");
+    setS3Selection(null);
+    s3AbortRef.current = true;
     setSession(null);
     setPreflight(null);
     setBatchItems([]);
@@ -743,6 +752,31 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     return null;
   }
 
+  // The server downloads the object into an ordinary upload session (POST .../s3/import) and then
+  // runs the same preflight a browser upload gets; this follows that session until its report is
+  // ready and returns the same response a finalize does, so everything after is the normal flow.
+  async function importFromS3(selection: { bucket: string; object: S3ObjectEntry }): Promise<EvidenceUploadSessionCreateResponse> {
+    s3AbortRef.current = false;
+    let current = (await api.startS3Import(caseId, { bucket: selection.bucket, key: selection.object.key, declared_platform: platform })).session;
+    setSession(current);
+    setInspectionState("uploading");
+    setUploadProgress(0);
+    while (current.status !== "staged") {
+      if (["failed", "cancelled", "expired", "promoted"].includes(current.status)) {
+        throw new Error(current.failure_message || `The S3 import ended as ${current.status}.`);
+      }
+      if (current.status === "preflight_running") setInspectionState("preflight_running");
+      else if (current.expected_size_bytes) setUploadProgress(Math.min(1, current.bytes_received / current.expected_size_bytes));
+      await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      if (s3AbortRef.current) throw new Error("The wizard was closed; the S3 download continues on the server (see Activity Center).");
+      current = (await api.getEvidenceUploadSession(caseId, current.id)).session;
+      setSession(current);
+    }
+    setUploadProgress(1);
+    setInspectionState("finalizing_upload");
+    return api.finalizeResumableEvidenceUploadSession(caseId, current.id);
+  }
+
   const createSessionMutation = useMutation({
     mutationFn: async () => {
       setInspectionError(null);
@@ -772,7 +806,11 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       }
 
       setUploadProgress(requiresPathInput ? null : 0);
-      if (intakeType === "server_path") {
+      if (importsFromS3) {
+        if (!s3Selection) throw new Error("Select an object in the bucket first.");
+        return importFromS3(s3Selection);
+      }
+      if (requiresPathInput) {
         setInspectionState("preflight_running");
         return api.createEvidenceUploadSession(caseId, { serverPath: serverPath.trim() }, { declaredPlatform: platform });
       }
@@ -1150,8 +1188,9 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
   const canAdvanceStep4 = useMemo(() => {
     if (requiresPathInput) return serverPath.trim().length > 0;
+    if (importsFromS3) return s3Selection !== null;
     return files.length > 0;
-  }, [requiresPathInput, serverPath, files]);
+  }, [requiresPathInput, importsFromS3, s3Selection, serverPath, files]);
 
   const hashPending = files.length === 1 && !requiresPathInput && hashProgress !== null && hashProgress < 1;
   const inspectionElapsedSeconds = inspectionStartedAt ? Math.max(0, Math.floor((nowMs - inspectionStartedAt) / 1000)) : 0;
@@ -1529,6 +1568,37 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                     <input value={serverPath} onChange={(event) => setServerPath(event.target.value)} placeholder="/mnt/evidence/case-001/evidence.img" className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" />
                   </label>
                 ) : null}
+                {s3Available ? (
+                  <label className="flex items-start gap-2 rounded-2xl border border-line bg-abyss/60 p-3 text-sm text-muted">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={importsFromS3}
+                      data-testid="import-from-s3"
+                      onChange={(event) => {
+                        setS3Selection(null);
+                        if (event.target.checked) {
+                          setAcquisitionSource("s3");
+                          setFolderUploadSelected(false);
+                          setFiles([]);
+                          setSession(null);
+                          setPreflight(null);
+                          setBatchItems([]);
+                          setInspectionState("idle");
+                          setInspectionError(null);
+                          setUploadProgress(null);
+                        } else {
+                          setAcquisitionSource("files");
+                        }
+                      }}
+                    />
+                    <span>
+                      Import from S3 bucket
+                      <span className="mt-1 block text-xs text-muted">The server downloads the selected object and processes it like an upload.</span>
+                    </span>
+                  </label>
+                ) : null}
+                {importsFromS3 ? <S3ObjectPicker caseId={caseId} defaultBucket={s3StatusQuery.data?.default_bucket ?? ""} selected={s3Selection} onSelect={setS3Selection} /> : null}
               </div>
             </details>
             {showAdvancedOptions ? (

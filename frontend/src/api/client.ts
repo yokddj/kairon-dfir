@@ -6331,6 +6331,21 @@ export const api = {
   listAiProviderModels: (provider: string, payload: AiProviderProbe) =>
     request<AiProviderModelsResponse>(`/ai/providers/${provider}/models`, { method: "POST", body: JSON.stringify(payload) }),
   getAiStatus: () => request<AiStatusResponse>("/ai/status"),
+  getS3Config: () => request<S3ConfigResponse>("/s3/config"),
+  updateS3Config: (payload: S3ConfigUpdate) =>
+    request<S3ConfigResponse>("/s3/config", { method: "PUT", body: JSON.stringify(payload) }),
+  testS3Config: (payload: S3ConfigUpdate & { bucket?: string }) =>
+    request<{ ok: boolean; message?: string; error?: string }>("/s3/test", { method: "POST", body: JSON.stringify(payload) }),
+  getS3Status: (caseId: string) => request<S3StatusResponse>(`/cases/${caseId}/s3/status`),
+  listS3Objects: (caseId: string, params: { bucket?: string; prefix?: string; token?: string }) => {
+    const query = new URLSearchParams();
+    if (params.bucket) query.set("bucket", params.bucket);
+    if (params.prefix) query.set("prefix", params.prefix);
+    if (params.token) query.set("token", params.token);
+    return request<S3ObjectListResponse>(`/cases/${caseId}/s3/objects?${query.toString()}`);
+  },
+  startS3Import: (caseId: string, payload: { bucket?: string; key: string; declared_platform?: string }) =>
+    request<{ session: EvidenceUploadSessionRead }>(`/cases/${caseId}/s3/import`, { method: "POST", body: JSON.stringify(payload) }),
   translateNaturalLanguageSearch: (caseId: string, question: string, provider?: string | null) =>
     request<{ query: string }>(`/cases/${caseId}/ai/nl-search`, { method: "POST", body: JSON.stringify({ question, provider: provider ?? null }) }),
   listCases: (params?: CaseListParams | { queryKey?: unknown }) => request<DfirCase[]>(buildArtifactQuery("/cases", params && "queryKey" in params ? undefined : params)),
@@ -9036,6 +9051,34 @@ export type AiProviderEntry = {
   has_api_key: boolean;
   configured: boolean;
 };
+
+export type S3ConfigResponse = {
+  enabled: boolean;
+  endpoint_url: string;
+  region: string;
+  access_key_id: string;
+  default_bucket: string;
+  path_style: boolean;
+  has_secret_access_key: boolean;
+  secret_access_key_masked: string | null;
+  configured: boolean;
+};
+
+export type S3ConfigUpdate = {
+  endpoint_url?: string;
+  region?: string;
+  access_key_id?: string;
+  // Omitted keeps the stored secret, "" clears it.
+  secret_access_key?: string;
+  default_bucket?: string;
+  path_style?: boolean;
+};
+
+export type S3StatusResponse = { enabled: boolean; configured: boolean; default_bucket: string };
+
+export type S3ObjectEntry = { key: string; name: string; size: number; last_modified: string | null; storage_class: string | null };
+
+export type S3ObjectListResponse = { bucket: string; prefix: string; prefixes: string[]; objects: S3ObjectEntry[]; next_token: string | null };
 
 export type AiConfigResponse = {
   enabled: boolean;

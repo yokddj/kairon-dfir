@@ -1,6 +1,7 @@
 import {
   BookOpen,
   Bot,
+  Cloud,
   Compass,
   Cpu,
   Database,
@@ -274,6 +275,19 @@ export default function Sidebar() {
           >
             <Bot size={16} />
             AI Assistant
+          </NavLink>
+        )}
+        {user?.is_admin && (
+          <NavLink
+            to="/settings/s3"
+            className={({ isActive }) =>
+              `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${
+                isActive ? "bg-accent/10 text-accent shadow-panel" : "text-muted hover:bg-white/5 hover:text-ink"
+              }`
+            }
+          >
+            <Cloud size={16} />
+            S3 Source
           </NavLink>
         )}
         <NavLink

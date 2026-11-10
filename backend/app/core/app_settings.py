@@ -132,6 +132,14 @@ PERFORMANCE_PROFILES = {
 }
 
 SETTING_META: dict[str, dict[str, Any]] = {
+    "S3_SOURCE": {
+        "category": "evidence",
+        "description": "S3 bucket evidence can be imported from. The secret access key inside it is encrypted at rest.",
+        "requires_restart": False,
+        "restart_scope": "none",
+        "applies_immediately": True,
+        "value_type": "json",
+    },
     "AI_ASSISTANT": {
         "category": "ai",
         "description": "AI assistant provider configuration. API keys inside it are encrypted at rest.",

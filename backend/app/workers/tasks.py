@@ -435,6 +435,21 @@ def enqueue_evidence_upload_preflight(upload_session_id: str) -> str:
     return job.id
 
 
+def enqueue_s3_import(upload_session_id: str) -> str:
+    job = ingest_queue.enqueue(
+        "app.workers.tasks.run_s3_import",
+        upload_session_id,
+        job_timeout=max(int(settings.ingest_job_timeout_seconds or 0), 3600),
+    )
+    return job.id
+
+
+def run_s3_import(upload_session_id: str) -> dict:
+    from app.services.s3_source import run_import
+
+    return run_import(upload_session_id)
+
+
 def run_evidence_upload_preflight(upload_session_id: str) -> dict:
     from app.models.evidence_upload_session import EvidenceUploadSession
     from app.services.evidence_operations import (

@@ -200,6 +200,7 @@ def create_resumable_upload_session(
     declared_platform: str | None = None,
     client_sha256: str | None = None,
     packaged_from_folder: bool = False,
+    reuse_existing: bool = True,
 ) -> EvidenceUploadSession:
     if not db.get(Case, case_id):
         raise UploadSessionError("case_not_found", "Case not found")
@@ -215,7 +216,7 @@ def create_resumable_upload_session(
     # per-entry metadata), so a re-selection of the same folder reaches this with the
     # same filename+size too, and is reused the same way -- the wizard only has to
     # repack it (fast, local I/O), not re-upload the bytes the server already has.
-    existing = (
+    existing = None if not reuse_existing else (
         db.query(EvidenceUploadSession)
         .filter(
             EvidenceUploadSession.case_id == case_id,
