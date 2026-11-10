@@ -68,8 +68,10 @@ export function toDateTimeLocalValue(value: string, timezone?: string) {
  * -> UTC ISO instant for the API. A value that already carries an offset is
  * taken as is. Unparseable input is returned unchanged.
  */
-export function fromDateTimeLocalValue(value: string, timezone?: string) {
+export function fromDateTimeLocalValue(value: string, timezone?: string, options: { endOfMinute?: boolean } = {}) {
   if (!value) return "";
+  // An upper bound typed to the minute ("19:45") means up to 19:45:59.
+  if (options.endOfMinute && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}$/.test(value.trim())) value = `${value.trim()}:59`;
   if (/([zZ]|[+-]\d{2}:?\d{2})$/.test(value.trim())) {
     const parsed = new Date(value);
     return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();

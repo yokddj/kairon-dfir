@@ -6,7 +6,7 @@ import { fromDateTimeLocalValue, toDateTimeLocalValue } from "../lib/time";
  * the input shows and accepts wall-clock time in the timezone selected in the
  * top bar (user, case or UTC), the same one result timestamps are shown in.
  */
-export default function TimeField({ label, value, onChange, compact = false }: { label: string; value: string; onChange: (value: string) => void; compact?: boolean }) {
+export default function TimeField({ label, value, onChange, compact = false, endOfMinute = false }: { label: string; value: string; onChange: (value: string) => void; compact?: boolean; endOfMinute?: boolean }) {
   const timezone = useEffectiveTimezone();
   return (
     <label className="block">
@@ -17,7 +17,7 @@ export default function TimeField({ label, value, onChange, compact = false }: {
         step="1"
         title={`Interpreted in ${timezone}`}
         value={toDateTimeLocalValue(value, timezone)}
-        onChange={(event) => onChange(fromDateTimeLocalValue(event.target.value, timezone))}
+        onChange={(event) => onChange(fromDateTimeLocalValue(event.target.value, timezone, { endOfMinute }))}
         className={`w-full rounded-2xl border border-line bg-abyss/80 text-sm outline-none focus:border-accent/50 ${compact ? "px-3 py-2" : "px-4 py-3"}`}
       />
     </label>

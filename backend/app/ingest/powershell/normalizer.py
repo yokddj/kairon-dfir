@@ -6,6 +6,7 @@ from app.ingest.powershell.helpers import (
     detect_execution_policy_bypass,
     detect_iex,
     detect_persistence_keywords,
+    POWERSHELL_DOWNLOAD_RULE_VERSION,
     detect_powershell_download,
     extension_windows,
     extract_domains,
@@ -198,6 +199,7 @@ def normalize_powershell_row(document: dict, row: dict, artifact_meta: dict) -> 
             "encoded_command": encoded_command,
             "decoded_command_preview": preview_command(decoded_preview, 1024) if decoded_preview else None,
             "has_download": has_download,
+            "download_rule": POWERSHELL_DOWNLOAD_RULE_VERSION,
             "has_iex": has_iex,
             "has_execution_policy_bypass": has_execution_policy_bypass,
             "has_defender_tampering": has_defender_tampering,
@@ -262,7 +264,9 @@ def normalize_powershell_row(document: dict, row: dict, artifact_meta: dict) -> 
     download_file_name = basename_windows(download_target) or (
         basename_windows(urls[0].split("?", 1)[0]) if urls else None
     )
-    if urls or download_target or first("BytesTotal", "BytesTransferred", "State"):
+    # Only a download verb (or transfer fields) makes this a download; a URL
+    # alone stays an indicator in url.* above.
+    if (has_download and (urls or download_target)) or first("BytesTotal", "BytesTransferred", "State"):
         download.update(
             {
                 "url": urls[0] if urls else None,

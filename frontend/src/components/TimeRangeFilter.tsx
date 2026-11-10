@@ -27,7 +27,7 @@ export default function TimeRangeFilter({
     <div className={className} data-testid="time-range-filter">
       <div className="grid gap-3 sm:grid-cols-2">
         <TimeField label="Time from" compact={compact} value={timeFrom} onChange={(value) => onChange({ from: value, to: timeTo })} />
-        <TimeField label="Time to" compact={compact} value={timeTo} onChange={(value) => onChange({ from: timeFrom, to: value })} />
+        <TimeField label="Time to" endOfMinute compact={compact} value={timeTo} onChange={(value) => onChange({ from: timeFrom, to: value })} />
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
         <span>{`Times in ${timezone}.`}</span>

@@ -5,6 +5,9 @@ import { type ShellHistorySource, shellHistorySourceApplies } from "../../lib/me
 import { FacetSelect, type Facet } from "./FacetSelect";
 import { findEvilProcessQueryKey } from "./MemoryFindEvilProcesses";
 import { MemoryPaginationControls } from "./MemoryPaginationControls";
+import { useEffectiveTimezone } from "../../hooks/useEffectiveTimezone";
+import { useCaseTimeWindow } from "../../hooks/useGlobalTimeRange";
+import { fromDateTimeLocalValue, toDateTimeLocalValue } from "../../lib/time";
 
 type Props = {
   caseId: string;
@@ -195,9 +198,11 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
   const [visibility, setVisibility] = useState("");
   const [ppid, setPpid] = useState("");
   const [sortOrder, setSortOrder] = useState<"oldest_first" | "newest_first">("oldest_first");
-  // Start-time range (UTC); only processes known to have started inside it.
-  const [timeFrom, setTimeFrom] = useState("");
-  const [timeTo, setTimeTo] = useState("");
+  // Start-time range: the case time window (shared with Search, Timeline...),
+  // shown in the display timezone; only processes known to have started
+  // inside it are listed.
+  const { timeFrom, timeTo, setTimeFrom, setTimeTo, setTimeRange } = useCaseTimeWindow();
+  const timezone = useEffectiveTimezone();
   const findEvil = useFindEvilByPid(caseId, evidenceId);
   // Command lines that differ only in numbers (service hosts, kernel workers)
   // are one row with their count, run-once ones first.
@@ -214,7 +219,7 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
         sort_order: sortOrder,
         group_identical: grouped || undefined,
         time_from: timeFrom || undefined,
-        time_to: timeTo ? `${timeTo}:59` : undefined,
+        time_to: timeTo || undefined,
         page,
         page_size: pageSize,
       }),
@@ -235,8 +240,7 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
     setSearch("");
     setVisibility("");
     setPpid("");
-    setTimeFrom("");
-    setTimeTo("");
+    setTimeRange({ from: "", to: "" });
     setPage(1);
   }
 
@@ -282,9 +286,11 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
           Started from
           <input
             type="datetime-local"
-            value={timeFrom}
-            onChange={(event) => { setTimeFrom(event.target.value); setPage(1); }}
-            aria-label="Started from (UTC)"
+            step="1"
+            value={toDateTimeLocalValue(timeFrom, timezone)}
+            onChange={(event) => { setTimeFrom(fromDateTimeLocalValue(event.target.value, timezone)); setPage(1); }}
+            aria-label="Started from"
+            title={`Interpreted in ${timezone}`}
             className={INPUT}
             data-testid="shell-history-launched-from"
           />
@@ -293,13 +299,15 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
           to
           <input
             type="datetime-local"
-            value={timeTo}
-            onChange={(event) => { setTimeTo(event.target.value); setPage(1); }}
-            aria-label="Started to (UTC)"
+            step="1"
+            value={toDateTimeLocalValue(timeTo, timezone)}
+            onChange={(event) => { setTimeTo(fromDateTimeLocalValue(event.target.value, timezone, { endOfMinute: true })); setPage(1); }}
+            aria-label="Started to"
+            title={`Interpreted in ${timezone}`}
             className={INPUT}
             data-testid="shell-history-launched-to"
           />
-          <span className="text-[10px]">UTC</span>
+          <span className="text-[10px]">{timezone}</span>
         </label>
         <label className="flex items-center gap-1 text-muted">
           <input

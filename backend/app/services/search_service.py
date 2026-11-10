@@ -593,7 +593,12 @@ def _build_text_query(query: str) -> dict[str, Any]:
     if ioc_type in {"md5", "sha1", "sha256"}:
         return {"bool": {"should": _build_should_terms(HASH_FIELDS, query), "minimum_should_match": 1}}
     if ioc_type == "ipv4":
-        return {"bool": {"should": _build_should_terms(IP_FIELDS, query), "minimum_should_match": 1}}
+        # The IP fields, and the address written in text (log messages,
+        # command lines, URLs) that no IP field holds -- before, Smart missed
+        # those while Contains and Exact found them.
+        should = _build_should_terms(IP_FIELDS, query)
+        should.append({"multi_match": {"query": query, "type": "phrase", "fields": TEXT_FIELDS, "lenient": True}})
+        return {"bool": {"should": should, "minimum_should_match": 1}}
     if ioc_type == "url":
         should = _build_should_terms(URL_FIELDS, query, wildcard=True)
         should.extend(_build_should_terms(TEXT_FIELDS, query, wildcard=True))

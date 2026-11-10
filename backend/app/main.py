@@ -509,6 +509,22 @@ def on_startup() -> None:
     if settings.memory_enabled:
         _cleanup_memory_upload_sessions_startup(logger)
 
+    # Re-check PowerShell events flagged as downloads only because their text
+    # held a URL (help links in system modules). Off the request path: a
+    # large case must not delay the API coming up.
+    import threading
+
+    def _repair_powershell_downloads() -> None:
+        from app.services.powershell_download_repair import repair_powershell_url_only_downloads
+        try:
+            repaired = repair_powershell_url_only_downloads()
+            if repaired:
+                logger.info("PowerShell download repair cleared %d URL-only download(s)", repaired)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PowerShell download repair skipped: %s", exc)
+
+    threading.Thread(target=_repair_powershell_downloads, name="powershell-download-repair", daemon=True).start()
+
 
 @app.get("/health")
 def health() -> dict:

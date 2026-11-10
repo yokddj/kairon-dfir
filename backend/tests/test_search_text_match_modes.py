@@ -82,3 +82,11 @@ def test_exact_only_adds_typed_indicator_terms_for_a_matching_value() -> None:
     assert "source.ip" not in _dump(build_text_query_for_mode("powershell -enc", "exact"))
     assert "term" not in _dump(build_text_query_for_mode("powershell -enc", "exact"))
     assert "term" in _dump(build_text_query_for_mode("10.0.0.5", "exact"))
+
+
+def test_smart_ip_also_matches_the_address_in_text() -> None:
+    query = build_text_query_for_mode("127.0.0.1", "smart")
+    dumped = _dump(query)
+    assert "source.ip" in dumped
+    phrase = [clause["multi_match"] for clause in query["bool"]["should"] if "multi_match" in clause]
+    assert phrase and phrase[0]["type"] == "phrase" and phrase[0]["lenient"] is True

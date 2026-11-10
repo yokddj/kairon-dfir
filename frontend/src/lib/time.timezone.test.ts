@@ -20,6 +20,11 @@ describe("datetime-local conversion in the display timezone", () => {
     expect(toDateTimeLocalValue(iso, "Europe/Madrid")).toBe("2026-03-29T03:30");
   });
 
+  it("an upper bound typed to the minute covers the whole minute", () => {
+    expect(fromDateTimeLocalValue("2026-05-15T10:45", "UTC", { endOfMinute: true })).toBe("2026-05-15T10:45:59.000Z");
+    expect(fromDateTimeLocalValue("2026-05-15T10:45:10", "UTC", { endOfMinute: true })).toBe("2026-05-15T10:45:10.000Z");
+  });
+
   it("keeps values that already carry an offset", () => {
     expect(fromDateTimeLocalValue("2026-05-15T10:00:00+02:00", "UTC")).toBe("2026-05-15T08:00:00.000Z");
     expect(fromDateTimeLocalValue("", "UTC")).toBe("");
