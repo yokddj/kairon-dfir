@@ -250,6 +250,11 @@ def try_decode_powershell_encoded_command(command: str | None) -> tuple[str | No
         return encoded, None
 
 
+# Version of the download-cradle rule an event was evaluated with (see
+# services/powershell_download_repair.py). 2: a bare URL is not a download.
+POWERSHELL_DOWNLOAD_RULE_VERSION = 2
+
+
 def detect_powershell_download(command: str | None) -> bool:
     text = (clean_text(command) or "").lower()
     return any(
@@ -266,8 +271,9 @@ def detect_powershell_download(command: str | None) -> bool:
             "downloadfile",
             "start-bitstransfer",
             "system.net.webclient",
-            "http://",
-            "https://",
+            # A bare URL is not a download: module and script help text is
+            # full of documentation links (about_*, fwlink) that were reported
+            # as download cradles and as downloaded files.
         )
     )
 

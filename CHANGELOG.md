@@ -41,6 +41,9 @@
 
 ### Fixed
 
+- **PowerShell scripts with documentation links were reported as downloads**: any URL in PowerShell text counted as a download cradle, so system modules with help links (`.LINK https://go.microsoft.com/fwlink/...`) got a `download.*` record pointing at the script itself, the `download_cradle` and `suspicious` tags and risk 72. A download now needs a download verb (Invoke-WebRequest, DownloadString/DownloadFile, Start-BitsTransfer...); the URL stays an indicator in `url.*`. Events already indexed are re-checked once at startup and cleaned (download, tag, reason, PowerShell risk); real cradles and reasons from other sources are kept.
+- Smart search for an IPv4 address only looked in the IP fields, so an address written in a log message or command line was found by Contains and Exact but not by Smart.
+- The memory **Shell History** start-time filter uses the case time window and the display timezone like the other views (it had its own UTC-only range). An upper bound typed to the minute covers the whole minute in every time filter.
 - Windows capability presets in Search filtered by artifact types no parser produces (`process_execution`, `powershell_activity`, `program_executions`, `registry_run_key`...) and by `autoruns` while Autoruns events are indexed as `autorun`; they now use the indexed types, and `autoruns` matches `autorun`. The Linux *Failed SSH logins* preset's query text was ignored by the Search page.
 - **Security**: `PATCH /api/system/settings` and `POST /api/system/settings/reset` were open to any signed-in user and accepted any setting key, so a non-admin could overwrite or wipe the AI assistant and S3 configuration. Both now require an administrator, only accept tuning and deployment settings, and a reset leaves feature configuration alone.
 - The evidence wizard's **Import from existing server path** option sent the (empty) file selection instead of the path, so it never reached the server.

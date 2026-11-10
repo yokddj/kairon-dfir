@@ -1,3 +1,4 @@
+import { fromDateTimeLocalValue } from "../../lib/time";
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -119,7 +120,7 @@ describe("MemoryShellHistoryTab", () => {
     fireEvent.change(await screen.findByTestId("shell-history-launched-from"), { target: { value: "2025-03-07T19:40" } });
     fireEvent.change(screen.getByTestId("shell-history-launched-to"), { target: { value: "2025-03-07T19:45" } });
     await waitFor(() =>
-      expect(getCommandLineHistoryMock).toHaveBeenLastCalledWith(CASE, expect.objectContaining({ time_from: "2025-03-07T19:40", time_to: "2025-03-07T19:45:59" })),
+      expect(getCommandLineHistoryMock).toHaveBeenLastCalledWith(CASE, expect.objectContaining({ time_from: fromDateTimeLocalValue("2025-03-07T19:40"), time_to: fromDateTimeLocalValue("2025-03-07T19:45:59") })),
     );
   });
 

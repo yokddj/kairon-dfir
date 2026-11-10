@@ -118,3 +118,22 @@ export function useGlobalTimeRange(options: Options = {}) {
     clearTimeRange: () => setTimeRange({ from: "", to: "" }),
   };
 }
+
+/**
+ * The case-wide time window without URL mirroring, for panels inside a page
+ * that owns its own URL (memory tabs). Needs no router; outside the provider
+ * it is local state.
+ */
+export function useCaseTimeWindow() {
+  const context = useOptionalTimeRangeContext();
+  const [localRange, setLocalRange] = useState<TimeRange>({ from: "", to: "" });
+  const timeRange = context?.timeRange ?? localRange;
+  const setTimeRange = useCallback((range: TimeRange) => (context?.setTimeRange ?? setLocalRange)({ from: range.from || "", to: range.to || "" }), [context]);
+  return {
+    timeFrom: timeRange.from,
+    timeTo: timeRange.to,
+    setTimeRange,
+    setTimeFrom: (from: string) => setTimeRange({ from, to: timeRange.to }),
+    setTimeTo: (to: string) => setTimeRange({ from: timeRange.from, to }),
+  };
+}

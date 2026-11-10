@@ -16,11 +16,12 @@
 
 ## Case time window
 
-The time range is one window per case, shared by Search, Timeline, Artifact Views, Command History and Linux Authentication: set it on any of them and it still applies after moving to another. While it is set, the top bar shows it as a `Time: … → …` chip; its ✕ clears it everywhere. *Clear time* and *Clear filters* clear it too.
+The time range is one window per case, shared by Search, Timeline, Artifact Views, Command History, Linux Authentication and the memory Shell History tab (where it filters by process start time): set it on any of them and it still applies after moving to another. While it is set, the top bar shows it as a `Time: … → …` chip; its ✕ clears it everywhere. *Clear time* and *Clear filters* clear it too.
 
 - It is kept per case (a window from one incident means nothing in another) and survives a reload.
 - A link that carries `time_from`/`time_to` (for example *events around this one*) replaces the window; a link without them keeps it.
 - The From/To inputs are read and shown in the timezone selected in the top bar (user, case or UTC), the same one result timestamps use; the API always receives UTC.
+- An upper bound typed to the minute (`10:45`) covers the whole minute (up to `10:45:59`).
 - Documents without a valid forensic timestamp are excluded while a window is set.
 
 ## Text match modes
