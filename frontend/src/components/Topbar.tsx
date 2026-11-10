@@ -2,7 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
+import { useOptionalTimeRangeContext } from "../context/TimeRangeContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
+import { formatTimestamp } from "../lib/time";
 import { useHostContext } from "../hooks/useHostContext";
 
 const CASE_WARNING_TEXT: Record<string, string> = {
@@ -32,6 +34,9 @@ export default function Topbar() {
   const { activeHostId, activeHostSummary, setHostFilter, clearHostFilter } = useHostContext();
   const { timezoneMode, setTimezoneMode, effectiveTimezone, userTimezone } = useTimezonePreference();
   const { data: cases } = useQuery({ queryKey: ["cases"], queryFn: api.listCases });
+  const timeRangeContext = useOptionalTimeRangeContext();
+  const timeRange = timeRangeContext?.timeRange ?? { from: "", to: "" };
+  const timeRangeActive = Boolean(activeCase && (timeRange.from || timeRange.to));
   const selectedEvidence = caseContext?.evidences.find((item) => item.id === selectedEvidenceId) ?? null;
   // Only warnings the analyst can act on reach the top bar; informational codes such as
   // multi_host_case are already visible in the host selector.
@@ -141,7 +146,7 @@ export default function Topbar() {
         </div>
       </div>
 
-      {!activeCase || activeHostSummary || selectedEvidence || location.pathname === "/" ? (
+      {!activeCase || activeHostSummary || selectedEvidence || timeRangeActive || location.pathname === "/" ? (
       <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted">
         {activeCase ? (
           <>
@@ -157,6 +162,14 @@ export default function Topbar() {
               <span className="flex max-w-[320px] items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-accent">
                 <span className="truncate">{`Evidence: ${selectedEvidence.name}`}</span>
                 <button type="button" onClick={clearSelectedEvidenceId} aria-label="Clear evidence filter" className="text-muted hover:text-ink">
+                  ✕
+                </button>
+              </span>
+            ) : null}
+            {timeRangeActive ? (
+              <span className="flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1.5 text-accent" data-testid="global-time-range-chip" title="Case time window, applied by Search, Timeline, Artifact Views and the other event views">
+                {`Time: ${timeRange.from ? formatTimestamp(timeRange.from, effectiveTimezone) : "…"} → ${timeRange.to ? formatTimestamp(timeRange.to, effectiveTimezone) : "…"}`}
+                <button type="button" onClick={() => timeRangeContext?.clearTimeRange()} aria-label="Clear time window" className="text-muted hover:text-ink">
                   ✕
                 </button>
               </span>

@@ -3459,6 +3459,9 @@ export type SearchQuickFiltersResponse = {
   items: SearchQuickFilter[];
 };
 
+/** How free text is matched; the same on every screen (see search_service.TEXT_MATCH_MODES). */
+export type TextMatchMode = "smart" | "contains" | "exact";
+
 export type TimelineMode = "full" | "investigation";
 
 export type TimelineBookmark = {
@@ -7881,6 +7884,7 @@ export const api = {
       process_name?: string;
       source_plugin?: string;
       q?: string;
+      search_mode?: TextMatchMode;
       time_from?: string;
       time_to?: string;
       risk_min?: number;
@@ -8014,6 +8018,7 @@ export const api = {
     caseId: string,
     params?: {
       q?: string;
+      search_mode?: TextMatchMode;
       exclude_q?: string;
       filters?: string;
       scope?: "events" | "findings" | "all";
@@ -8159,6 +8164,7 @@ export const api = {
       has_correlations?: boolean;
       mode?: TimelineMode;
       q?: string;
+      search_mode?: TextMatchMode;
       artifact_type?: string[];
       event_type?: string[];
       event_category?: string[];

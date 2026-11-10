@@ -11,6 +11,7 @@ import { ActiveCaseProvider } from "./context/ActiveCaseContext";
 import { useActiveCase } from "./context/ActiveCaseContext";
 import { AuthProvider } from "./context/AuthContext";
 import { NotificationsProvider } from "./context/NotificationsContext";
+import { TimeRangeProvider } from "./context/TimeRangeContext";
 import { TimezoneProvider } from "./context/TimezoneContext";
 
 const LoginPage = lazy(() => import("./pages/LoginPage"));
@@ -150,6 +151,7 @@ export default function App() {
           <ProtectedRoute>
             <ActiveCaseProvider>
               <TimezoneProvider>
+                <TimeRangeProvider>
                 <NotificationsProvider>
                   <Layout>
                     <Suspense fallback={<WorkspaceLoadingFallback />}>
@@ -233,6 +235,7 @@ export default function App() {
                     </Suspense>
                   </Layout>
                 </NotificationsProvider>
+                </TimeRangeProvider>
               </TimezoneProvider>
             </ActiveCaseProvider>
           </ProtectedRoute>

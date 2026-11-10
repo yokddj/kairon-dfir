@@ -10,7 +10,9 @@ import CreateFindingDialog from "../components/CreateFindingDialog";
 import { useHostContext } from "../hooks/useHostContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 import { useTimezonePreference } from "../context/TimezoneContext";
-import TimeField from "../components/TimeField";
+import TextMatchModeSelect, { parseTextMatchMode } from "../components/TextMatchModeSelect";
+import TimeRangeFilter from "../components/TimeRangeFilter";
+import { useGlobalTimeRange } from "../hooks/useGlobalTimeRange";
 import { NumberField, SelectField, TextField } from "../components/FilterField";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
 import { artifactLabel } from "../lib/artifactRegistry";
@@ -243,6 +245,7 @@ function buildState(searchParams: URLSearchParams) {
     source_category: (searchParams.get("source_category") ?? searchParams.get("source") ?? "") as SourceCategory,
     time_from: searchParams.get("time_from") ?? "",
     time_to: searchParams.get("time_to") ?? "",
+    search_mode: parseTextMatchMode(searchParams.get("search_mode")),
   };
 }
 
@@ -1422,7 +1425,11 @@ export default function Search() {
   const { effectiveTimezone } = useTimezonePreference();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const state = useMemo(() => buildState(searchParams), [searchParams]);
+  const globalTime = useGlobalTimeRange({ resetParams: ["page", "selected"] });
+  const state = useMemo(
+    () => ({ ...buildState(searchParams), time_from: globalTime.timeFrom, time_to: globalTime.timeTo }),
+    [globalTime.timeFrom, globalTime.timeTo, searchParams],
+  );
   const pageSizeWasClamped = state.page_size_requested > SEARCH_UI_MAX_PAGE_SIZE;
   const [pageSizeClampNotice, setPageSizeClampNotice] = useState(pageSizeWasClamped);
   const [queryInput, setQueryInput] = useState(state.q);
@@ -1516,6 +1523,7 @@ export default function Search() {
   const searchRequestState = useMemo(
     () => ({
       q: state.q,
+      search_mode: state.search_mode,
       exclude_q: state.exclude_q,
       filters: state.filters,
       scope: state.scope,
@@ -1570,6 +1578,7 @@ export default function Search() {
     queryFn: () =>
       api.searchCase(resolvedCaseId, {
         q: searchRequestState.q,
+        search_mode: searchRequestState.search_mode === "smart" ? undefined : searchRequestState.search_mode,
         exclude_q: searchRequestState.exclude_q || undefined,
         filters: serializeBuilderFilters(searchRequestState.filters) || undefined,
         scope: searchRequestState.scope,
@@ -1776,6 +1785,7 @@ export default function Search() {
   const activeFilterChips = useMemo(() => {
     const chips: Array<{ key: string; label: string; clear: Record<string, string | null> }> = [];
     if (state.q) chips.push({ key: "q", label: `query: ${state.q}`, clear: { q: null } });
+    if (state.search_mode !== "smart") chips.push({ key: "search_mode", label: `match: ${state.search_mode}`, clear: { search_mode: null } });
     if (state.exclude_q) chips.push({ key: "exclude_q", label: `NOT text: ${state.exclude_q}`, clear: { exclude_q: null } });
     for (const [index, condition] of state.filters.entries()) {
       const nextFilters = state.filters.filter((_, itemIndex) => itemIndex !== index);
@@ -1840,11 +1850,7 @@ export default function Search() {
   const paginationLocked = Boolean(contextResponse);
   const detailMode: "stacked" = "stacked";
   const detailDrawerWidth = "w-full max-w-6xl";
-  const timeRangeInvalid =
-    Boolean(state.time_from && state.time_to) &&
-    !Number.isNaN(Date.parse(state.time_from)) &&
-    !Number.isNaN(Date.parse(state.time_to)) &&
-    Date.parse(state.time_from) > Date.parse(state.time_to);
+  const timeRangeInvalid = globalTime.timeRangeInvalid;
 
   useEffect(() => {
     if (!selectedId) return;
@@ -1864,6 +1870,13 @@ export default function Search() {
   }
 
   function updateParams(updates: Record<string, string | null>) {
+    if ("time_from" in updates || "time_to" in updates) {
+      // The time window is case-wide: keep the other views in step.
+      globalTime.setTimeRange(
+        { from: "time_from" in updates ? updates.time_from ?? "" : state.time_from, to: "time_to" in updates ? updates.time_to ?? "" : state.time_to },
+        { url: false },
+      );
+    }
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       for (const [key, value] of Object.entries(updates)) {
@@ -1900,18 +1913,6 @@ export default function Search() {
     }, { replace: true });
   }
 
-  function applyTimePreset(preset: "24h" | "7d" | "30d" | "clear") {
-    if (preset === "clear") {
-      updateParams({ time_from: null, time_to: null });
-      return;
-    }
-    const now = new Date();
-    const nextTo = now.toISOString();
-    const deltaDays = preset === "24h" ? 1 : preset === "7d" ? 7 : 30;
-    const from = new Date(now.getTime() - deltaDays * 24 * 60 * 60 * 1000).toISOString();
-    updateParams({ time_from: from, time_to: nextTo });
-  }
-
   function applyRiskPreset(min: string, max: string) {
     updateParams({ risk_min: min, risk_max: max });
   }
@@ -1924,6 +1925,7 @@ export default function Search() {
     setContextResponse(null);
     setContextLabel("");
     setSelectedId("");
+    globalTime.setTimeRange({ from: "", to: "" }, { url: false });
     setSearchParams(new URLSearchParams([["scope", "all"], ["tab", "results"], ["page_size", String(state.page_size)]]), { replace: true });
   }
 
@@ -1971,19 +1973,31 @@ export default function Search() {
   }
 
   function applyQuickFilter(item: SearchQuickFilter) {
+    // A quick filter replaces the previous one: every dimension a quick filter
+    // can set is reset unless this one sets it (otherwise "PowerShell" then
+    // "Downloads" AND-ed both and showed nothing).
     const updates: Record<string, string | null> = {
       tab: "results",
       scope: String(item.params.scope ?? state.scope),
       page_size: String(state.page_size),
+      risk_min: item.params.risk_min !== undefined ? String(item.params.risk_min) : null,
+      event_type: Array.isArray(item.params.event_type) ? joinParam(item.params.event_type as string[]) : null,
+      event_category: Array.isArray(item.params.event_category) ? joinParam(item.params.event_category as string[]) : null,
+      artifact_type: Array.isArray(item.params.artifact_type) ? joinParam(item.params.artifact_type as string[]) : null,
+      severity: Array.isArray(item.params.severity) ? joinParam(item.params.severity as string[]) : null,
+      process_name: item.params.process_name ? asString(item.params.process_name) : null,
     };
     if (searchRequestState.evidence_id && !state.evidence_id) updates.evidence_id = searchRequestState.evidence_id;
     if (searchRequestState.host && !state.host) updates.host = searchRequestState.host;
-    if (item.params.risk_min !== undefined) updates.risk_min = String(item.params.risk_min);
-    if (Array.isArray(item.params.event_type)) updates.event_type = joinParam(item.params.event_type as string[]);
-    if (Array.isArray(item.params.event_category)) updates.event_category = joinParam(item.params.event_category as string[]);
-    if (Array.isArray(item.params.artifact_type)) updates.artifact_type = joinParam(item.params.artifact_type as string[]);
-    if (Array.isArray(item.params.severity)) updates.severity = joinParam(item.params.severity as string[]);
-    if (item.params.process_name) updates.process_name = asString(item.params.process_name);
+    // Text that is part of the filter (an OR the other params cannot express)
+    // goes into the visible query box, matched with the default smart mode.
+    // The analyst's own text is kept unless it came from another quick filter.
+    const quickQueries = new Set((quickFiltersQuery.data?.items ?? []).map((entry) => asString(entry.params.q)).filter(Boolean));
+    const nextQuery = item.params.q ? asString(item.params.q) : quickQueries.has(state.q) ? "" : null;
+    if (nextQuery !== null) {
+      updates.search_mode = null;
+      setQueryInput(nextQuery); // through the debounce, which owns ?q=
+    }
     setContextResponse(null);
     setContextLabel("");
     updateParams(updates);
@@ -1992,7 +2006,9 @@ export default function Search() {
   function applyRegistryPreset(item: NonNullable<CaseCapabilitiesResponse["search"]>["presets"][number]) {
     setContextResponse(null);
     setContextLabel("");
-    updateParams({ ...applyRegistrySearchState(item.state, state.page_size), workbench: item.workbench, domain_scope: item.domain, capability: item.capability_id });
+    const presetQuery = typeof item.state.q === "string" ? item.state.q : "";
+    if (presetQuery) setQueryInput(presetQuery); // through the debounce, which owns ?q=
+    updateParams({ ...applyRegistrySearchState(item.state, state.page_size), ...(presetQuery ? { search_mode: null } : {}), workbench: item.workbench, domain_scope: item.domain, capability: item.capability_id });
   }
 
   function handleFacetClick(field: string, value: string, mode: "include" | "exclude" = "include") {
@@ -2320,7 +2336,7 @@ export default function Search() {
         <h2 className="mt-2 text-2xl font-semibold">Investigation Search</h2>
         <p className="mt-2 text-sm text-muted">Compact investigation workspace with tables, pivots and artifact-specific views.</p>
 
-        <div className="mt-5 grid gap-3 lg:grid-cols-[1fr,auto,auto]">
+        <div className="mt-5 grid gap-3 lg:grid-cols-[1fr,auto,auto,auto]">
           <div className="min-w-0">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Search query</span>
             <SearchBar ariaLabel="Search query" value={queryInput} onChange={setQueryInput} placeholder="Search commands, paths, hashes, domains or text" />
@@ -2371,6 +2387,9 @@ export default function Search() {
               </div>
             ) : null}
           </div>
+          <div className="self-start lg:w-36">
+            <TextMatchModeSelect value={state.search_mode} onChange={(mode) => updateParams({ search_mode: mode === "smart" ? null : mode })} />
+          </div>
           <button type="button" onClick={applySearchNow} className="self-end rounded-2xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-accent">
             Search
           </button>
@@ -2379,25 +2398,15 @@ export default function Search() {
           </button>
         </div>
 
-        <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <TimeField label="Time from" value={state.time_from} onChange={(value) => updateParams({ time_from: value })} />
-          <TimeField label="Time to" value={state.time_to} onChange={(value) => updateParams({ time_to: value })} />
-          <div className="xl:col-span-2">
-            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Time presets</span>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={() => applyTimePreset("24h")} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">Last 24h</button>
-              <button type="button" onClick={() => applyTimePreset("7d")} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">Last 7d</button>
-              <button type="button" onClick={() => applyTimePreset("30d")} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">Last 30d</button>
-              <button type="button" onClick={() => applyTimePreset("clear")} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">Clear time</button>
+        <div className="mt-4 grid gap-4 xl:grid-cols-2">
+          <TimeRangeFilter timeFrom={state.time_from} timeTo={state.time_to} onChange={(range) => updateParams({ time_from: range.from, time_to: range.to })} />
+          <details className="self-start text-xs text-muted">
+            <summary className="cursor-pointer">Advanced ISO input</summary>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <TextField label="Time from ISO" value={state.time_from} onChange={(value) => updateParams({ time_from: value })} placeholder="2026-05-15T10:00:00Z" />
+              <TextField label="Time to ISO" value={state.time_to} onChange={(value) => updateParams({ time_to: value })} placeholder="2026-05-15T12:00:00Z" />
             </div>
-            <details className="mt-3 text-xs text-muted">
-              <summary className="cursor-pointer">Advanced ISO input</summary>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <TextField label="Time from ISO" value={state.time_from} onChange={(value) => updateParams({ time_from: value })} placeholder="2026-05-15T10:00:00Z" />
-                <TextField label="Time to ISO" value={state.time_to} onChange={(value) => updateParams({ time_to: value })} placeholder="2026-05-15T12:00:00Z" />
-              </div>
-            </details>
-          </div>
+          </details>
         </div>
         {(state.time_from || state.time_to) ? (
           <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${timeRangeInvalid ? "border-danger/40 bg-danger/10 text-danger" : "border-line bg-abyss/60 text-muted"}`}>

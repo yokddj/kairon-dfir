@@ -290,7 +290,7 @@ MEMORY_SEARCH_FILTER_PARAMS = frozenset({
     "hide_routine",
 })
 SEARCH_CONTROL_PARAMS = frozenset({
-    "scope", "sort", "page", "page_size", "cursor", "filters",
+    "scope", "sort", "page", "page_size", "cursor", "filters", "search_mode",
     "include_highlights", "include_facets", "include_filesystem_timeline",
 })
 
@@ -331,11 +331,30 @@ LOGIN_EVENT_TYPES = WINDOWS_LOGIN_EVENT_TYPES + LINUX_LOGIN_EVENT_TYPES
 FAILED_LOGIN_EVENT_TYPES = ["logon_failed", "event_id_4625", "login_failure", "invalid_user", "authentication_failure"]
 PRIVILEGED_LOGON_EVENT_TYPES = ["special_privileges_assigned", "privilege_authentication"]
 
+# Every event type a parser emits for a file transfer: browser downloads, BITS
+# jobs (job database and the BITS-Client log), and the Zone.Identifier (MOTW)
+# a browser or mail client writes next to a downloaded file.
+DOWNLOAD_EVENT_TYPES = [
+    "file_downloaded",
+    "download_started",
+    "download_interrupted",
+    "bits_job_observed",
+    "bits_job_transferred",
+    "file_zone_identifier_observed",
+]
+# Process creation (4688, Sysmon 1, process accounting) and execution evidence
+# (Prefetch run times).
+PROCESS_EXECUTION_EVENT_TYPES = ["process_start", "sysmon_process_created", "process_executed", "prefetch_execution"]
+POWERSHELL_ACTIVITY_QUERY = "artifact.type:powershell OR process.name:powershell.exe OR process.name:pwsh.exe"
+
 QUICK_FILTERS = [
     {"id": "high_risk", "label": "High risk events", "params": {"scope": "events", "risk_min": 70}},
     {"id": "critical_findings", "label": "Critical findings", "params": {"scope": "findings", "severity": ["critical"]}},
-    {"id": "powershell_activity", "label": "PowerShell activity", "params": {"scope": "events", "process_name": "powershell.exe"}},
-    {"id": "downloads", "label": "Downloads", "params": {"scope": "events", "event_type": ["file_downloaded"]}},
+    # PowerShell's own logs (4103/4104/400/800, PSReadLine history) and any
+    # event of a powershell.exe / pwsh.exe process: an OR, so it is expressed
+    # in the (visible, editable) query rather than as AND-ed filters.
+    {"id": "powershell_activity", "label": "PowerShell activity", "params": {"scope": "events", "q": POWERSHELL_ACTIVITY_QUERY}},
+    {"id": "downloads", "label": "Downloads", "params": {"scope": "events", "event_type": DOWNLOAD_EVENT_TYPES}},
     {"id": "logins", "label": "Logins", "params": {"scope": "events", "event_type": LOGIN_EVENT_TYPES}},
     {"id": "failed_logins", "label": "Failed logins", "params": {"scope": "events", "event_type": FAILED_LOGIN_EVENT_TYPES}},
     {"id": "privileged_logons", "label": "Privileged logons", "params": {"scope": "events", "event_type": PRIVILEGED_LOGON_EVENT_TYPES}},
@@ -345,7 +364,7 @@ QUICK_FILTERS = [
     {"id": "cloud_activity", "label": "Cloud activity", "params": {"scope": "events", "artifact_type": ["cloud", "cloud_sync"]}},
     {"id": "usb_activity", "label": "USB activity", "params": {"scope": "events", "artifact_type": ["usb"]}},
     {"id": "deleted_files", "label": "Deleted files", "params": {"scope": "events", "event_type": ["file_deleted"]}},
-    {"id": "process_executions", "label": "Process executions", "params": {"scope": "events", "event_type": ["process_start"]}},
+    {"id": "process_executions", "label": "Process executions", "params": {"scope": "events", "event_type": PROCESS_EXECUTION_EVENT_TYPES}},
     {"id": "suspicious_dns", "label": "Suspicious DNS", "params": {"scope": "events", "artifact_type": ["dns"], "risk_min": 50}},
 ]
 
@@ -619,6 +638,93 @@ def _build_text_query(query: str) -> dict[str, Any]:
     return {"match_all": {}}
 
 
+# Free-text match modes shared by Search, Timeline, Artifact Views and Command
+# History, so the same text means the same thing on every screen:
+#   smart    -- token match with IOC/command detection and a substring fallback
+#               for bare stems ("comsvcs" finds "comsvcs.dll"); the default.
+#   contains -- the whole input as a case-insensitive substring.
+#   exact    -- the whole input as an exact phrase (tokens in order).
+TEXT_MATCH_MODES = ("smart", "contains", "exact")
+CONTAINS_MAX_LENGTH = 128
+CONTAINS_TEXT_FIELDS = list(dict.fromkeys([
+    *GENERIC_WILDCARD_TEXT_FIELDS,
+    *COMMAND_QUERY_WILDCARD_FIELDS,
+    "artifact.name",
+    "process.name",
+    "browser.domain",
+    "browser.url",
+    "browser.search_terms",
+    "download.file_name",
+    "download.target_path",
+    "download.url",
+    "url.full",
+    "url.domain",
+    "network.domain",
+    "dns.domain",
+    "registry.path",
+    "user.name",
+]))
+
+
+def normalize_text_match_mode(value: Any) -> str:
+    mode = str(value or "smart").strip().lower()
+    # "ioc" was Artifact Views' name for an exact term match on indicator
+    # fields; smart already detects hashes, IPs, domains, paths and SIDs.
+    if mode == "ioc":
+        return "exact"
+    return mode if mode in TEXT_MATCH_MODES else "smart"
+
+
+def build_contains_text_query(query: str) -> dict[str, Any]:
+    text = _strip_balanced_quotes(query)
+    if not text:
+        return {"match_all": {}}
+    if len(text) > CONTAINS_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Contains queries must be {CONTAINS_MAX_LENGTH} characters or fewer.")
+    return {"bool": {"should": _build_should_terms(CONTAINS_TEXT_FIELDS, text.lower(), wildcard=True), "minimum_should_match": 1}}
+
+
+def build_exact_text_query(query: str) -> dict[str, Any]:
+    text = _strip_balanced_quotes(query)
+    if not text:
+        return {"match_all": {}}
+    should: list[dict[str, Any]] = [{"multi_match": {"query": text, "type": "phrase", "fields": TEXT_FIELDS}}]
+    # Whole-value equality on the keyword fields that hold indicators, so an
+    # exact hash, IP, SID or GUID also matches where it is not tokenised.
+    should.extend(_build_should_terms([*HASH_FIELDS, *IP_FIELDS, *SID_FIELDS, "process.entity_id", "process.guid", "event_id"], text))
+    return {"bool": {"should": should, "minimum_should_match": 1}}
+
+
+def build_text_query_for_mode(query: str, mode: Any = "smart") -> dict[str, Any]:
+    resolved = normalize_text_match_mode(mode)
+    if resolved == "contains":
+        return build_contains_text_query(query)
+    if resolved == "exact":
+        return build_exact_text_query(query)
+    return _build_text_query(query)
+
+
+def _analyze_text_query(query: str, mode: Any) -> dict[str, Any]:
+    if normalize_text_match_mode(mode) == "smart":
+        return analyze_query_syntax(query, _build_text_query)
+    return literal_query_syntax(query, mode)
+
+
+def literal_query_syntax(query: str, mode: Any) -> dict[str, Any]:
+    """Query info for contains/exact: the input is literal text, never syntax."""
+    text = str(query or "").strip()
+    return {
+        "mode": "plain",
+        "parsed": True,
+        "errors": [],
+        "warnings": [],
+        "normalized_query": text,
+        "applied_filters": [],
+        "ast": None,
+        "query": build_text_query_for_mode(text, mode),
+    }
+
+
 def _parse_filter_builder_conditions(raw_filters: Any) -> list[dict[str, Any]]:
     if not raw_filters:
         return []
@@ -743,6 +849,9 @@ def _artifact_type_values(values: list[str] | None) -> list[str]:
             expanded.append("detection")
         elif text == "detection":
             expanded.append("defender")
+        elif text == "autoruns":
+            # The Autoruns parser indexes artifact.type "autorun".
+            expanded.append("autorun")
         elif text == "cloud":
             expanded.append("cloud_sync")
         elif text == "cloud_sync":
@@ -1527,7 +1636,7 @@ def search_events_v2(case_id: str, params: dict[str, Any], *, db: Session | None
     query, query_warnings = normalize_search_value(params.get("q"))
     warnings.extend(query_warnings)
     try:
-        query_info = analyze_query_syntax(query, _build_text_query)
+        query_info = _analyze_text_query(query, params.get("search_mode"))
     except QuerySyntaxError as exc:
         raise HTTPException(
             status_code=400,
@@ -1600,7 +1709,7 @@ def search_findings_v2(db: Session, case_id: str, params: dict[str, Any], *, lim
     query_info = params.get("_query_syntax")
     if query_info is None:
         try:
-            query_info = analyze_query_syntax(query_text, _build_text_query)
+            query_info = _analyze_text_query(query_text, params.get("search_mode"))
         except QuerySyntaxError as exc:
             raise HTTPException(
                 status_code=400,

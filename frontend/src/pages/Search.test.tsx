@@ -241,6 +241,8 @@ describe("Search page", () => {
       items: [
         { id: "high_risk", label: "High risk events", params: { scope: "events", risk_min: 70 } },
         { id: "powershell_activity", label: "PowerShell activity", params: { scope: "events", process_name: "powershell.exe" } },
+        { id: "downloads", label: "Downloads", params: { scope: "events", event_type: ["file_downloaded", "bits_job_transferred"] } },
+        { id: "pwsh_or", label: "PowerShell logs or processes", params: { scope: "events", q: "artifact.type:powershell OR process.name:powershell.exe" } },
       ],
     });
     searchAroundEventMock.mockResolvedValue(baseResponse);
@@ -1142,6 +1144,34 @@ describe("Search page", () => {
     await screen.findByTestId("results-table");
     await userEvent.click(screen.getByRole("button", { name: /PowerShell activity/i }));
     await waitFor(() => expect(searchCaseMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ scope: "events", process_name: "powershell.exe" })));
+  });
+
+  it("a quick filter replaces the previous one instead of AND-ing with it", async () => {
+    renderPage();
+    await screen.findByTestId("results-table");
+    await userEvent.click(screen.getByRole("button", { name: /^PowerShell activity$/i }));
+    await waitFor(() => expect(searchCaseMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ process_name: "powershell.exe" })));
+    await userEvent.click(screen.getByRole("button", { name: /^Downloads$/i }));
+    await waitFor(() => expect(searchCaseMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ event_type: ["file_downloaded", "bits_job_transferred"] })));
+    expect(searchCaseMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("process_name", "powershell.exe");
+  });
+
+  it("a quick filter's own text goes into the query box and is dropped by the next quick filter", async () => {
+    renderPage();
+    await screen.findByTestId("results-table");
+    await userEvent.click(screen.getByRole("button", { name: /PowerShell logs or processes/i }));
+    await waitFor(() => expect(searchCaseMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ q: "artifact.type:powershell OR process.name:powershell.exe" })));
+    expect(screen.getByLabelText("Search query")).toHaveValue("artifact.type:powershell OR process.name:powershell.exe");
+    await userEvent.click(screen.getByRole("button", { name: /^Downloads$/i }));
+    await waitFor(() => expect(searchCaseMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ q: "", event_type: ["file_downloaded", "bits_job_transferred"] })));
+  });
+
+  it("sends the selected text match mode", async () => {
+    renderPage([searchPath({ q: "mimikatz" })]);
+    await screen.findByTestId("results-table");
+    await userEvent.selectOptions(screen.getByLabelText("Text match mode"), "contains");
+    await waitFor(() => expect(searchCaseMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ q: "mimikatz", search_mode: "contains" })));
+    expect(screen.getByTestId("active-filter-chips")).toHaveTextContent(/match: contains/i);
   });
 
   it("preserves time range when applying a quick advanced filter", async () => {

@@ -3,7 +3,9 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type CommandHistoryItem } from "../api/client";
 import { NumberField, SelectField, TextField } from "../components/FilterField";
 import { InvestigationBreadcrumbs } from "../components/InvestigationContext";
-import TimeField from "../components/TimeField";
+import TextMatchModeSelect, { parseTextMatchMode } from "../components/TextMatchModeSelect";
+import TimeRangeFilter from "../components/TimeRangeFilter";
+import { useGlobalTimeRange } from "../hooks/useGlobalTimeRange";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { useHostContext } from "../hooks/useHostContext";
 import { memoryEvidenceRoute, memoryWorkbenchRoute, windowsExecutionStoriesRoute } from "../lib/canonicalRoutes";
@@ -108,6 +110,7 @@ function buildParams(searchParams: URLSearchParams) {
     pid: searchParams.get("pid") ? Number(searchParams.get("pid")) : undefined,
     process_name: searchParams.get("process_name") || undefined,
     q: searchParams.get("q") || undefined,
+    search_mode: searchParams.get("q") && parseTextMatchMode(searchParams.get("search_mode")) !== "smart" ? parseTextMatchMode(searchParams.get("search_mode")) : undefined,
     risk_min: searchParams.get("risk_min") ? Number(searchParams.get("risk_min")) : undefined,
     risk_max: searchParams.get("risk_max") ? Number(searchParams.get("risk_max")) : undefined,
     only_suspicious: searchParams.get("only_suspicious") === "true" || undefined,
@@ -145,7 +148,11 @@ export default function CommandHistoryPage() {
   const { effectiveTimezone } = useTimezonePreference();
   const { activeHost, hasHostFilter, clearHostFilter } = useHostContext();
   const [searchParams, setSearchParams] = useSearchParams();
-  const params = useMemo(() => buildParams(searchParams), [searchParams]);
+  const globalTime = useGlobalTimeRange({ resetParams: ["page"] });
+  const params = useMemo(
+    () => ({ ...buildParams(searchParams), time_from: globalTime.timeFrom || undefined, time_to: globalTime.timeTo || undefined }),
+    [globalTime.timeFrom, globalTime.timeTo, searchParams],
+  );
   const [qDraft, setQDraft] = useState(params.q ?? "");
   const [data, setData] = useState<Awaited<ReturnType<typeof api.getCommandHistory>> | null>(null);
   const [loading, setLoading] = useState(false);
@@ -269,7 +276,7 @@ export default function CommandHistoryPage() {
       </div>
 
       <div className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
-        <div className="grid gap-4 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_auto]">
+        <div className="grid gap-4 lg:grid-cols-[2fr_7rem_1fr_1fr_1fr_1fr_1fr_auto]">
           <label className="block">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Search commands</span>
             <input
@@ -283,6 +290,7 @@ export default function CommandHistoryPage() {
               placeholder="maintenance.ps1, powershell -ep bypass, remote-admin"
             />
           </label>
+          <TextMatchModeSelect value={parseTextMatchMode(searchParams.get("search_mode"))} onChange={(mode) => update({ search_mode: mode === "smart" ? undefined : mode })} />
           <SelectField label="Family" value={params.family ?? ""} options={Object.keys(data?.facets.family ?? data?.facets.shell ?? {})} onChange={(value) => update({ family: value, shell: undefined })} />
           <SelectField label="Source category" value={params.source_category ?? ""} options={SOURCE_OPTIONS} emptyLabel="All sources" onChange={(value) => update({ source_category: value, source: undefined })} />
           <TextField label="Launcher" value={params.launcher ?? ""} onChange={(value) => update({ launcher: value })} placeholder="remote-admin.exe" />
@@ -292,7 +300,7 @@ export default function CommandHistoryPage() {
             <button className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-accent" onClick={() => update({ q: qDraft })}>
               Apply
             </button>
-            <button className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted" onClick={() => setSearchParams(new URLSearchParams())}>
+            <button className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted" onClick={() => { globalTime.setTimeRange({ from: "", to: "" }, { url: false }); setSearchParams(new URLSearchParams()); }}>
               Clear
             </button>
           </div>
@@ -307,16 +315,8 @@ export default function CommandHistoryPage() {
             <span>Change the host filter from the top bar.</span>
           )}
         </div>
-        <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_1fr_auto]">
-          <TimeField label="Time from" value={params.time_from ?? ""} onChange={(value) => update({ time_from: value })} />
-          <TimeField label="Time to" value={params.time_to ?? ""} onChange={(value) => update({ time_to: value })} />
-          {params.time_from || params.time_to ? (
-            <div className="flex items-end">
-              <button type="button" className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted" onClick={() => update({ time_from: undefined, time_to: undefined })}>
-                Clear time filter
-              </button>
-            </div>
-          ) : null}
+        <div className="mt-4">
+          <TimeRangeFilter timeFrom={globalTime.timeFrom} timeTo={globalTime.timeTo} invalid={globalTime.timeRangeInvalid} onChange={(range) => { globalTime.setTimeRange(range, { url: false }); update({ time_from: range.from, time_to: range.to }); }} />
         </div>
         <label className="mt-4 flex items-center gap-2 text-sm text-ink">
           <input type="checkbox" checked={Boolean(params.only_suspicious)} onChange={(event) => update({ only_suspicious: event.target.checked })} />
