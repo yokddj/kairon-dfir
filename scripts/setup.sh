@@ -68,6 +68,10 @@ DEPLOYMENT_MODE=""
 PUBLIC_URL=""
 AUTH_ENABLED="true"
 ENABLE_MEMORY="${KAIRON_ENABLE_MEMORY:-false}"
+# Opt-in to MemProcFS's built-in YARA rules (Elastic Security content) in Find Evil, by accepting
+# the Elastic License 2.0 on the operator's behalf -- a separate, non-OSI license from Kairon's
+# and MemProcFS's own AGPL-3.0. Only meaningful (and only asked) when memory analysis is enabled.
+MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE="${KAIRON_MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE:-false}"
 BOOTSTRAP_ADMIN_USERNAME=""
 BOOTSTRAP_ADMIN_EMAIL=""
 INTERACTIVE=true
@@ -110,6 +114,11 @@ Environment variables (non-interactive mode):
   KAIRON_DEPLOYMENT_MODE
   KAIRON_PUBLIC_URL
   KAIRON_ENABLE_MEMORY
+  KAIRON_MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE
+                    Enable MemProcFS's built-in YARA rules in Find Evil by
+                    accepting the Elastic License 2.0 on the operator's
+                    behalf (default false; only meaningful with memory
+                    analysis enabled). See docs/memory/memory_analysis.md.
   KAIRON_API_PORT   Host-side API port, default 8000 (set if already in use,
                     e.g. by Splunk Web; the browser still uses 5173).
 EOF
@@ -243,6 +252,7 @@ preserve_secrets_from_env() {
 
   # Read existing feature flags
   ENABLE_MEMORY_EXISTING=$(grep '^KAIRON_ENABLE_MEMORY=' "$env_file" | sed 's/^KAIRON_ENABLE_MEMORY=//' || echo "false")
+  MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE_EXISTING=$(grep '^MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE=' "$env_file" | sed 's/^MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE=//' || echo "false")
 
   # Preserved so a machine that needed a non-default API port (e.g. 8000
   # already taken by something else) keeps using it on every re-run, without
@@ -260,6 +270,7 @@ preserve_secrets_from_env() {
   export OPENSEARCH_INITIAL_ADMIN_PASSWORD_EXISTING
   export MEMORY_EVIDENCE_SHARED_GID_EXISTING
   [[ -n "$ENABLE_MEMORY_EXISTING" ]] && ENABLE_MEMORY="$ENABLE_MEMORY_EXISTING"
+  [[ -n "$MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE_EXISTING" ]] && MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE="$MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE_EXISTING"
   # An explicit KAIRON_API_PORT in the environment always wins (so a caller
   # fixing a port conflict on this run is never silently overridden by an
   # older value from a previous .env); otherwise reuse the preserved one.
@@ -354,6 +365,12 @@ MEMORY_PROCESS_PROFILE_ENABLED=${ENABLE_MEMORY}
 MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,shell_history_basic,files_basic,find_evil
 MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.cmdscan,windows.filescan,kairon.findevil,memprocfs.findevil,linux.pslist,linux.pstree,linux.sockstat,linux.bash
 
+# Opt-in: MemProcFS's built-in YARA rules in Find Evil (Elastic Security content), gated behind
+# accepting the Elastic License 2.0 -- a separate, non-OSI license from Kairon's and MemProcFS's
+# own AGPL-3.0. Off unless explicitly accepted in the setup wizard. See
+# docs/memory/memory_analysis.md ("YARA in Find Evil").
+MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE=${MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE:-false}
+
 # ---- Advanced overrides (see config/defaults.env for all defaults) ----
 # POSTGRES_HOST=postgres
 # REDIS_URL=redis://redis:6379/0
@@ -369,6 +386,9 @@ ENVEOF
   echo "  URL:   $derived_url"
   echo "  Auth:  $AUTH_ENABLED"
   echo "  Memory:  $ENABLE_MEMORY"
+  if [[ "$ENABLE_MEMORY" == true ]]; then
+    echo "  MemProcFS YARA (Elastic License 2.0): $MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE"
+  fi
 }
 
 build_and_start() {
@@ -577,11 +597,30 @@ interactive_mode() {
   echo "  Memory analysis: $ENABLE_MEMORY"
   echo ""
 
+  if [[ "$ENABLE_MEMORY" == true ]]; then
+    echo "Find Evil (memory analysis) can use MemProcFS's built-in YARA rules"
+    echo "(a curated set from Elastic Security: trojans, hacktools, ransomware,"
+    echo "backdoors, shellcode, rootkits...). This content is already in the"
+    echo "downloaded binaries but is disabled until the Elastic License 2.0"
+    echo "covering it is accepted (https://www.elastic.co/licensing/elastic-license)."
+    echo "This is separate from Kairon's own AGPL-3.0 license."
+    read -r -p "Enable MemProcFS's built-in YARA rules (accept Elastic License 2.0)? [y/N]: " yara_input
+    case "${yara_input:-n}" in
+      [Yy]*) MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE="true" ;;
+      *)    MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE="false" ;;
+    esac
+    echo "  MemProcFS YARA (Elastic License 2.0 accepted): $MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE"
+    echo ""
+  fi
+
   echo "=== Configuration summary ==="
   echo "  Mode:  $DEPLOYMENT_MODE"
   echo "  URL:   $PUBLIC_URL"
   echo "  Auth:  $AUTH_ENABLED"
   echo "  Memory: $ENABLE_MEMORY"
+  if [[ "$ENABLE_MEMORY" == true ]]; then
+    echo "  MemProcFS YARA (Elastic License 2.0): $MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE"
+  fi
   echo ""
 
   if [[ "$DEPLOYMENT_MODE" == "lan" ]]; then

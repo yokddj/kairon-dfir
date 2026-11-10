@@ -217,6 +217,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scan-timeout", type=int, default=1500)
     parser.add_argument("--stall-timeout", type=int, default=_DEFAULT_STALL_SECONDS)
     parser.add_argument("--timeline-dir", default=None)
+    # Opt-in, off by default (see Settings.memprocfs_yara_accept_elastic_license): MemProcFS
+    # disables its built-in YARA rules (Elastic Security's protections-artifacts, used by
+    # FindEvil's YR_* indicators) unless told the operator accepts the Elastic License 2.0 that
+    # covers them. Kairon never passes this on its own; the runner only adds it when the operator
+    # has explicitly turned the setting on.
+    parser.add_argument("--accept-elastic-license", action="store_true")
     args = parser.parse_args(argv)
     _die_with_parent()
     watchdog = _Watchdog(scan_timeout=args.scan_timeout, stall_timeout=args.stall_timeout)
@@ -229,6 +235,8 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_LIBRARY_UNAVAILABLE
 
     options = ["", "-device", args.evidence, "-forensic", "1", "-disable-symbolserver", "-disable-python"]
+    if args.accept_elastic_license:
+        options.append("-license-accept-elastic-license-2-0")
     handle = lib.VMMDLL_Initialize(len(options), (ctypes.c_char_p * len(options))(*[item.encode("utf-8") for item in options]))
     if not handle:
         print("MemProcFS could not open this memory image (not a supported Windows image, or damaged).", file=sys.stderr)

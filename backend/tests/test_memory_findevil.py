@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import pytest
 
-from app.services.memory import memprocfs_runner
+from app.services.memory import memprocfs_findevil, memprocfs_runner
 from app.services.memory.artifact_normalizers import FINDEVIL_TYPES, normalize_memprocfs_findevil
 from app.services.memory.memprocfs_findevil import findevil_rows
 from app.services.memory.volatility_runner import VolatilityRunnerError
@@ -100,6 +100,24 @@ def test_runner_starts_the_child_contained_and_returns_its_rows(tmp_path, librar
     assert calls["kwargs"]["env"]["LD_LIBRARY_PATH"] == str(library.parent)
     assert "[evidence]" in result.argv_display and str(tmp_path) not in " ".join(result.argv_display)
     assert len(json.loads(result.stdout)) == 6
+    assert "--accept-elastic-license" not in calls["argv"]
+
+
+def test_runner_passes_accept_elastic_license_only_when_the_operator_turned_it_on(tmp_path, library, monkeypatch) -> None:
+    """MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE gates '--accept-elastic-license': Kairon never
+    accepts the Elastic License 2.0 (covering MemProcFS's built-in YARA rules) on its own."""
+    from types import SimpleNamespace
+
+    calls = {}
+
+    def fake_run(argv, **kwargs):
+        calls["argv"] = argv
+        return json.dumps(findevil_rows(CSV)).encode(), b"", 0, 1234
+
+    monkeypatch.setattr(memprocfs_runner, "run_isolated_process", fake_run)
+    monkeypatch.setattr(memprocfs_runner, "get_settings", lambda: SimpleNamespace(memprocfs_yara_accept_elastic_license=True))
+    memprocfs_runner.run_findevil(tmp_path / "image.dmp", tmp_path, timeout_seconds=600, max_output_bytes=4096)
+    assert "--accept-elastic-license" in calls["argv"]
 
 
 @pytest.mark.parametrize(
@@ -173,7 +191,7 @@ def test_crash_retry_can_be_disabled(tmp_path, library, monkeypatch) -> None:
         return "/usr/bin/gdb"
 
     monkeypatch.setattr(memprocfs_runner, "_gdb_executable", fail_if_called)
-    disabled_settings = SimpleNamespace(memprocfs_crash_retry_enabled=False, memprocfs_gdb_command="gdb")
+    disabled_settings = SimpleNamespace(memprocfs_crash_retry_enabled=False, memprocfs_gdb_command="gdb", memprocfs_yara_accept_elastic_license=False)
     monkeypatch.setattr(memprocfs_runner, "get_settings", lambda: disabled_settings)
     with pytest.raises(VolatilityRunnerError) as exc:
         memprocfs_runner.run_findevil(tmp_path / "image.dmp", tmp_path, timeout_seconds=60, max_output_bytes=1024)
@@ -275,6 +293,31 @@ def test_crash_exposes_the_backtrace_not_gdbs_own_noisy_stderr(tmp_path, library
         memprocfs_runner.run_findevil(tmp_path / "image.dmp", tmp_path, timeout_seconds=60, max_output_bytes=1024)
     assert b"Unable to fetch general registers" not in exc.value.stderr
     assert exc.value.stderr.decode() == real_backtrace
+
+
+def test_child_only_accepts_the_elastic_license_when_told_to(tmp_path, monkeypatch) -> None:
+    """main() must only add MemProcFS's '-license-accept-elastic-license-2-0' option when
+    --accept-elastic-license is passed -- never on its own."""
+    captured = {}
+
+    class _FakeLib:
+        def VMMDLL_Initialize(self, argc, argv):  # noqa: N802
+            captured["options"] = [argv[i] for i in range(argc)]
+            return 0  # falsy handle: main() returns EXIT_IMAGE_NOT_OPENED, no scan needed
+
+        def VMMDLL_Close(self, handle):  # noqa: N802
+            pass
+
+    monkeypatch.setattr(memprocfs_findevil, "_load", lambda library: _FakeLib())
+    monkeypatch.setattr(memprocfs_findevil, "_die_with_parent", lambda: None)
+
+    exit_code = memprocfs_findevil.main(["--library", "vmm.so", "--evidence", str(tmp_path / "image.dmp")])
+    assert exit_code == memprocfs_findevil.EXIT_IMAGE_NOT_OPENED
+    assert b"-license-accept-elastic-license-2-0" not in captured["options"]
+
+    exit_code = memprocfs_findevil.main(["--library", "vmm.so", "--evidence", str(tmp_path / "image.dmp"), "--accept-elastic-license"])
+    assert exit_code == memprocfs_findevil.EXIT_IMAGE_NOT_OPENED
+    assert b"-license-accept-elastic-license-2-0" in captured["options"]
 
 
 def test_execution_sends_findevil_to_memprocfs_not_volatility(tmp_path, monkeypatch) -> None:
