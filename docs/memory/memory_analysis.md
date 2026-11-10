@@ -181,7 +181,7 @@ The forensic scan Find Evil runs also builds MemProcFS's timelines. The ones Vol
 | --- | --- |
 | `memprocfs_ntfs` | NTFS records (MFT) still in memory: files created, modified, accessed |
 | `memprocfs_registry` | Registry key last-write times |
-| `memprocfs_eventlog` | Event log records still in memory, with event id, channel, provider and data (searchable as `eventid:`, `channel:`) |
+| `memprocfs_eventlog` | Event log records still in memory, with event id, channel, provider and data (searchable as `eventid:`, `channel:`). Logs MemProcFS could rebuild as `.evtx` files (`\sys\eventlog\eventlog_repaired`) are read with the disk EVTX parser, so their records keep every field (`memprocfs.source: evtx_repaired`); the forensic timeline's one-line summary is used only for records those files do not hold (`memprocfs.source: timeline_csv`), and no record is indexed twice. A rebuilt log over 1 GB, or past 4 GB for all logs of the image, falls back to the summary. |
 | `memprocfs_web` | Browser history |
 | `memprocfs_task` | Scheduled tasks: created, changed, last run, completed |
 | `memprocfs_amcache` | Amcache inventory updates |

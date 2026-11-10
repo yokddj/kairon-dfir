@@ -18,6 +18,11 @@ EVTX or Amcache file gives, and the built-in detections disk evidence gets (see
 detection_candidates). The type and provenance stay MemProcFS's. NTFS records are not: the MFT
 normalizer flags every program and script under AppData, which on a memory image is hundreds of
 browser and application files.
+
+Event logs MemProcFS could rebuild as .evtx files (saved by the child under ``evtx/``) are read with
+the disk EVTX parser itself, so their records keep all their fields; the timeline's one-line
+summaries are then indexed only for the records those files do not have (logs MemProcFS could not
+rebuild, or records outside what it kept), and no record is indexed twice.
 """
 
 from __future__ import annotations
@@ -323,7 +328,7 @@ def timeline_event(row: dict[str, str], *, timeline: str, case_id: str, evidence
         "artifact": {"type": f"memprocfs_{timeline}", "name": f"MemProcFS {label} timeline", "parser": PARSER, "source_path": source},
         "event": event,
         "memory": {"plugin": MEMORY_PLUGIN},
-        "memprocfs": {"scan_run_id": scan_run_id, "timeline": timeline, "action": action, "value32": row.get("Value32"), "value64": row.get("Value64")},
+        "memprocfs": {"scan_run_id": scan_run_id, "timeline": timeline, "source": "timeline_csv", "action": action, "value32": row.get("Value32"), "value64": row.get("Value64")},
         "raw_summary": text,
         "search_text": message[:_MAX_EVENTLOG_TEXT],
         "risk_score": 0,
@@ -338,9 +343,55 @@ def timeline_event(row: dict[str, str], *, timeline: str, case_id: str, evidence
     return document
 
 
+EVTX_SUBDIR = "evtx"
+EVTX_VFS_DIR = "\\sys\\eventlog\\eventlog_repaired"
+
+
+def _record_key(channel: Any, record_id: Any) -> tuple[str, str] | None:
+    channel_text, record_text = str(channel or "").strip().lower(), str(record_id or "").strip()
+    return (channel_text, record_text) if channel_text and record_text else None
+
+
+def evtx_events(directory: Path, *, case_id: str, evidence_id: str, scan_run_id: str) -> Iterator[dict[str, Any]]:
+    """An event for every record of the repaired .evtx files in ``directory``/evtx, read and
+    normalized exactly like a disk EVTX file, with MemProcFS's provenance."""
+    from app.ingest.raw_parsers.evtx_parser import EvtxRawParser
+
+    folder = directory / EVTX_SUBDIR
+    if not folder.is_dir():
+        return
+    for path in sorted(folder.glob("*.evtx")):
+        source = f"{EVTX_VFS_DIR}\\{path.name}"
+        meta = {"source_path": source, "name": path.name, "os_type": "windows"}
+        try:
+            for batch in EvtxRawParser().iter_batches(path, case_id=case_id, evidence_id=evidence_id, artifact_id="", artifact_meta=meta, batch_size=BATCH_SIZE):
+                for document in batch.events:
+                    document["source_tool"] = PARSER
+                    document["artifact"] = {**document.get("artifact", {}), "type": "memprocfs_eventlog", "name": "MemProcFS Event log timeline", "parser": PARSER, "source_path": source}
+                    document["memory"] = {"plugin": MEMORY_PLUGIN}
+                    document["memprocfs"] = {"scan_run_id": scan_run_id, "timeline": "eventlog", "source": "evtx_repaired"}
+                    document["tags"] = sorted({*document.get("tags", []), "memory", "memprocfs"})
+                    yield document
+        except Exception:  # noqa: BLE001 -- the log's records still come from the timeline summary
+            logger.warning("memprocfs repaired event log could not be read", extra={"file": path.name}, exc_info=True)
+
+
 def timeline_events(directory: Path, *, case_id: str, evidence_id: str, scan_run_id: str, limit: int = MAX_EVENTS) -> Iterator[tuple[str, dict[str, Any]]]:
-    """(timeline, event) for every usable row of the saved CSVs, at most ``limit`` in all."""
+    """(timeline, event) for every record of the repaired event logs and every usable row of the
+    saved CSVs not already among them, at most ``limit`` in all."""
     emitted = 0
+    from_evtx: set[tuple[str, str]] = set()
+    for document in evtx_events(directory, case_id=case_id, evidence_id=evidence_id, scan_run_id=scan_run_id):
+        if emitted >= limit:
+            return
+        windows = document.get("windows") or {}
+        key = _record_key(windows.get("channel"), windows.get("record_id"))
+        if key is not None:
+            if key in from_evtx:
+                continue
+            from_evtx.add(key)
+        emitted += 1
+        yield "eventlog", document
     for timeline in TIMELINES:
         path = directory / f"timeline_{timeline}.csv"
         if not path.is_file():
@@ -349,6 +400,10 @@ def timeline_events(directory: Path, *, case_id: str, evidence_id: str, scan_run
             for row in csv.DictReader(handle):
                 if emitted >= limit:
                     return
+                if timeline == "eventlog" and from_evtx:
+                    match = _EVTX.search(row.get("Text") or "")
+                    if match and _record_key(match["channel"], match["record"]) in from_evtx:
+                        continue
                 document = timeline_event(row, timeline=timeline, case_id=case_id, evidence_id=evidence_id, scan_run_id=scan_run_id)
                 if document is None:
                     continue
@@ -394,7 +449,7 @@ def index_memprocfs_timeline(directory: Path, *, case_id: str, evidence_id: str,
 
     counts: dict[str, int] = {}
     report: dict[str, Any] = {"indexed": 0, "by_timeline": counts, "truncated": False, "replaced": 0}
-    if not directory.is_dir() or not any(directory.glob("timeline_*.csv")):
+    if not directory.is_dir() or not (any(directory.glob("timeline_*.csv")) or any((directory / EVTX_SUBDIR).glob("*.evtx"))):
         return report
     index = ensure_case_index(case_id)
     report["replaced"] = _delete_previous(case_id, evidence_id)

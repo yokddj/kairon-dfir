@@ -309,3 +309,109 @@ def test_powershell_log_lists_the_evidence_records_oldest_first(monkeypatch: pyt
     assert body["from"] == 10 and body["sort"][0] == {"@timestamp": {"order": "asc"}}
     assert {"exists": {"field": "powershell.command"}} in body["query"]["bool"]["filter"]
     assert {"term": {"evidence_id": "e"}} in body["query"]["bool"]["filter"]
+
+
+# eventlog_repaired\_summary.txt as MemProcFS 5.18+ writes it (wiki FS_Sys_Eventlog).
+REPAIRED_SUMMARY = """       # Status   Original   Exposed Chunks Valid Kept Records Unique Duplicates IDs Name
+0000 repaired   e00000    ca1000    223   202  202   29614  29614          0 yes Application.evtx
+0001 original    11000     11000      1     1    1       0      0          0 yes HardwareEvents.evtx
+0002 unavailable     0         0      0     0    0       0      0          0 no  System.evtx
+0003 original    11000     11000      1     1    1      12     12          0 yes Internet Explorer.evtx
+0005 repaired    b1000     91000     11     9    9     330    330          0 yes Microsoft-Windows-AAD%4Operational.evtx
+0006 repaired    b1000     91000     11     9    9     330    330          0 yes ../escape.evtx
+"""
+
+
+def test_only_usable_repaired_logs_are_taken_from_the_summary() -> None:
+    assert memprocfs_findevil.repaired_evtx_names(REPAIRED_SUMMARY) == ["Application.evtx", "Internet Explorer.evtx", "Microsoft-Windows-AAD%4Operational.evtx"]
+    assert memprocfs_findevil.repaired_evtx_names("") == []
+
+
+class _FakeVfs:
+    """VMMDLL_VfsReadU over an in-memory file system."""
+
+    def __init__(self, files: dict[str, bytes]) -> None:
+        self.files = files
+
+    def VMMDLL_VfsReadU(self, handle, path, buffer, size, read, offset):  # noqa: N802
+        import ctypes
+
+        data = self.files.get(path.decode("utf-8"))
+        if data is None:
+            read._obj.value = 0
+            return 1
+        chunk = data[offset: offset + size]
+        ctypes.memmove(buffer, chunk, len(chunk))
+        read._obj.value = len(chunk)
+        return 0
+
+
+def test_child_copies_the_repaired_event_logs_and_skips_what_it_cannot_copy_whole(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    base = memprocfs_findevil.EVTX_VFS_DIR
+    big = b"E" * (memprocfs_findevil._READ_CHUNK * 2 + 10)
+    lib = _FakeVfs({f"{base}\\_summary.txt": REPAIRED_SUMMARY.encode(), f"{base}\\Application.evtx": big, f"{base}\\Internet Explorer.evtx": b"IE"})
+    memprocfs_findevil._save_evtx(lib, 1, str(tmp_path))
+    folder = tmp_path / memprocfs_findevil.EVTX_SUBDIR
+    assert (folder / "Application.evtx").read_bytes() == big
+    assert (folder / "Internet Explorer.evtx").read_bytes() == b"IE"
+    # Listed but not readable: nothing left behind.
+    assert sorted(path.name for path in folder.iterdir()) == ["Application.evtx", "Internet Explorer.evtx"]
+
+    monkeypatch.setattr(memprocfs_findevil, "_MAX_EVTX_FILE_BYTES", memprocfs_findevil._READ_CHUNK)
+    memprocfs_findevil._save_evtx(lib, 1, str(tmp_path / "capped"))
+    # A truncated copy would not be a valid .evtx file.
+    assert sorted(path.name for path in (tmp_path / "capped" / "evtx").iterdir()) == ["Internet Explorer.evtx"]
+
+
+def test_no_repaired_logs_leaves_no_evtx_folder(tmp_path: Path) -> None:
+    memprocfs_findevil._save_evtx(_FakeVfs({}), 1, str(tmp_path))
+    assert not (tmp_path / memprocfs_findevil.EVTX_SUBDIR).exists()
+
+
+def _evtx_xml(record: int, *, event_id: int = 4688, channel: str = "Security", data: str = "<Data Name='NewProcessName'>C:\\Windows\\System32\\cmd.exe</Data><Data Name='CommandLine'>cmd.exe /c whoami</Data><Data Name='SubjectUserName'>bob</Data>") -> str:
+    return (
+        "<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System>"
+        f"<Provider Name='Microsoft-Windows-Security-Auditing'/><EventID>{event_id}</EventID><Level>0</Level>"
+        f"<TimeCreated SystemTime='2025-03-07 19:41:12.123456'/><EventRecordID>{record}</EventRecordID>"
+        f"<Channel>{channel}</Channel><Computer>WS01</Computer></System><EventData>{data}</EventData></Event>"
+    )
+
+
+def test_repaired_event_logs_replace_the_summaries_of_the_records_they_have(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ingest.raw_parsers import evtx_parser
+
+    (tmp_path / "evtx").mkdir()
+    (tmp_path / "evtx" / "Security.evtx").write_bytes(b"ElfFile")
+    # Record 340 is in both; 341 only in the summary (MemProcFS did not keep it in the file).
+    second = SAMPLES["eventlog"].replace("record:340", "record:341").replace("19:41:12", "19:41:13")
+    (tmp_path / "timeline_eventlog.csv").write_text(HEADER + SAMPLES["eventlog"] + second, encoding="utf-8")
+    monkeypatch.setattr(evtx_parser, "iter_evtx_xml_record_results", lambda path, **_k: iter([(1, _evtx_xml(340), None), (2, _evtx_xml(340), None)]))
+
+    events = [document for _timeline, document in timeline_events(tmp_path, case_id="case-1", evidence_id="ev-1", scan_run_id="run-1")]
+    assert [str(document["windows"]["record_id"]) for document in events] == ["340", "341"]
+    full, summary = events
+    assert full["memprocfs"]["source"] == "evtx_repaired" and summary["memprocfs"]["source"] == "timeline_csv"
+    # Same provenance as the rest of the scan, so a new scan replaces it and the type filters find it.
+    assert full["artifact"]["type"] == "memprocfs_eventlog" and full["artifact"]["parser"] == "memprocfs"
+    assert full["artifact"]["source_path"] == "\\sys\\eventlog\\eventlog_repaired\\Security.evtx"
+    assert {"memory", "memprocfs"} <= set(full["tags"]) and full["memory"]["plugin"] == "memprocfs.timeline"
+    # The record's full fields, which the summary line does not carry.
+    assert full["windows"]["event_id"] == 4688 and full["process"]["command_line"] == "cmd.exe /c whoami"
+    again = next(document for _t, document in timeline_events(tmp_path, case_id="case-1", evidence_id="ev-1", scan_run_id="run-2"))
+    assert again["event_id"] == full["event_id"]
+
+
+def test_an_unreadable_repaired_log_falls_back_to_the_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ingest.raw_parsers import evtx_parser
+
+    (tmp_path / "evtx").mkdir()
+    (tmp_path / "evtx" / "Security.evtx").write_bytes(b"broken")
+    (tmp_path / "timeline_eventlog.csv").write_text(HEADER + SAMPLES["eventlog"], encoding="utf-8")
+
+    def broken(path, **_k):
+        raise ValueError("not an evtx file")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(evtx_parser, "iter_evtx_xml_record_results", broken)
+    events = [document for _t, document in timeline_events(tmp_path, case_id="case-1", evidence_id="ev-1", scan_run_id="run-1")]
+    assert [document["memprocfs"]["source"] for document in events] == ["timeline_csv"]
