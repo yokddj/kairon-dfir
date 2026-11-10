@@ -688,10 +688,22 @@ def build_exact_text_query(query: str) -> dict[str, Any]:
     text = _strip_balanced_quotes(query)
     if not text:
         return {"match_all": {}}
-    should: list[dict[str, Any]] = [{"multi_match": {"query": text, "type": "phrase", "fields": TEXT_FIELDS}}]
-    # Whole-value equality on the keyword fields that hold indicators, so an
-    # exact hash, IP, SID or GUID also matches where it is not tokenised.
-    should.extend(_build_should_terms([*HASH_FIELDS, *IP_FIELDS, *SID_FIELDS, "process.entity_id", "process.guid", "event_id"], text))
+    # lenient: some text fields are mapped as ip/numeric in some case indices;
+    # without it any non-IP phrase fails the whole query there.
+    should: list[dict[str, Any]] = [{"multi_match": {"query": text, "type": "phrase", "fields": TEXT_FIELDS, "lenient": True}}]
+    # Whole-value equality on the fields that hold this kind of indicator, so
+    # an exact hash, IP, SID or GUID also matches where it is not tokenised.
+    # Only for a value of that kind: a term on an ip-typed field with any
+    # other text is rejected by OpenSearch and fails the whole query.
+    ioc_type = detect_ioc_type(text)
+    indicator_fields = (
+        HASH_FIELDS if ioc_type in {"md5", "sha1", "sha256"}
+        else IP_FIELDS if ioc_type == "ipv4"
+        else SID_FIELDS if ioc_type == "sid"
+        else ["process.entity_id", "process.parent_entity_id", "process.guid", "event_id"] if ioc_type == "guid"
+        else []
+    )
+    should.extend(_build_should_terms(list(indicator_fields), text))
     return {"bool": {"should": should, "minimum_should_match": 1}}
 
 
