@@ -99,7 +99,7 @@ Supported profiles:
 - `handles_basic`: `windows.handles`
 - `kernel_basic`: `windows.modules`, `windows.driverscan`
 - `suspicious_memory`: `windows.malfind`, `windows.vadinfo`
-- `shell_history_basic`: `windows.consoles`, `windows.cmdscan` and the PowerShell history file (`kairon.psreadline`: `windows.filescan` + `windows.dumpfiles`) on Windows, `linux.bash` on Linux
+- `shell_history_basic`: `windows.consoles`, `windows.cmdscan`, the PowerShell history file (`kairon.psreadline`: `windows.filescan` + `windows.dumpfiles`) and MemProcFS's console text (`memprocfs.console`) on Windows, `linux.bash` on Linux
 - `files_basic`: `windows.filescan`
 - `find_evil`: Kairon's checks (`windows.pslist`, `windows.psscan`, `windows.cmdline`, `windows.malfind`, `windows.ldrmodules`) and MemProcFS FindEvil (Windows)
 
@@ -162,6 +162,8 @@ The **Shell History** tab has two lists:
 - **Console screen**: the text still on the window's screen. Every line that starts with a prompt (`PS C:\Users\x> command` or `C:\Users\x>command`) gives a command and the directory it ran in (**Directory**); a command that wraps across rows is joined. Only what was still in the window's screen buffer (a few thousand rows; older lines are overwritten) can be recovered, and commands also in the console history are listed once.
 
 `windows.cmdscan` finds the same command-history lists by scanning conhost's memory for them instead of following its console structures, so it still recovers typed commands on builds `windows.consoles` has no layout for (on Windows 11 24H2 `windows.consoles` only reports "Console Information Not Found"). A command both plugins recover is listed once.
+
+- **Console text (MemProcFS)** (`memprocfs.console`): MemProcFS's console module rebuilds the screen and scrollback text of every console a process hosts (`\pid\<pid>\console\console.txt`), conhost.exe windows and the PowerShell/cmd.exe sessions inside Windows Terminal alike, and the commands are read from it with the same prompt parser as `windows.consoles`' screen dumps. On Windows 11 24H2, where `windows.consoles` and `windows.cmdscan` find nothing in Windows Terminal sessions, this is often the only console source. It only opens the image (no forensic scan), and only shows what was still on screen or in scrollback; there are no timestamps. A command also recovered by another source is one row in **Group duplicates**, listing both sources. MemProcFS's Windows Terminal module (`winterm`) is not used: with the `info.db` MemProcFS ships it validates no layout for Windows Terminal 1.19 or 1.24 and returns nothing.
 
 - **PowerShell history file**: PSReadLine (PowerShell's line editor since Windows 10) appends every command typed at an interactive prompt to `%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\<host>_history.txt` (`ConsoleHost_history.txt` for `powershell.exe`/`pwsh.exe`; other hosts such as VS Code have their own). The file outlives the session, so it holds commands from earlier sessions too. `kairon.psreadline` looks for these files with `windows.filescan` and, when Windows still has them cached, recovers them with `windows.dumpfiles`; each command is listed in file order (oldest first) with the user whose profile holds the file (the file path is the Source tooltip). Pages no longer cached are skipped, so a partly cached file gives the commands that were. No file cached is a normal result (PowerShell not used interactively, or evicted), not a failure.
 
@@ -268,7 +270,7 @@ Configuration:
 - `MEMORY_PLUGIN_TIMEOUT_SECONDS=600`
 - `MEMORY_PLUGIN_OUTPUT_MAX_BYTES=10485760`
 - `MEMORY_WORKER_CONCURRENCY=1`
-- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.cmdscan,windows.filescan,kairon.findevil,memprocfs.findevil,kairon.psreadline,linux.pslist,linux.pstree,linux.sockstat,linux.bash`
+- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,windows.cmdscan,windows.filescan,kairon.findevil,memprocfs.findevil,kairon.psreadline,memprocfs.console,linux.pslist,linux.pstree,linux.sockstat,linux.bash`
 - `MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,shell_history_basic,files_basic,find_evil`
 - `MEMORY_DEFAULT_PROFILE=metadata_only`
 - `MEMORY_PROCESS_PROFILE_ENABLED=false`

@@ -128,6 +128,10 @@ _WINDOWS: tuple[CapabilityPluginSpec, ...] = (
     # windows.filescan + windows.dumpfiles when Windows still has it cached
     # (app.services.memory.kairon_psreadline): commands from earlier sessions too.
     CapabilityPluginSpec(MemoryCapability.SHELL_HISTORY, PlatformFamily.WINDOWS, FRAMEWORK_VOLATILITY3, "kairon.psreadline", depends_on=(MemoryCapability.IDENTIFICATION,), presentation_family="memory_shell_history"),
+    # MemProcFS's console module: the screen text of every console a process hosts, including the
+    # PowerShell/cmd.exe sessions inside Windows Terminal, which windows.consoles and
+    # windows.cmdscan miss on Windows 11 24H2 (app.services.memory.memprocfs_console).
+    CapabilityPluginSpec(MemoryCapability.SHELL_HISTORY, PlatformFamily.WINDOWS, FRAMEWORK_MEMPROCFS, "memprocfs.console", depends_on=(MemoryCapability.IDENTIFICATION,), requires_symbols=False, presentation_family="memory_shell_history"),
     # windows.filescan walks pool allocations for _FILE_OBJECT structures
     # image-wide -- every file Windows currently has any object reference
     # to (open handle, cached section, mapped image), not just ones an
