@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # to session_secret_key when unset so a fresh deployment works out of the
     # box; rotating either secret invalidates the stored provider keys.
     ai_secret_key: str = os.getenv("KAIRON_AI_SECRET_KEY", "")
+    # Importing evidence from an S3 bucket makes the backend download from outside the lab, so it is
+    # off until the operator turns it on (S3_SOURCE_ENABLED=true); credentials are set in the UI.
+    s3_source_enabled: bool = False
     backend_max_upload_size: int = Field(default=34359738368)
     backend_upload_idle_timeout_seconds: int = 60
     # Sole authority for activating the Memory capability at application-composition

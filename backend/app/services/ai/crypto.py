@@ -43,12 +43,13 @@ def _key_material() -> bytes:
     return material.encode("utf-8")
 
 
-def _derive_key() -> bytes:
+def _derive_key(info: bytes = _HKDF_INFO) -> bytes:
+    # One key per purpose (``info``), so the AI and S3 credentials never share a key.
     return HKDF(
         algorithm=hashes.SHA256(),
         length=32,
         salt=None,
-        info=_HKDF_INFO,
+        info=info,
     ).derive(_key_material())
 
 
@@ -56,17 +57,17 @@ def is_sealed(value: str | None) -> bool:
     return bool(value) and str(value).startswith(TOKEN_PREFIX)
 
 
-def seal(plaintext: str) -> str:
-    """Encrypt a provider API key for storage."""
+def seal(plaintext: str, *, info: bytes = _HKDF_INFO) -> str:
+    """Encrypt a credential for storage (an AI provider key unless ``info`` names another purpose)."""
     if not plaintext:
         raise CredentialCryptoError("Refusing to encrypt an empty credential")
     nonce = os.urandom(_NONCE_BYTES)
-    ciphertext = AESGCM(_derive_key()).encrypt(nonce, plaintext.encode("utf-8"), None)
+    ciphertext = AESGCM(_derive_key(info)).encrypt(nonce, plaintext.encode("utf-8"), None)
     return TOKEN_PREFIX + base64.b64encode(nonce + ciphertext).decode("ascii")
 
 
-def open_sealed(token: str | None) -> str | None:
-    """Decrypt a stored provider API key, or None when nothing is stored."""
+def open_sealed(token: str | None, *, info: bytes = _HKDF_INFO) -> str | None:
+    """Decrypt a stored credential, or None when nothing is stored."""
     if not token:
         return None
     if not is_sealed(token):
@@ -74,7 +75,7 @@ def open_sealed(token: str | None) -> str | None:
     try:
         raw = base64.b64decode(token[len(TOKEN_PREFIX):].encode("ascii"))
         nonce, ciphertext = raw[:_NONCE_BYTES], raw[_NONCE_BYTES:]
-        return AESGCM(_derive_key()).decrypt(nonce, ciphertext, None).decode("utf-8")
+        return AESGCM(_derive_key(info)).decrypt(nonce, ciphertext, None).decode("utf-8")
     except InvalidTag as exc:
         raise CredentialCryptoError(
             "Stored credential could not be decrypted: the encryption secret changed. "

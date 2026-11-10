@@ -32,6 +32,7 @@ This documentation describes the real state of the platform. Partial capabilitie
 ## Evidence
 
 - [evidence/unified-evidence-ingestion.md](evidence/unified-evidence-ingestion.md): guided 7-step wizard (includes Server Health Check) for adding evidence.
+- [evidence/s3-import.md](evidence/s3-import.md): importing one object from an S3 bucket (AWS or S3-compatible) as evidence; off by default.
 - [evidence/preflight-inspection.md](evidence/preflight-inspection.md): read-only inspection before processing.
 - [evidence/disk-image-ingestion.md](evidence/disk-image-ingestion.md): read-only ingestion of RAW/EWF images, volumes, OS detection, and traceability.
 - [evidence/evidence-platforms.md](evidence/evidence-platforms.md): evidence platform selection.

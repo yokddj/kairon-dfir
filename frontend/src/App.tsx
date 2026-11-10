@@ -17,6 +17,7 @@ const LoginPage = lazy(() => import("./pages/LoginPage"));
 const SetupWizardPage = lazy(() => import("./pages/SetupWizardPage"));
 const AdminUsersPage = lazy(() => import("./pages/AdminUsersPage"));
 const AiSettingsPage = lazy(() => import("./pages/AiSettingsPage"));
+const S3SettingsPage = lazy(() => import("./pages/S3SettingsPage"));
 const ChangePasswordPage = lazy(() => import("./pages/ChangePasswordPage"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Cases = lazy(() => import("./pages/Cases"));
@@ -225,6 +226,7 @@ export default function App() {
                         <Route path="/system/performance" element={<SystemPage />} />
                         <Route path="/admin/users" element={<AdminUsersPage />} />
                         <Route path="/settings/ai" element={<AiSettingsPage />} />
+                        <Route path="/settings/s3" element={<S3SettingsPage />} />
                         <Route path="/account/change-password" element={<ChangePasswordPage />} />
                         <Route path="*" element={<Navigate to="/" replace />} />
                       </Routes>

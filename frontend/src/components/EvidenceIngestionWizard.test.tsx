@@ -31,6 +31,9 @@ const startMemoryScanMock = vi.fn();
 const startMemoryRunAllMock = vi.fn();
 const getActiveMemoryAnalysisBatchMock = vi.fn();
 const navigateMock = vi.fn();
+const getS3StatusMock = vi.fn();
+const listS3ObjectsMock = vi.fn();
+const startS3ImportMock = vi.fn();
 
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
@@ -59,6 +62,10 @@ vi.mock("../api/client", () => ({
     startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
     startMemoryRunAll: (...args: unknown[]) => startMemoryRunAllMock(...args),
     getActiveMemoryAnalysisBatch: (...args: unknown[]) => getActiveMemoryAnalysisBatchMock(...args),
+    getS3Status: (...args: unknown[]) => getS3StatusMock(...args),
+    listS3Objects: (...args: unknown[]) => listS3ObjectsMock(...args),
+    startS3Import: (...args: unknown[]) => startS3ImportMock(...args),
+    finalizeResumableEvidenceUploadSession: (...args: unknown[]) => finalizeResumableEvidenceUploadSessionMock(...args),
   },
   // runResumableUpload (used by both unified and legacy resumable uploads)
   // imports this directly from the same module to classify a 409 lock
@@ -217,6 +224,7 @@ async function reachMemoryPreparationStep(evidence: { id: string; original_filen
 
 describe("EvidenceIngestionWizard", () => {
   beforeEach(() => {
+    getS3StatusMock.mockResolvedValue({ enabled: false, configured: false, default_bucket: "" });
     vi.clearAllMocks();
     navigateMock.mockReset();
     getActiveMemoryAnalysisBatchMock.mockResolvedValue(null);
@@ -1154,21 +1162,47 @@ describe("EvidenceIngestionWizard", () => {
     await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-4", { profile: "recommended" }));
   });
 
-  it.skip("server path flow registers via the upload session on Start Processing", async () => {
-    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-5", original_filename: "disk.E01" });
+  it("imports an object from S3: the server downloads it and the normal preflight follows", async () => {
+    getS3StatusMock.mockResolvedValue({ enabled: true, configured: true, default_bucket: "evidence" });
+    listS3ObjectsMock.mockResolvedValue({ bucket: "evidence", prefix: "", prefixes: [], objects: [{ key: "ws01.zip", name: "ws01.zip", size: 4200, last_modified: null, storage_class: "STANDARD" }], next_token: null });
+    const downloading = { ...sessionResponse().session, status: "uploading", bytes_received: 1000, expected_size_bytes: 4200 };
+    startS3ImportMock.mockResolvedValue({ session: downloading });
+    getEvidenceUploadSessionMock.mockResolvedValue({ session: { ...downloading, status: "staged", bytes_received: 4200 } });
+    finalizeResumableEvidenceUploadSessionMock.mockResolvedValue(sessionResponse());
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-s3", original_filename: "ws01.zip" });
+    renderWizard();
+    await goToFileStep(/Collection/);
+    await userEvent.click(screen.getByText(/Advanced import options/i));
+    await userEvent.click(await screen.findByTestId("import-from-s3"));
+    await userEvent.click(await screen.findByText("ws01.zip"));
+    expect(screen.getByTestId("s3-selected")).toHaveTextContent("s3://evidence/ws01.zip");
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await waitFor(() => expect(finalizeResumableEvidenceUploadSessionMock).toHaveBeenCalled(), { timeout: 6000 });
+    await screen.findByTestId("preflight-report");
+    expect(startS3ImportMock).toHaveBeenCalledWith("case-1", { bucket: "evidence", key: "ws01.zip", declared_platform: "auto" });
+    expect(finalizeResumableEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1");
+    expect(createEvidenceUploadSessionMock).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("does not offer S3 when the instance has it off", async () => {
+    getS3StatusMock.mockResolvedValue({ enabled: false, configured: false, default_bucket: "" });
+    renderWizard();
+    await goToFileStep(/Collection/);
+    await userEvent.click(screen.getByText(/Advanced import options/i));
+    await waitFor(() => expect(getS3StatusMock).toHaveBeenCalled());
+    expect(screen.queryByTestId("import-from-s3")).not.toBeInTheDocument();
+  });
+
+  it("server path import sends the path, not a file", async () => {
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse());
     renderWizard();
     await goToFileStep(/Existing Server Path/);
-    await userEvent.type(screen.getByLabelText(/Server path/i), "/mnt/evidence/disk.E01");
+    await userEvent.click(screen.getByText(/Advanced import options/i));
+    await userEvent.click(screen.getByRole("checkbox", { name: /Import from existing server path/i }));
+    await userEvent.type(screen.getByRole("textbox", { name: /Server path/i }), "/mnt/evidence/disk.E01");
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    await screen.findByText("Confirmation");
-    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
-
     expect(createEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", { serverPath: "/mnt/evidence/disk.E01" }, { declaredPlatform: "auto" });
-    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({})));
-    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-5", { profile: "recommended" }));
   });
 
   it("memory flow needs no authorization checkbox before Start Processing", async () => {
