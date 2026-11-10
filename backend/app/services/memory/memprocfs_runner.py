@@ -211,6 +211,8 @@ def run_findevil(
         "--timeline-dir",
         str(Path(work_dir) / TIMELINE_DIRNAME),
     ]
+    if get_settings().memprocfs_yara_accept_elastic_license:
+        argv.append("--accept-elastic-license")
     env = _child_environment()
     stdout, stderr, returncode, duration_ms = run_isolated_process(
         argv,

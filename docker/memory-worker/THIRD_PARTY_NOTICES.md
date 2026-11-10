@@ -25,3 +25,18 @@ The image also installs MemProcFS's Linux release binaries, used for the FindEvi
 The release's unmodified `vmm.so` is used as-is. Until v5.19.1, Kairon rebuilt `vmm.so` from source with a patch for a loop that never ended while locating the DNS cache on Windows 11+ (an inner loop reused the outer loop's index), which kept the forensic scan at 90 % and FindEvil from finishing; upstream fixed the same bug its own way in v5.19.1 (`search all heaps in VmmNetDns_LookupHashTable`), so the patch and the rebuild step were dropped -- building `vmm.so` from a different source checkout than the `leechcore.so` it links against risked an ABI mismatch between the two, which is suspected to have caused `memprocfs.findevil` to crash silently (no stderr, no recognized exit code) on a Windows 11 24H2 crash dump right after pinning v5.19.1.
 
 Kairon does not vendor MemProcFS source in this repository; the library is loaded at run time in a separate process.
+
+### Built-in YARA rules (Elastic License 2.0) -- opt-in, off by default
+
+MemProcFS's forensic scan (FindEvil) ships with built-in YARA rules -- a curated subset of
+[Elastic Security's protections-artifacts](https://github.com/elastic/protections-artifacts)
+(trojans, hacktools, ransomware, backdoors, shellcode, rootkits and more) -- already present in
+the release binaries downloaded above, under `info.db`. They are disabled at runtime unless
+MemProcFS is told the operator accepts the
+[Elastic License 2.0](https://www.elastic.co/licensing/elastic-license), which covers that
+specific content; it does **not** apply to MemProcFS itself (AGPL-3.0, as noted above) or to
+Kairon. Elastic License 2.0 is a separate, non-OSI license, so this acceptance is never a Kairon
+default: it is gated behind `MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE` (off by default; see
+`docs/memory/memory_analysis.md`, "YARA in Find Evil"), which an operator turns on deliberately
+(setup wizard, or directly in `.env`). Turning it on does not download or vendor anything new --
+it only unlocks content already shipped in the pinned MemProcFS release.

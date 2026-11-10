@@ -82,6 +82,21 @@ class Settings(BaseSettings):
     # retry is skipped and the original signal is reported as before.
     memprocfs_crash_retry_enabled: bool = True
     memprocfs_gdb_command: str = "gdb"
+    # Opt-in, off by default: MemProcFS's forensic scan ships with built-in YARA rules
+    # (a curated subset of Elastic Security's protections-artifacts: YR_TROJAN, YR_HACKTOOL,
+    # YR_RANSOMWARE, YR_BACKDOOR, YR_SHELLCODE, YR_ROOTKIT...), already present in the binaries
+    # the memory-worker image downloads (see docker/memory-worker/fetch_memprocfs.py) but disabled
+    # at runtime unless MemProcFS is told the operator accepts the Elastic License 2.0 that
+    # covers them (https://www.elastic.co/licensing/elastic-license) -- a separate, non-OSI
+    # license from both Kairon's AGPL-3.0 and MemProcFS's own AGPL-3.0, so acceptance has to be an
+    # explicit, deliberate operator choice, never a Kairon default silently binding whoever builds
+    # the image. The YARA findings themselves (YR_* rows) were already wired end to end
+    # (artifact_normalizers.FINDEVIL_TYPES, the memprocfs_tables "yara" table) in anticipation of
+    # this flag; without it MemProcFS simply reports none, which is indistinguishable from "no
+    # matches" in the UI (by design: the analyst is never told a check was skipped for licensing
+    # reasons they did not choose). See docs/memory/memory_analysis.md and
+    # docker/memory-worker/THIRD_PARTY_NOTICES.md.
+    memprocfs_yara_accept_elastic_license: bool = False
     memory_tools_auto_install_enabled: bool = False
     memory_allow_external_tool_execution: bool = False
     memory_backend_check_timeout_seconds: int = 10

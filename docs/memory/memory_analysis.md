@@ -130,6 +130,25 @@ How it runs: Kairon's checks run first (a few minutes on a 4 GB image); a source
 
 If the memory worker dies while an analysis runs (killed, restarted, out of memory, or the host went to sleep), the run is closed as failed (`WORKER_LOST`) when the next analysis starts or is requested from the app, instead of staying "running" forever and blocking a new run.
 
+#### YARA in Find Evil (opt-in)
+
+MemProcFS's forensic scan can additionally match memory against its own built-in YARA rules (a
+curated subset of [Elastic Security's protections-artifacts](https://github.com/elastic/protections-artifacts):
+trojans, hacktools, ransomware, backdoors, shellcode, rootkits and more), reported as `YR_*`
+indicators (indicator category **yara**, high priority) next to the indicators above. This
+content is already present in the pinned MemProcFS release binaries the memory-worker image
+downloads, but MemProcFS keeps it disabled until it is told the operator accepts the
+[Elastic License 2.0](https://www.elastic.co/licensing/elastic-license) that covers it -- a
+separate, non-OSI license from both Kairon's and MemProcFS's own AGPL-3.0, so acceptance is never
+a Kairon default.
+
+Set `MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE=true` (asked in `scripts/setup.sh`'s interactive wizard
+when memory analysis is enabled, or set directly in `.env`) to turn it on; `false` by default.
+With it off, Find Evil simply has no `YR_*` indicators -- the same as "no matches", not a visible
+"skipped" state, since the analyst never asked for this license to be accepted. Turning it on
+needs no rebuild and downloads nothing new: the rules are already in the image, only the runtime
+flag changes. See `docker/memory-worker/THIRD_PARTY_NOTICES.md` for the full notice.
+
 ### Shell history on Windows
 
 The **Shell History** tab has two lists:
@@ -241,6 +260,7 @@ Configuration:
 - `VOLATILITY3_COMMAND=vol`
 - `MEMPROCFS_COMMAND=memprocfs`
 - `MEMPROCFS_LIBRARY=/opt/memprocfs/vmm.so`
+- `MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE=false` (see "YARA in Find Evil" above)
 - `MEMORY_BACKEND_CHECK_TIMEOUT_SECONDS=10`
 - `MEMORY_BACKEND_STATUS_CACHE_SECONDS=60`
 - `MEMORY_PREFERRED_BACKEND=volatility3`

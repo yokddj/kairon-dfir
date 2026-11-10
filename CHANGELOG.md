@@ -17,6 +17,7 @@
 - Raw **SRUM** (`SRUDB.dat`) is parsed on the Linux worker. SrumECmd refuses to run outside Windows, so the database is read natively with `dissect.esedb` into SrumECmd's tables and columns (network usage, network connections, application resource use, app timeline, energy, push notifications, vfuprov); compared with SrumECmd's output for the same machine. User SIDs are named from the `SOFTWARE` hive's ProfileList when it was collected.
 - Raw **Shellbags**: SBECmd now ships in the image and parses each profile's `UsrClass.dat` and `NTUSER.DAT` (with their transaction logs) on the Linux worker.
 - SRUM and Shellbags are steps of recommended indexing when discovery finds their sources, and scoped actions (`POST /api/evidences/{id}/srum-index`, `/shellbags-index`).
+- Find Evil can use MemProcFS's built-in YARA rules (Elastic Security content: trojans, hacktools, ransomware, backdoors, shellcode, rootkits...), reported as `YR_*` indicators. Opt-in and off by default behind `MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE` (asked in `scripts/setup.sh`'s wizard when memory analysis is enabled), since it is gated by the Elastic License 2.0, a separate, non-OSI license from Kairon's and MemProcFS's own AGPL-3.0. Needs no rebuild or new download: the rules are already in the pinned MemProcFS binaries. See `docs/memory/memory_analysis.md` ("YARA in Find Evil").
 
 ### Changed
 
