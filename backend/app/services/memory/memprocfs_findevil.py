@@ -2,7 +2,9 @@
 
 With ``--timeline-dir`` the same scan also leaves the timelines Volatility has no equivalent for
 (NTFS, registry, event logs, web, scheduled tasks, Amcache, Prefetch, kernel objects) there as
-MemProcFS's CSV files, for app.services.memory.memprocfs_timeline to index.
+MemProcFS's CSV files, for app.services.memory.memprocfs_timeline to index, and the event logs
+MemProcFS rebuilt from memory (\\sys\\eventlog\\eventlog_repaired) as real .evtx files under its
+``evtx`` subdirectory, so their records are read in full instead of from the timeline's summary.
 
 Started by app.services.memory.memprocfs_runner with ``python -m``, never imported by the
 worker itself: MemProcFS is a native library parsing untrusted memory, so a crash or a hang
@@ -74,6 +76,13 @@ TABLE_FILES = (
     "amcache_driver_packages", "amcache_device_containers", "amcache_devices_pnp",
 )
 _MAX_TABLE_BYTES = 64 * 1024 * 1024
+# The event logs MemProcFS rebuilt from the memory-mapped .evtx files it found (MemProcFS 5.18+).
+EVTX_VFS_DIR = "\\sys\\eventlog\\eventlog_repaired"
+EVTX_SUBDIR = "evtx"
+# A log over this size, or past the total, is left out and its records come from the timeline's
+# summary instead: a truncated copy is not a valid .evtx file.
+_MAX_EVTX_FILE_BYTES = 1024 * 1024 * 1024
+_MAX_EVTX_TOTAL_BYTES = 4 * 1024 * 1024 * 1024
 
 
 def _load(library: str) -> ctypes.CDLL:
@@ -107,6 +116,76 @@ def _read(lib: ctypes.CDLL, handle: int, path: str, *, limit: int) -> bytes | No
         if read.value < _READ_CHUNK:
             break
     return b"".join(chunks)
+
+
+def _copy(lib: ctypes.CDLL, handle: int, path: str, destination: str, *, limit: int) -> int | None:
+    """Stream one file of MemProcFS's virtual file system to ``destination``. Returns its size,
+    or None (and nothing left on disk) when it cannot be read or is larger than ``limit``."""
+    encoded = path.encode("utf-8")
+    offset = 0
+    try:
+        with open(destination, "wb") as out:
+            while True:
+                buffer = ctypes.create_string_buffer(_READ_CHUNK)
+                read = ctypes.c_uint32(0)
+                status = lib.VMMDLL_VfsReadU(handle, encoded, buffer, _READ_CHUNK, ctypes.byref(read), offset)
+                if status != _STATUS_SUCCESS and offset == 0:
+                    raise OSError(f"{path} could not be read")
+                if read.value == 0:
+                    break
+                offset += read.value
+                if offset > limit:
+                    raise OSError(f"{path} is larger than {limit} bytes")
+                out.write(buffer.raw[: read.value])
+                if read.value < _READ_CHUNK:
+                    break
+    except OSError:
+        try:
+            os.remove(destination)
+        except OSError:
+            pass
+        return None
+    if offset == 0:
+        os.remove(destination)
+        return None
+    return offset
+
+
+def repaired_evtx_names(summary: str) -> list[str]:
+    """The .evtx files eventlog_repaired\\_summary.txt lists as usable ("original" or "repaired"
+    with records), in its order. Its rows are "# Status Original Exposed Chunks Valid Kept Records
+    Unique Duplicates IDs Name", and a name can contain spaces."""
+    names = []
+    for line in summary.splitlines():
+        parts = line.split(None, 11)
+        if len(parts) != 12 or not parts[0].isdigit() or parts[1].lower() not in ("original", "repaired"):
+            continue
+        name = parts[11].strip()
+        if parts[7] == "0" or not name.lower().endswith(".evtx") or "/" in name or "\\" in name or name.startswith("."):
+            continue
+        names.append(name)
+    return names
+
+
+def _save_evtx(lib: ctypes.CDLL, handle: int, directory: str) -> None:
+    """Copy the repaired event logs to ``directory``/evtx. Best effort, like the timelines."""
+    summary = _read(lib, handle, f"{EVTX_VFS_DIR}\\_summary.txt", limit=_MAX_CSV_BYTES)
+    names = repaired_evtx_names(summary.decode("utf-8", "replace")) if summary else []
+    if not names:
+        return
+    target = os.path.join(directory, EVTX_SUBDIR)
+    try:
+        os.makedirs(target, exist_ok=True)
+    except OSError as exc:
+        print(f"MemProcFS event logs not saved: {exc}", file=sys.stderr)
+        return
+    total = 0
+    for name in names:
+        size = _copy(lib, handle, f"{EVTX_VFS_DIR}\\{name}", os.path.join(target, name), limit=min(_MAX_EVTX_FILE_BYTES, _MAX_EVTX_TOTAL_BYTES - total))
+        if size is None:
+            print(f"MemProcFS event log {name} not saved; its records come from the event log timeline.", file=sys.stderr)
+            continue
+        total += size
 
 
 # After the scan, reading findevil.csv and closing MemProcFS get this long before the child stops.
@@ -195,6 +274,7 @@ def _save_timelines(lib: ctypes.CDLL, handle: int, directory: str) -> None:
                 handle_out.write(data)
         except OSError as exc:
             print(f"MemProcFS {filename} not saved: {exc}", file=sys.stderr)
+    _save_evtx(lib, handle, directory)
 
 
 def findevil_rows(csv_text: str) -> list[dict[str, str]]:
