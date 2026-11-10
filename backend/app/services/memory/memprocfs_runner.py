@@ -23,7 +23,8 @@ from app.services.memory.volatility_runner import VolatilityRunnerError, Volatil
 logger = logging.getLogger(__name__)
 
 FINDEVIL_PLUGIN = "memprocfs.findevil"
-MEMPROCFS_PLUGINS = frozenset({FINDEVIL_PLUGIN})
+CONSOLE_PLUGIN = "memprocfs.console"
+MEMPROCFS_PLUGINS = frozenset({FINDEVIL_PLUGIN, CONSOLE_PLUGIN})
 # Where the child leaves the forensic scan's timeline CSVs, under the run's output directory.
 TIMELINE_DIRNAME = "memprocfs-timeline"
 # Left under the run's own output directory (not /tmp) so it survives the plugin process and
@@ -296,6 +297,49 @@ def run_findevil(
         raise VolatilityRunnerError(code, message, stdout=stdout, stderr=stderr, return_code=returncode, stdout_length=len(stdout), stderr_length=len(stderr))
     return VolatilityRunResult(
         argv_display=["memprocfs", "-device", "[evidence]", "-forensic", "1", "-disable-symbolserver", "findevil"],
+        stdout=stdout,
+        stderr=stderr,
+        duration_ms=duration_ms,
+    )
+
+
+_CONSOLE_EXIT_CODES = {
+    3: ("MEMPROCFS_UNAVAILABLE", "MemProcFS is not installed in the memory worker."),
+    4: ("UNSUPPORTED_MEMORY_IMAGE", "MemProcFS could not open this memory image (the console text needs a Windows image)."),
+}
+
+
+def run_console(
+    evidence_path: Path,
+    work_dir: Path,
+    *,
+    timeout_seconds: int,
+    max_output_bytes: int,
+    cancellation_check: Callable[[], bool] | None = None,
+) -> VolatilityRunResult:
+    """The console text MemProcFS recovers (app.services.memory.memprocfs_console)."""
+    library = memprocfs_library()
+    if not library.is_file():
+        raise VolatilityRunnerError("MEMPROCFS_UNAVAILABLE", "MemProcFS is not installed in the memory worker.")
+    argv = [sys.executable, "-m", "app.services.memory.memprocfs_console", "--library", str(library), "--evidence", str(evidence_path)]
+    stdout, stderr, returncode, duration_ms = run_isolated_process(
+        argv,
+        work_dir=work_dir,
+        env=_child_environment(),
+        timeout=int(timeout_seconds),
+        max_bytes=int(max_output_bytes),
+        label="MemProcFS console",
+        timeout_label=CONSOLE_PLUGIN,
+        cancellation_check=cancellation_check,
+    )
+    if returncode != 0:
+        if returncode < 0:
+            code, message = "PLUGIN_CRASHED", f"MemProcFS was killed by {_signal_name(returncode)} while reading console text (a crash inside MemProcFS itself)."
+        else:
+            code, message = _CONSOLE_EXIT_CODES.get(returncode, ("PLUGIN_FAILED", "MemProcFS console text could not be read."))
+        raise VolatilityRunnerError(code, message, stdout=stdout, stderr=stderr, return_code=returncode, stdout_length=len(stdout), stderr_length=len(stderr))
+    return VolatilityRunResult(
+        argv_display=["memprocfs", "-device", "[evidence]", "-disable-symbolserver", "console"],
         stdout=stdout,
         stderr=stderr,
         duration_ms=duration_ms,

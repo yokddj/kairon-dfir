@@ -44,6 +44,7 @@ from app.services.memory.artifact_normalizers import (
     normalize_windows_consoles,
     normalize_windows_filescan,
     normalize_memprocfs_findevil,
+    normalize_memprocfs_console,
     normalize_psreadline_history,
     normalize_windows_netscan,
     normalize_windows_privileges,
@@ -59,7 +60,7 @@ from app.services.memory.volatility_runner import VolatilityRunnerError, probe_w
 from app.services.memory.kairon_findevil import KAIRON_FINDEVIL_PLUGIN, run_kairon_findevil
 from app.services.memory.kairon_psreadline import KAIRON_PSREADLINE_PLUGIN, run_kairon_psreadline
 from app.services.memory.kairon_linux_findevil import KAIRON_LINUX_FINDEVIL_PLUGIN, run_kairon_linux_findevil
-from app.services.memory.memprocfs_runner import MEMPROCFS_PLUGINS, TIMELINE_DIRNAME as MEMPROCFS_TIMELINE_DIRNAME, run_findevil
+from app.services.memory.memprocfs_runner import CONSOLE_PLUGIN as MEMPROCFS_CONSOLE_PLUGIN, MEMPROCFS_PLUGINS, TIMELINE_DIRNAME as MEMPROCFS_TIMELINE_DIRNAME, run_console as run_memprocfs_console, run_findevil
 from app.services.memory.memprocfs_timeline import index_memprocfs_timeline
 from app.services.memory import volatility_runner
 from app.services.memory.symbol_control import record_symbol_requirement
@@ -113,6 +114,7 @@ ARTIFACT_PLUGIN_NORMALIZER = {
     "kairon.findevil": "memory_findevil",
     "memprocfs.findevil": "memory_findevil",
     "kairon.psreadline": "memory_shell_history",
+    "memprocfs.console": "memory_shell_history",
     "linux.lsof": "memory_handle",
     "linux.lsmod": "memory_kernel_module",
     "linux.malware.malfind": "memory_suspicious_region",
@@ -170,6 +172,7 @@ ARTIFACT_PLUGIN_LIMITS = {
     # 4 GB image); each source plugin keeps its own bound inside this one.
     # windows.filescan, then windows.dumpfiles on the PowerShell history files it finds.
     "kairon.psreadline": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "memprocfs.console": {"timeout_seconds": 900, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "kairon.findevil": {"timeout_seconds": 2400, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     # Linux: psscan and malfind scan all of memory or every process's mappings; lsof walks every
     # process's file table. Seconds on a 256 MB image; the bounds leave room for large ones.
@@ -962,6 +965,8 @@ def _normalize_artifact_payload(
         return normalize_windows_filescan(payload, source_plugin=plugin, **common)
     if plugin == KAIRON_PSREADLINE_PLUGIN:
         return normalize_psreadline_history(payload, source_plugin=plugin, **common)
+    if plugin == MEMPROCFS_CONSOLE_PLUGIN:
+        return normalize_memprocfs_console(payload, source_plugin=plugin, **common)
     if plugin in ("memprocfs.findevil", KAIRON_FINDEVIL_PLUGIN):
         return normalize_memprocfs_findevil(payload, source_plugin=plugin, **common)
     if plugin == KAIRON_LINUX_FINDEVIL_PLUGIN:
@@ -1220,7 +1225,15 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
         db.refresh(run)
         return bool(run.cancellation_requested)
 
-    if plugin in MEMPROCFS_PLUGINS:
+    if plugin == MEMPROCFS_CONSOLE_PLUGIN:
+        result = run_memprocfs_console(
+            evidence_path,
+            output_dir,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+            cancellation_check=cancellation_requested,
+        )
+    elif plugin in MEMPROCFS_PLUGINS:
         result = run_findevil(
             evidence_path,
             output_dir,

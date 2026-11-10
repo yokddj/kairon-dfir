@@ -38,11 +38,13 @@ type ShellHistoryRow = {
 // Where a Windows command was recovered from (windows.consoles / windows.cmdscan): conhost's own
 // command history (cmd.exe windows) or the console's screen text after the prompt (PowerShell
 // windows keep their history elsewhere, so the screen is often the only place it survives), or
-// PowerShell's own history file (PSReadLine), when Windows still had it cached (kairon.psreadline).
+// PowerShell's own history file (PSReadLine), when Windows still had it cached (kairon.psreadline),
+// or the console text MemProcFS rebuilds, Windows Terminal sessions included (memprocfs.console).
 const SOURCE_LABEL: Record<string, string> = {
   command_history: "Console history",
   screen: "Console screen",
   psreadline_history: "PowerShell history file",
+  memprocfs_console: "Console text (MemProcFS)",
   "linux.bash": "Bash history",
 };
 

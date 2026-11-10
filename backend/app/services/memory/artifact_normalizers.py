@@ -1720,6 +1720,77 @@ def normalize_psreadline_history(
 
 
 # ---------------------------------------------------------------------------
+# shell_history -> memory_shell_history (MemProcFS console text)
+#   memprocfs.console returns the screen text MemProcFS rebuilds for each
+#   process hosting a console (conhost.exe, Windows Terminal): the commands
+#   are read from it with the same prompt parser as windows.consoles' screen
+#   dumps. pid is the hosting process; process_name is the shell the prompt
+#   belongs to. No timestamps.
+# ---------------------------------------------------------------------------
+
+
+def normalize_memprocfs_console(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "memprocfs.console",
+    max_records: int = 200000,
+) -> dict[str, Any]:
+    rows = _rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for index, row in enumerate(rows):
+        pid = _int_or_none(_lookup(row, "PID", "pid"))
+        host = _str_or_none(_lookup(row, "Process", "process"), MAX_NAME_LENGTH)
+        text = _lookup(row, "Text", "text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        for line_number, (shell, working_directory, command) in enumerate(_console_screen_commands(text, None)):
+            if len(items) >= max_records:
+                warnings.append("memprocfs_console_max_records_reached")
+                break
+            command = _scrub_paths(command)[:MAX_OBJECT_NAME_LENGTH]
+            if not command:
+                continue
+            items.append({
+                "document_id": _document_id(prefix="memory_shell_history", case_id=case_id, run_id=scan_run_id, identity=_identity_pid_offset(pid, "memprocfs_console", line_number, command)),
+                "document_type": "memory_shell_history",
+                "case_id": case_id,
+                "evidence_id": evidence_id,
+                "scan_run_id": scan_run_id,
+                "plugin_run_id": plugin_run_id,
+                "platform": "windows",
+                "pid": pid,
+                "process_entity_id": None,
+                "process_name": "powershell.exe" if shell == "powershell" else "cmd.exe",
+                "console_host": host,
+                "command": command,
+                "command_time": None,
+                "sequence": len(items),
+                "working_directory": _scrub_paths(working_directory),
+                "recovered_from": "memprocfs_console",
+                "source_plugin": source_plugin,
+                "source_record_index": index,
+                "confidence": "recovered_from_screen",
+                "provenance": _provenance(case_id=case_id, evidence_id=evidence_id, scan_run_id=scan_run_id, plugin_run_id=plugin_run_id, source_plugin=source_plugin),
+                "normalization_version": NORMALIZATION_VERSION,
+                "unresolved_process_reference": pid is None,
+            })
+    return {
+        "items": items,
+        "warnings": warnings,
+        "raw_count": len(rows),
+        "accepted_count": len(items),
+        "dropped_count": 0,
+        "conflicts": 0,
+        "normalization_version": NORMALIZATION_VERSION,
+    }
+
+
+# ---------------------------------------------------------------------------
 # files -> memory_file_object
 #   windows.filescan walks pool allocations for _FILE_OBJECT structures
 #   image-wide and reports only Offset + Name -- unlike windows.consoles,

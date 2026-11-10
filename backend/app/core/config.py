@@ -147,7 +147,7 @@ class Settings(BaseSettings):
         "windows.envars,windows.getsids,windows.privileges,"
         "windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,"
         "windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,"
-        "windows.cmdscan,windows.filescan,kairon.findevil,memprocfs.findevil,kairon.psreadline,"
+        "windows.cmdscan,windows.filescan,kairon.findevil,memprocfs.findevil,kairon.psreadline,memprocfs.console,"
         "linux.pslist,linux.pstree,linux.sockstat,linux.bash,"
         "linux.psaux,linux.psscan,linux.lsof,linux.lsmod,linux.malware.malfind,kairon.linux_findevil,"
         "linux.pagecache.Files"
@@ -556,6 +556,7 @@ class Settings(BaseSettings):
             "kairon.findevil",
             "memprocfs.findevil",
             "kairon.psreadline",
+            "memprocfs.console",
             "linux.pslist",
             "linux.pstree",
             "linux.sockstat",
@@ -823,6 +824,10 @@ _ADDED_MEMORY_PLUGINS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (
         ("windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "windows.envars", "windows.getsids", "windows.privileges", "windows.netscan", "windows.netstat", "windows.dlllist", "windows.ldrmodules", "windows.handles", "windows.modules", "windows.driverscan", "windows.malfind", "windows.vadinfo", "windows.consoles", "windows.cmdscan", "windows.filescan", "kairon.findevil", "memprocfs.findevil", "kairon.psreadline", "linux.pslist", "linux.pstree", "linux.sockstat", "linux.bash", "linux.psaux", "linux.psscan", "linux.lsof", "linux.lsmod", "linux.malware.malfind", "kairon.linux_findevil"),
         ("linux.pagecache.Files",),
+    ),
+    (
+        ("windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "windows.envars", "windows.getsids", "windows.privileges", "windows.netscan", "windows.netstat", "windows.dlllist", "windows.ldrmodules", "windows.handles", "windows.modules", "windows.driverscan", "windows.malfind", "windows.vadinfo", "windows.consoles", "windows.cmdscan", "windows.filescan", "kairon.findevil", "memprocfs.findevil", "kairon.psreadline", "linux.pslist", "linux.pstree", "linux.sockstat", "linux.bash", "linux.psaux", "linux.psscan", "linux.lsof", "linux.lsmod", "linux.malware.malfind", "kairon.linux_findevil", "linux.pagecache.Files"),
+        ("memprocfs.console",),
     ),
 )
 
