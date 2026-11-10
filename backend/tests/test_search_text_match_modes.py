@@ -44,6 +44,8 @@ def test_exact_is_a_phrase_match() -> None:
     query = build_text_query_for_mode('"powershell -enc"', "exact")
     phrase = query["bool"]["should"][0]["multi_match"]
     assert phrase["type"] == "phrase" and phrase["query"] == "powershell -enc"
+    # Some text fields are ip-typed in some indices: a strict phrase fails there.
+    assert phrase["lenient"] is True
 
 
 def test_contains_and_exact_treat_the_input_as_literal_text_not_syntax() -> None:
@@ -73,3 +75,10 @@ def test_event_ids_stay_a_term_match_in_artifact_views() -> None:
 
 def test_match_mode_is_not_a_filter_that_excludes_memory_rows() -> None:
     assert memory_unsupported_filters({"q": "cmd", "search_mode": "contains"}) == []
+
+
+def test_exact_only_adds_typed_indicator_terms_for_a_matching_value() -> None:
+    # A term with free text on an ip-typed field fails the whole OpenSearch query.
+    assert "source.ip" not in _dump(build_text_query_for_mode("powershell -enc", "exact"))
+    assert "term" not in _dump(build_text_query_for_mode("powershell -enc", "exact"))
+    assert "term" in _dump(build_text_query_for_mode("10.0.0.5", "exact"))
