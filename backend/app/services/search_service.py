@@ -867,6 +867,10 @@ def _build_event_filters(case_id: str, params: dict[str, Any], db: Session | Non
             hidden = [value for value in ("mft", *MEMPROCFS_BULK_ARTIFACT_TYPES) if value not in selected_artifact_types]
             if hidden:
                 filters.append({"bool": {"must_not": [{"terms": {"artifact.type": hidden}}]}})
+        if "memprocfs_eventlog" not in selected_artifact_types:
+            # A MemProcFS event log record that a disk collection of the same host also holds is
+            # the same event twice; the memory copy shows when the memory event log is asked for.
+            filters.append({"bool": {"must_not": [{"bool": {"filter": [{"term": {"artifact.type": "memprocfs_eventlog"}}, {"term": {"memprocfs.on_disk": True}}]}}]}})
         if not params.get("include_low_confidence_timestamps", False):
             filters.append({"bool": {"must_not": [{"term": {"timestamp_precision": "unknown"}}]}})
     domain = str(params.get("domain") or "").strip()

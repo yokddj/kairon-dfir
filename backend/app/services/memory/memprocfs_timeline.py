@@ -23,6 +23,12 @@ Event logs MemProcFS could rebuild as .evtx files (saved by the child under ``ev
 the disk EVTX parser itself, so their records keep all their fields; the timeline's one-line
 summaries are then indexed only for the records those files do not have (logs MemProcFS could not
 rebuild, or records outside what it kept), and no record is indexed twice.
+
+The same record is often also in a disk collection of the same host in the case (the .evtx files on
+disk). Such memory copies are marked ``memprocfs.on_disk`` (mark_event_log_copies, run after the
+memory events are indexed and after any disk evidence of the case is ingested, so the order the
+evidence arrives in does not matter) and the Timeline hides them by default; the records only memory
+still holds -- a cleared or rolled-over log -- stay visible.
 """
 
 from __future__ import annotations
@@ -421,6 +427,56 @@ def _delete_previous(case_id: str, evidence_id: str) -> int:
     return delete_by_query_and_wait(client, index, {"bool": {"filter": [{"term": {"evidence_id": evidence_id}}, {"term": {"artifact.parser": PARSER}}]}})
 
 
+def _record_key_of(source: dict[str, Any]) -> tuple[str, str] | None:
+    windows = source.get("windows") or {}
+    return _record_key(windows.get("channel"), windows.get("record_id") or windows.get("record_number"))
+
+
+def mark_event_log_copies(case_id: str) -> dict[str, int]:
+    """Set memprocfs.on_disk on every MemProcFS event log record that a non-memory evidence of the
+    same host in the case also holds (same channel and record number), and clear it on the rest."""
+    from opensearchpy import helpers
+
+    from app.core.opensearch import get_events_index, get_opensearch_client, index_exists, refresh_index
+
+    client = get_opensearch_client(timeout_seconds=300)
+    index = get_events_index(case_id)
+    report = {"memory_records": 0, "on_disk": 0, "updated": 0}
+    if not index_exists(client, index):
+        return report
+    memory_filter = {"bool": {"filter": [{"term": {"artifact.type": "memprocfs_eventlog"}}]}}
+    hosts = client.search(index=index, body={"size": 0, "query": memory_filter, "aggs": {"hosts": {"terms": {"field": "host.identity_id", "size": 1000}}}})
+    for bucket in ((hosts.get("aggregations") or {}).get("hosts") or {}).get("buckets") or []:
+        host_id = bucket["key"]
+        on_disk: set[tuple[str, str]] = set()
+        disk_query = {
+            "query": {"bool": {"filter": [{"term": {"host.identity_id": host_id}}, {"exists": {"field": "windows.channel"}}], "must_not": [{"term": {"artifact.parser": PARSER}}]}},
+            "_source": ["windows.channel", "windows.record_id", "windows.record_number"],
+        }
+        for hit in helpers.scan(client, index=index, query=disk_query, size=5000):
+            key = _record_key_of(hit["_source"])
+            if key is not None:
+                on_disk.add(key)
+        memory_query = {
+            "query": {"bool": {"filter": [{"term": {"artifact.type": "memprocfs_eventlog"}}, {"term": {"host.identity_id": host_id}}]}},
+            "_source": ["windows.channel", "windows.record_id", "memprocfs.on_disk"],
+        }
+        updates = []
+        for hit in helpers.scan(client, index=index, query=memory_query, size=5000):
+            report["memory_records"] += 1
+            flag = _record_key_of(hit["_source"]) in on_disk
+            report["on_disk"] += int(flag)
+            if bool((hit["_source"].get("memprocfs") or {}).get("on_disk")) != flag:
+                updates.append({"_op_type": "update", "_index": hit["_index"], "_id": hit["_id"], "doc": {"memprocfs": {"on_disk": flag}}})
+        if updates:
+            ok, _errors = helpers.bulk(client, updates, chunk_size=BATCH_SIZE, raise_on_error=False)
+            report["updated"] += int(ok)
+    if report["updated"]:
+        refresh_index(index, raise_on_error=False)
+    logger.info("memprocfs event log copies marked", extra={"case_id": case_id, **report})
+    return report
+
+
 def create_timeline_detections(db: Any, *, case_id: str, evidence_id: str, candidates: list[dict[str, Any]]) -> dict[str, int]:
     """The built-in detections of the indexed memory events: per event, as disk ingest creates
     them, and the mass-encryption check over the evidence's file events. Indexing again finds the
@@ -476,5 +532,9 @@ def index_memprocfs_timeline(directory: Path, *, case_id: str, evidence_id: str,
     refresh_index(get_events_index(case_id), raise_on_error=False)
     if db is not None:
         report["detections"] = create_timeline_detections(db, case_id=case_id, evidence_id=evidence_id, candidates=candidates)
+    try:
+        report["event_log_copies"] = mark_event_log_copies(case_id)
+    except Exception:  # noqa: BLE001 -- the events are indexed either way
+        logger.warning("memprocfs timeline: marking event log copies failed", exc_info=True)
     logger.info("memprocfs timeline indexed", extra={"case_id": case_id, "evidence_id": evidence_id, "indexed": report["indexed"], "by_timeline": counts})
     return report

@@ -102,6 +102,11 @@ FIELD_SPECS: dict[str, FieldSpec] = {
     "user.sid": FieldSpec("user.sid"),
     "artifact.type": FieldSpec("artifact.type"),
     "artifact.parser": FieldSpec("artifact.parser"),
+    # Where a MemProcFS event came from: evtx_repaired (a rebuilt .evtx) or timeline_csv (the forensic
+    # timeline's summary line); memprocfs.timeline names the timeline (eventlog, ntfs, registry...).
+    "memprocfs.source": FieldSpec("memprocfs.source"),
+    "memprocfs.timeline": FieldSpec("memprocfs.timeline"),
+    "memprocfs.on_disk": FieldSpec("memprocfs.on_disk", wildcard=False),
     "event.type": FieldSpec("event.type"),
     "event.action": FieldSpec("event.action"),
     "risk_score": FieldSpec("risk_score", kind="numeric", wildcard=False),
