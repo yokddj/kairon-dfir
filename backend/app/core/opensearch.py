@@ -1593,6 +1593,16 @@ def ensure_case_index(case_id: str) -> str:
                                 "virtual_address": {"type": "keyword"},
                             }
                         },
+                        # Where a MemProcFS timeline event came from (evtx_repaired / timeline_csv),
+                        # so the analyst can filter on it (app.services.memory.memprocfs_timeline).
+                        "memprocfs": {
+                            "properties": {
+                                "source": {"type": "keyword"},
+                                "timeline": {"type": "keyword"},
+                                "scan_run_id": {"type": "keyword"},
+                                "on_disk": {"type": "boolean"},
+                            }
+                        },
                         # Declared field by field, not left as a bare enabled
                         # object: the root mapping is dynamic:false, so an
                         # object with no properties never gets subfields and
@@ -1899,6 +1909,15 @@ def ensure_case_index(case_id: str) -> str:
                                         "command_line": {"type": "text"},
                                     }
                                 }
+                            }
+                        },
+                        # Backfill: memprocfs.* was undeclared until 2026-11 (stayed in _source only).
+                        "memprocfs": {
+                            "properties": {
+                                "source": {"type": "keyword"},
+                                "timeline": {"type": "keyword"},
+                                "scan_run_id": {"type": "keyword"},
+                                "on_disk": {"type": "boolean"},
                             }
                         },
                         # Backfill for indices created before the "powershell" mapping bug

@@ -516,8 +516,16 @@ def get_performance_profile(db: Session) -> str:
     return value if value in {"safe", "balanced", "performance", "max", "custom"} else "balanced"
 
 
+# The settings the generic settings API may change or reset: tuning and deployment values. Feature
+# configuration kept in AppSetting (AI_ASSISTANT, S3_SOURCE...) has its own admin endpoints and
+# validation, and a settings reset must never wipe it.
+TUNABLE_SETTING_KEYS = frozenset({*RUNTIME_DEFAULTS, *DEPLOYMENT_DEFAULTS, PERFORMANCE_PROFILE_KEY})
+
+
 def reset_settings(db: Session) -> list[str]:
-    keys = [item.key for item in db.query(AppSetting).all()]
-    db.query(AppSetting).delete()
+    items = db.query(AppSetting).filter(AppSetting.key.in_(TUNABLE_SETTING_KEYS)).all()
+    keys = [item.key for item in items]
+    for item in items:
+        db.delete(item)
     db.commit()
     return keys

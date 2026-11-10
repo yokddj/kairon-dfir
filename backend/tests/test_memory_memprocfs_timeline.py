@@ -415,3 +415,80 @@ def test_an_unreadable_repaired_log_falls_back_to_the_summary(tmp_path: Path, mo
     monkeypatch.setattr(evtx_parser, "iter_evtx_xml_record_results", broken)
     events = [document for _t, document in timeline_events(tmp_path, case_id="case-1", evidence_id="ev-1", scan_run_id="run-1")]
     assert [document["memprocfs"]["source"] for document in events] == ["timeline_csv"]
+
+
+class _FakeEventsIndex:
+    """search (host aggregation), helpers.scan and helpers.bulk over a list of event documents."""
+
+    def __init__(self, docs: list[dict]) -> None:
+        self.docs = {str(index): doc for index, doc in enumerate(docs)}
+
+    @staticmethod
+    def _matches(doc: dict, query: dict) -> bool:
+        clauses = query["bool"]
+        for clause in clauses.get("filter", []):
+            if "term" in clause:
+                (field, value), = clause["term"].items()
+                current = doc
+                for part in field.split("."):
+                    current = (current or {}).get(part) if isinstance(current, dict) else None
+                if current != value:
+                    return False
+            if "exists" in clause and not (doc.get("windows") or {}).get(clause["exists"]["field"].split(".")[1]):
+                return False
+        for clause in clauses.get("must_not", []):
+            (field, value), = clause["term"].items()
+            if (doc.get("artifact") or {}).get(field.split(".")[1]) == value:
+                return False
+        return True
+
+    def search(self, index, body):
+        hosts: dict[str, int] = {}
+        for doc in self.docs.values():
+            if self._matches(doc, body["query"]):
+                host = doc["host"]["identity_id"]
+                hosts[host] = hosts.get(host, 0) + 1
+        return {"aggregations": {"hosts": {"buckets": [{"key": key, "doc_count": count} for key, count in hosts.items()]}}}
+
+    def scan(self, client, index, query, size):
+        return [{"_index": "idx", "_id": key, "_source": doc} for key, doc in self.docs.items() if self._matches(doc, query["query"])]
+
+    def bulk(self, client, actions, chunk_size, raise_on_error):
+        for action in actions:
+            self.docs[action["_id"]].setdefault("memprocfs", {}).update(action["doc"]["memprocfs"])
+        return len(actions), []
+
+
+def _event_doc(host: str, channel: str, record: str, *, memory: bool) -> dict:
+    windows = {"channel": channel, ("record_id" if memory else "record_number"): record}
+    artifact = {"type": "memprocfs_eventlog", "parser": "memprocfs"} if memory else {"type": "windows_event", "parser": "evtx_raw"}
+    return {"host": {"identity_id": host}, "windows": windows, "artifact": artifact, **({"memprocfs": {}} if memory else {})}
+
+
+def test_memory_event_log_copies_of_disk_records_of_the_same_host_are_marked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from opensearchpy import helpers
+
+    from app.core import opensearch
+
+    fake = _FakeEventsIndex([
+        _event_doc("ws01", "Security", "10", memory=True),
+        _event_doc("ws01", "Microsoft-Windows-PowerShell/Operational", "11", memory=True),
+        _event_doc("ws01", "security", "10", memory=False),
+        # Same record number, other host: not the same record.
+        _event_doc("srv01", "Microsoft-Windows-PowerShell/Operational", "11", memory=False),
+    ])
+    monkeypatch.setattr(opensearch, "get_opensearch_client", lambda timeout_seconds=None: fake)
+    monkeypatch.setattr(opensearch, "index_exists", lambda client, index: True)
+    monkeypatch.setattr(opensearch, "refresh_index", lambda *a, **k: None)
+    monkeypatch.setattr(helpers, "scan", fake.scan)
+    monkeypatch.setattr(helpers, "bulk", fake.bulk)
+
+    report = memprocfs_timeline.mark_event_log_copies("case-1")
+    # Only the record whose flag changes is rewritten; no flag already reads as "not on disk".
+    assert report == {"memory_records": 2, "on_disk": 1, "updated": 1}
+    assert fake.docs["0"]["memprocfs"]["on_disk"] is True and not fake.docs["1"]["memprocfs"].get("on_disk")
+    # The disk copy goes away (that evidence deleted and the case re-checked): the flag is cleared.
+    del fake.docs["2"]
+    assert memprocfs_timeline.mark_event_log_copies("case-1")["updated"] == 1 and fake.docs["0"]["memprocfs"]["on_disk"] is False
+    # Run again with nothing new: nothing is rewritten.
+    assert memprocfs_timeline.mark_event_log_copies("case-1")["updated"] == 0

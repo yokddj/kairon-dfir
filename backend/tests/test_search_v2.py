@@ -995,3 +995,18 @@ def test_search_facets_with_host_id_scopes_query_and_does_not_crash(monkeypatch:
     scope_filters = first_body["query"]["bool"]["filter"]
     host_filter = next(item for item in scope_filters if "bool" in item and item["bool"].get("should"))
     assert {"term": {"host.evidence_host_id": "host-1"}} in host_filter["bool"]["should"]
+
+
+def _hides_memory_copies(filters: list[dict]) -> bool:
+    return any("memprocfs.on_disk" in str(item) and "must_not" in str(item) for item in filters)
+
+
+def test_timeline_hides_memory_event_log_records_a_disk_collection_also_holds() -> None:
+    assert _hides_memory_copies(search_service._build_event_filters("case-1", {"timeline_only": True}, _FakeDb()))
+    # Still hidden in a text search: the disk copy of the same record matches it.
+    assert _hides_memory_copies(search_service._build_event_filters("case-1", {"timeline_only": True, "q": "whoami"}, _FakeDb()))
+
+
+def test_memory_event_log_copies_show_when_the_memory_event_log_is_asked_for() -> None:
+    for selection in (["memprocfs_eventlog"], ["memprocfs"]):
+        assert not _hides_memory_copies(search_service._build_event_filters("case-1", {"timeline_only": True, "artifact_type": selection}, _FakeDb()))

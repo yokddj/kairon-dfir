@@ -7,7 +7,7 @@ from rq import Queue, Worker
 from rq.registry import FailedJobRegistry, FinishedJobRegistry, StartedJobRegistry
 from sqlalchemy.orm import Session
 
-from app.core.app_settings import DEPLOYMENT_DEFAULTS, PERFORMANCE_PROFILE_KEY, RUNTIME_DEFAULTS, SETTING_META, get_effective_settings, reset_settings, set_setting
+from app.core.app_settings import DEPLOYMENT_DEFAULTS, PERFORMANCE_PROFILE_KEY, RUNTIME_DEFAULTS, SETTING_META, TUNABLE_SETTING_KEYS, get_effective_settings, reset_settings, set_setting
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.opensearch import get_opensearch_client, get_opensearch_ingest_preflight
@@ -315,9 +315,25 @@ def system_settings(db: Session = Depends(get_db)) -> dict:
     }
 
 
+def require_settings_admin(request: Request, db: Session = Depends(get_db)) -> None:
+    """Changing or resetting instance settings is for administrators; a no-op when authentication
+    is disabled (tests, dev)."""
+    if not get_settings().auth_enabled:
+        return
+    from app.services.auth_dependencies import get_current_user
+
+    if not get_current_user(request, db).is_admin:
+        raise HTTPException(status_code=403, detail="Admin required")
+
+
 @router.patch("/api/system/settings")
-def patch_system_settings(payload: dict, db: Session = Depends(get_db)) -> dict:
+def patch_system_settings(payload: dict, db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
     changed = payload.get("settings", {})
+    if not isinstance(changed, dict):
+        raise HTTPException(status_code=400, detail="settings must be an object")
+    unknown = sorted(str(key) for key in changed if key not in TUNABLE_SETTING_KEYS)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Not a tunable setting: {', '.join(unknown)}")
     updated = []
     runtime_applied = []
     requires_restart = []
@@ -350,7 +366,7 @@ def patch_system_settings(payload: dict, db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/api/system/settings/reset")
-def reset_system_settings(db: Session = Depends(get_db)) -> dict:
+def reset_system_settings(db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
     reset = reset_settings(db)
     return {
         "updated": reset,

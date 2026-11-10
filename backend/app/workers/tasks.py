@@ -6652,6 +6652,13 @@ def ingest_evidence(evidence_id: str) -> None:
                 db.rollback()
                 logger.warning("Mass-encryption check failed for evidence %s: %s", evidence_id, exc)
                 detection_warnings.append("mass_encryption_check_failed")
+            # Memory copies of event log records this evidence also holds are hidden by default.
+            try:
+                from app.services.memory.memprocfs_timeline import mark_event_log_copies
+
+                mark_event_log_copies(evidence.case_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Marking memory event log copies failed for evidence %s: %s", evidence_id, exc)
         _debug_db_trace(
             "_finalization_session_reset",
             db=db,
