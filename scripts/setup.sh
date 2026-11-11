@@ -377,6 +377,7 @@ MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE=${MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE:-f
 # BACKEND_LOG_LEVEL=INFO
 ENVEOF
 
+  bash "$SCRIPT_DIR/sync-env-reference.sh" "$env_file"
   chmod 600 "$env_file"
 
   echo ""
@@ -705,6 +706,13 @@ migrate_memory_allowlists() {
     echo "Memory analysis: enabled the new memory analyses in .env."
   fi
   rm -f "$tmp"
+  # Here, not in do_upgrade: an upgrade runs the do_upgrade of the setup.sh from before the pull and
+  # takes only this function from the new one. Lists the settings a release added, commented.
+  local reference
+  reference="$(cd "$(dirname "$env_file")" && pwd)/scripts/sync-env-reference.sh"
+  if [[ -f "$reference" ]]; then
+    bash "$reference" "$env_file" && echo "Settings reference in .env: up to date."
+  fi
 }
 
 do_upgrade() {

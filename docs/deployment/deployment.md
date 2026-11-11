@@ -98,6 +98,13 @@ settings at the same time.
 
 ## Environment Variables Reference
 
+Every setting an operator may change is in `.env` itself, at the end, commented, with its default
+and a short explanation (the "Settings reference" block): uncomment a line to change it, then
+apply with `./scripts/upgrade.sh` (or `docker compose up -d`). `setup.sh` writes the block with a
+new `.env`; each upgrade appends the settings that release introduced, without touching any line
+already there. `scripts/sync-env-reference.sh` does the same by hand. The defaults themselves live
+in `config/defaults.env`; a value set in `.env` overrides them.
+
 ### Database / queue
 
 - `POSTGRES_DB`
@@ -150,7 +157,7 @@ settings at the same time.
 
 - `FRONTEND_API_BASE_URL`
 
-See `.env.example` for the full, authoritative list with defaults.
+The full, authoritative list with defaults is `config/defaults.env` (copied, commented, into `.env`).
 
 ## Volumes and Data
 
