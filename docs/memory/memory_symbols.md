@@ -7,6 +7,32 @@ Kairon runs memory analysis in `offline_only` mode by default. Normal analysis
 uses only reviewed local ISFs and never opens network access. The managed
 acquisition control plane is also disabled by default.
 
+## Download missing symbols from Microsoft (simple mode)
+
+When the server may reach the Internet, the plainest way to analyse any Windows image is to let the
+memory worker fetch the kernel symbols it lacks:
+
+```dotenv
+MEMORY_SYMBOL_DIRECT_DOWNLOAD_ENABLED=true
+```
+
+Restart the backend and the workers after changing `.env`. From then on, when an evidence's kernel
+PDB (identified by Volatility on the memory worker, without symbols) is not in the cache, the
+memory worker:
+
+1. downloads exactly that PDB from `https://msdl.microsoft.com/download/symbols/<pdb>/<GUID><age>/<pdb>`,
+   following redirects only to `*.blob.core.windows.net`, each hop re-validated (HTTPS, port 443,
+   public addresses only, size and time limits);
+2. checks that the file's own identity matches the name, GUID and age exactly;
+3. converts it to the ISF Volatility reads and promotes it into the symbol cache, where every
+   evidence with the same kernel reuses it.
+
+Only the PDB name, GUID and age leave the server, in the URL. This runs during memory preparation
+(on upload, **Retry preparation**, or after **Probe symbol requirements** identifies the kernel).
+Unlike the managed mode below, the restriction to Microsoft hosts is enforced by the application,
+not by the network: the memory worker itself opens the connection. Deployments that must enforce
+egress at the network level keep it off and use the managed mode or an offline import.
+
 ## Security gate
 
 Managed acquisition must not be enabled until BOTH controls exist:

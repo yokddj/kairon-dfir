@@ -251,6 +251,14 @@ def read_pdb_identity(path: Path) -> tuple[str, int]:
             raise SymbolFetchError("SYMBOL_PDB_INVALID", "Downloaded PDB identity stream is incomplete.")
         _, _, age = struct.unpack_from("<III", pdb_stream, 0)
         guid = uuid.UUID(bytes_le=pdb_stream[12:28]).hex.upper()
+        # The age the image's CodeView (RSDS) record names is the DBI stream's: the PDB stream's
+        # own age goes up each time the PDB is rewritten (a published kernel PDB with RSDS age 1
+        # carries 2 or 5 there). Fall back to it only when the PDB has no DBI stream.
+        if len(sizes) > 3 and sizes[3] not in (0, 0xFFFFFFFF) and sizes[3] >= 12:
+            dbi_header = _read_stream(handle, block_size, streams[3][:1], min(sizes[3], 12))
+            signature, _, dbi_age = struct.unpack_from("<iII", dbi_header, 0)
+            if signature == -1:
+                age = dbi_age
         return guid, age
 
 

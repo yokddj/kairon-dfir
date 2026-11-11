@@ -95,6 +95,33 @@ def test_validate_pdb_rejects_age_mismatch_when_guid_matches(tmp_path: Path) -> 
     assert exc.value.code == "SYMBOL_PDB_IDENTITY_MISMATCH"
 
 
+def _published_pdb(path: Path, *, guid: str, pdb_stream_age: int, dbi_age: int) -> None:
+    """A PDB as Microsoft publishes it: the PDB stream's age was bumped by rewrites, the DBI
+    stream keeps the age the kernel's CodeView record names."""
+    block_size = 512
+    content = bytearray(block_size * 6)
+    content[:32] = MSF7_SIGNATURE
+    directory = struct.pack("<I", 4) + struct.pack("<4I", 0, 28, 0, 12) + struct.pack("<II", 4, 5)
+    struct.pack_into("<6I", content, 32, block_size, 1, 6, len(directory), 0, 2)
+    struct.pack_into("<I", content, block_size * 2, 3)
+    content[block_size * 3:block_size * 3 + len(directory)] = directory
+    pdb_header = struct.pack("<III", 20000404, 0, pdb_stream_age) + uuid.UUID(hex=guid).bytes_le
+    content[block_size * 4:block_size * 4 + len(pdb_header)] = pdb_header
+    content[block_size * 5:block_size * 5 + 12] = struct.pack("<iII", -1, 19990903, dbi_age)
+    path.write_bytes(content)
+
+
+def test_the_dbi_age_is_the_one_the_kernel_record_names(tmp_path: Path) -> None:
+    # Real ntkrnlmp.pdb files from msdl: RSDS age 1, PDB stream age 5 (or 2), DBI age 1.
+    guid = "D801A9AFC0FB7761380800F708633DEA"
+    pdb = tmp_path / "ntkrnlmp.pdb"
+    _published_pdb(pdb, guid=guid, pdb_stream_age=5, dbi_age=1)
+    assert read_pdb_identity(pdb) == (guid, 1)
+    assert validate_pdb(pdb, SymbolIdentity("ntkrnlmp.pdb", guid, age=1, architecture="x64"))["age"] == 1
+    with pytest.raises(SymbolFetchError):
+        validate_pdb(pdb, SymbolIdentity("ntkrnlmp.pdb", guid, age=5, architecture="x64"))
+
+
 def test_validate_pdb_accepts_exact_match(tmp_path: Path) -> None:
     guid = "9DC3FC69B1CA4B34707EBC57FD1D6126"
     identity = SymbolIdentity("ntkrnlmp.pdb", guid, age=5, architecture="x64")

@@ -173,6 +173,11 @@ class Settings(BaseSettings):
     memory_symbol_network_access_enabled: bool = False
     memory_symbol_mode: str = "offline_only"
     memory_symbol_managed_download_enabled: bool = False
+    # Download the exact Windows kernel PDB from Microsoft's public symbol server, from the memory
+    # worker, when an evidence needs one the cache lacks. Only the PDB name, GUID and age leave the
+    # server. A plain alternative to the egress-gateway managed mode, for servers allowed to reach
+    # msdl.microsoft.com (and its *.blob.core.windows.net redirects).
+    memory_symbol_direct_download_enabled: bool = False
     memory_symbol_allowed_hosts: str = ""
     memory_symbol_download_timeout_seconds: int = 180
     memory_symbol_connect_timeout_seconds: int = 15

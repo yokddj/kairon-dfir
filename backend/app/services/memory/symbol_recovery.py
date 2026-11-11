@@ -71,6 +71,7 @@ from app.services.memory.symbol_fetcher import (
     PDB_NAME,
     SymbolFetchError,
     SymbolIdentity,
+    download_official_pdb,
     generate_isf,
     read_pdb_identity,
     validate_pdb,
@@ -1115,6 +1116,31 @@ def import_pdb_for_requirement(
             sanitized_message=f"Could not stage upload: {exc!s}",
             identity_expected=identity_expected,
         )
+    return _promote_staged_pdb(
+        db,
+        requirement=requirement,
+        staged_pdb=staged_pdb,
+        source_type="manual_pdb_import",
+        source_name="Administrator-imported PDB",
+        actor=actor,
+    )
+
+
+def _promote_staged_pdb(
+    db: Session,
+    *,
+    requirement: MemorySymbolRequirement,
+    staged_pdb: Path,
+    source_type: str,
+    source_name: str,
+    actor: str,
+) -> RecoveryResult:
+    """Validate a PDB staged in the cache for an exact identity match, generate its ISF and
+    promote both, linking every matching requirement. Shared by the administrator import and the
+    direct Microsoft download."""
+    settings = get_settings()
+    identity_expected = expected_identity_dict(requirement)
+    cache_root = settings.memory_symbol_cache_path
     # Read the observed identity BEFORE validation so the canonical
     # fields are available even when ``validate_pdb`` raises.  This
     # is the value that the UI's "Observed age: N" rendering and the
@@ -1183,8 +1209,8 @@ def import_pdb_for_requirement(
             pdb_path=staged_pdb,
             isf_path=staging_isf,
             cache_root=cache_root,
-            provenance_source_type="manual_pdb_import",
-            provenance_source_name="Administrator-imported PDB",
+            provenance_source_type=source_type,
+            provenance_source_name=source_name,
             provenance_actor=actor,
         )
     except SymbolFetchError as exc:
@@ -1203,7 +1229,7 @@ def import_pdb_for_requirement(
         db,
         cached=cached,
         actor=actor,
-        source_type="manual_pdb_import",
+        source_type=source_type,
     )
     db.commit()
     return RecoveryResult(
@@ -2347,3 +2373,67 @@ def cli_import_isf_for_requirement(
     out["import_job_id"] = import_job_id
     out["operator"] = operator
     return out
+
+
+def download_microsoft_symbol(
+    db: Session,
+    *,
+    requirement_id: str,
+    actor: str = "memory-worker",
+) -> RecoveryResult:
+    """Download the exact kernel PDB from Microsoft's public symbol server and promote it.
+
+    Enabled by ``MEMORY_SYMBOL_DIRECT_DOWNLOAD_ENABLED``. Only the PDB name, GUID and age leave the
+    server (they are the URL path); the destination is fixed to the configured Microsoft host and
+    its storage redirects, each hop re-validated (``download_official_pdb``). The file then goes
+    through the same exact-identity validation, ISF generation and atomic promotion as an
+    administrator-imported PDB.
+    """
+    settings = get_settings()
+    if not settings.memory_symbol_direct_download_enabled:
+        return RecoveryResult(
+            status=RECOVERY_TERMINAL_CONFIG_REQUIRED,
+            requirement_id=str(requirement_id),
+            error_code="SYMBOL_DIRECT_DOWNLOAD_DISABLED",
+            sanitized_message="Downloading symbols from Microsoft is disabled (MEMORY_SYMBOL_DIRECT_DOWNLOAD_ENABLED=false).",
+        )
+    requirement = db.get(MemorySymbolRequirement, str(requirement_id))
+    if requirement is None:
+        return RecoveryResult(
+            status=RECOVERY_TERMINAL_IMPORT_REJECTED,
+            requirement_id=str(requirement_id),
+            error_code="SYMBOL_REQUIREMENT_UNKNOWN",
+            sanitized_message="Requirement not found.",
+        )
+    identity_expected = expected_identity_dict(requirement)
+    try:
+        identity = make_identity(requirement)
+        identity.validate()
+    except SymbolFetchError as exc:
+        return RecoveryResult(status=RECOVERY_TERMINAL_VALIDATION_FAILED, requirement_id=requirement.id, error_code=exc.code, sanitized_message=exc.message, identity_expected=identity_expected)
+    staged_pdb = settings.memory_symbol_cache_path / "tmp" / f"{uuid4().hex}.pdb"
+    lock = _lock_for(requirement.id)
+    with lock:
+        try:
+            download_official_pdb(
+                identity,
+                staged_pdb,
+                initial_host=settings.memory_symbol_initial_host,
+                redirect_suffixes=settings.memory_symbol_redirect_host_suffixes,
+                connect_timeout=int(settings.memory_symbol_connect_timeout_seconds),
+                total_timeout=int(settings.memory_symbol_download_timeout_seconds),
+                max_redirects=int(settings.memory_symbol_max_redirects),
+                max_bytes=int(settings.memory_symbol_download_max_bytes),
+            )
+        except SymbolFetchError as exc:
+            staged_pdb.unlink(missing_ok=True)
+            logger.warning("Microsoft symbol download failed", extra={"requirement_id": requirement.id, "code": exc.code})
+            return RecoveryResult(status=RECOVERY_TERMINAL_EXACT_NOT_FOUND, requirement_id=requirement.id, error_code=exc.code, sanitized_message=exc.message, identity_expected=identity_expected)
+        return _promote_staged_pdb(
+            db,
+            requirement=requirement,
+            staged_pdb=staged_pdb,
+            source_type="microsoft_public",
+            source_name="Microsoft public symbol server",
+            actor=actor,
+        )

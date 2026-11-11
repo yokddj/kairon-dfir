@@ -590,6 +590,27 @@ def _run_bounded_requirement_discovery(
     }
 
 
+def _download_missing_symbol(db: Session, requirement_id: str) -> str | None:
+    """The cached symbol id once downloaded from Microsoft, or None (disabled or failed: the
+    evidence stays blocked on symbols, with the reason logged)."""
+    from app.core.config import get_settings
+
+    if not get_settings().memory_symbol_direct_download_enabled:
+        return None
+    from app.services.memory.symbol_recovery import RECOVERY_TERMINAL_READY, download_microsoft_symbol
+
+    try:
+        result = download_microsoft_symbol(db, requirement_id=requirement_id)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception("Microsoft symbol download raised")
+        return None
+    if result.status != RECOVERY_TERMINAL_READY:
+        logger.warning("Microsoft symbol download did not complete: %s %s", result.error_code, result.sanitized_message)
+        return None
+    return str(result.cached_symbol_id)
+
+
 def _discovery_work_dir(evidence) -> Path:
     """Return a writable work dir for bounded discovery output.
 
@@ -798,6 +819,14 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
         # full automagic.  This is the primary analyst-facing
         # compatibility path.  The native probe runs inline
         # (the memory-worker has Volatility3 installed).
+        if readiness.state.value == ReadinessState.BLOCKED_SYMBOLS.value and readiness.requirement_id:
+            # Exact symbols missing: fetch them from Microsoft when the operator allowed it.
+            downloaded = _download_missing_symbol(db, str(readiness.requirement_id))
+            if downloaded is not None:
+                readiness.state = ReadinessState.READY
+                readiness.reason = "windows_symbol_downloaded"
+                readiness.error_code = None
+                readiness.metadata = {**dict(readiness.metadata or {}), "symbol_download": {"source": "microsoft_public", "cached_symbol_id": downloaded}}
         if readiness.state.value == ReadinessState.BLOCKED_SYMBOLS.value:
             native_result = _run_native_volatility_probe(
                 evidence=evidence,
