@@ -55,7 +55,7 @@ from app.ingest.browser.sqlite_chromium import parse_chromium_history_sqlite
 from app.ingest.browser.sqlite_firefox import parse_firefox_places_sqlite
 from app.ingest.archive import ArchiveExtractionError, copy_folder, extract_archive, inventory_folder, write_tree_metadata
 from app.ingest.csv_json import list_generic_artifacts
-from app.ingest.bundled_evidence import bundled_evidence, bundled_kind
+from app.ingest.bundled_evidence import MAX_DEEP_SCANS_PER_COLLECTION, bundled_evidence, bundled_kind, wants_kernel_scan
 from app.ingest.detector import EVIDENCE_TYPES_WITHOUT_INGEST_SUPPORT, detect_evidence_type
 from app.ingest.host_detection import detect_host_from_artifacts, detect_host_from_velociraptor_collection, normalize_hostname
 from app.ingest.host_facts_extraction import extract_host_fact_documents
@@ -448,6 +448,21 @@ def run_s3_import(upload_session_id: str) -> dict:
     from app.services.s3_source import run_import
 
     return run_import(upload_session_id)
+
+
+def enqueue_bundled_memory_registration(upload_session_id: str) -> str:
+    job = ingest_queue.enqueue(
+        "app.workers.tasks.run_bundled_memory_registration",
+        upload_session_id,
+        job_timeout=max(int(settings.ingest_job_timeout_seconds or 0), 3600),
+    )
+    return job.id
+
+
+def run_bundled_memory_registration(upload_session_id: str) -> dict:
+    from app.services.bundled_memory import run_registration
+
+    return run_registration(upload_session_id)
 
 
 def enqueue_azure_blob_import(upload_session_id: str) -> str:
@@ -3637,6 +3652,7 @@ def _classify_and_dispatch_extracted(
     result_extracted: list[str] = []
     result_entries: list[dict] = []
     merged_disk_mat = None
+    deep_scans_left = [MAX_DEEP_SCANS_PER_COLLECTION]
 
     for entry in archive_entries:
         if entry.get("ignored") or entry.get("status") != "extracted":
@@ -3652,6 +3668,12 @@ def _classify_and_dispatch_extracted(
             continue
 
         result = classifier.classify(file_path)
+        if result.category == EvidenceCategory.UNKNOWN and deep_scans_left[0] > 0 and wants_kernel_scan(file_path):
+            # A large file nothing identified: a headerless memory capture shows only its running
+            # kernel's name string (Windows on UEFI leaves no firmware tables in the image), which
+            # the header read cannot see. Bounded per file and per collection.
+            deep_scans_left[0] -= 1
+            result = classifier.classify(file_path, deep=True)
         kind = bundled_kind(result.category.value, file_path)
         if kind:
             # Evidence of its own kind: not ingested with the collection, listed on the evidence.

@@ -275,7 +275,7 @@ def _resumable_entry(session: EvidenceUploadSession, db: Session) -> ResumableUp
     progress_percent = round((session.bytes_received / expected) * 100, 2) if expected else None
     resumable = session.status in {"created", "uploading", "interrupted"} or (session.status == "failed" and unified)
     # An S3 or Azure Blob import is downloaded by the server: there is no local file to resume it from.
-    resumable = resumable and metadata.get("upload_mode") not in {"s3", "azure_blob"}
+    resumable = resumable and metadata.get("upload_mode") not in {"s3", "azure_blob", "bundled_member"}
     cancellable = session.status not in {"cancelled", "expired", "promoted", "failed"}
 
     unified_details: UnifiedResumeDetails | None = None

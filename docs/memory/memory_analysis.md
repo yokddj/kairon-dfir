@@ -70,7 +70,11 @@ The evidence wizard recognizes memory from the file's content, not its name, so 
 - **Headerless** (a plain physical-memory acquisition: WinPmem/DumpIt/FTK raw, `dd` of a VM's memory): the x86 firmware tables (ACPI root pointer, SMBIOS entry points) at their physical-memory address in the legacy BIOS area identify it at once when present, with their checksums; otherwise the wizard looks through the image for the running kernel's own name string (the Windows kernel PDB record, the Linux or macOS version banner), which also tells the operating system. That search takes up to 30 seconds, more for a large image (up to 2 minutes), and stops shortly after the kernel is found.
 - A file whose only clue is a disk-image extension (`.dd`, `.img`, `.raw`) and that shows no disk structure (partition table, file system) is never taken for a disk image: it is reported as not identified, and the analyst chooses **Memory** or **Disk image**.
 
-Images of any size are probed (there was a 16 GiB cap until 2026-11-11). Inside a collection (an archive with several files), files are recognized from their header and firmware tables only, without the kernel search.
+Images of any size are probed (there was a 16 GiB cap until 2026-11-11).
+
+### A memory image inside a collection
+
+A memory capture uploaded as part of a collection (a ZIP or a folder, at any depth) is recognized the same way: by its header and firmware tables, and — for a large file nothing else identified — by the kernel search (at most 8 such files per collection; Windows paging files `pagefile.sys`/`swapfile.sys` are never taken for memory images). It is not analysed with the collection: the evidence lists it under **Not processed with this upload**. Choose **Analyse as memory evidence** next to it, confirm the host it was captured on (the collection's by default), and Kairon registers it as its own memory evidence from the file already extracted on the server — no second upload, and no copy when the file system allows a hard link. It goes through the same inspection as an upload (SHA-256, content classification, kernel scan) and the new evidence records which collection and path it came from.
 
 ## Backend readiness checks
 

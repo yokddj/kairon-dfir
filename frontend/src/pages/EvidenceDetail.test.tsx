@@ -612,7 +612,8 @@ describe("EvidenceDetail minimal processing UX", () => {
     const banner = await screen.findByTestId("evidence-bundled-unprocessed");
     expect(banner).toHaveTextContent("HOST-memory.dmp");
     expect(banner).toHaveTextContent("Packet capture");
-    expect(banner).toHaveTextContent("packet captures cannot be analysed yet");
+    expect(banner).toHaveTextContent("Packet captures cannot be analysed yet");
+    expect(banner).toHaveTextContent("without uploading it again");
   });
 
   it("shows no unprocessed-members notice for a plain collection", async () => {
