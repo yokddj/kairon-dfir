@@ -2656,6 +2656,8 @@ def test_historical_crash_dump_command_matches_working_direct_execution(tmp_path
     ("stderr", "expected"),
     [
         (b"Unable to validate the plugin requirements: ['plugins.Info.kernel.symbol_table_name']", "SYMBOLS_UNAVAILABLE"),
+        # A 34 GB raw capture: PageMapScanner found no page tables, so no layer and no symbol lookup.
+        (b"Progress:  100.00\t\tPDB scanning finished\nUnable to validate the plugin requirements: ['plugins.Info.kernel.layer_name', 'plugins.Info.kernel.symbol_table_name']", "INVALID_MEMORY_LAYER"),
         (b"Unable to validate plugin requirement", "PLUGIN_REQUIREMENTS_UNSATISFIED"),
         (b"No suitable translation layer was found", "UNSUPPORTED_MEMORY_IMAGE"),
         (b"Unable to validate layer requirement", "INVALID_MEMORY_LAYER"),
@@ -3273,7 +3275,8 @@ def test_missing_symbols_fall_back_to_memprocfs(db_session, tmp_path: Path, monk
     assert any(doc.get("process", {}).get("pid") == 7432 or doc.get("pid") == 7432 for doc in indexed)
 
 
-def test_find_evil_without_symbols_still_runs_memprocfs(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("code", ["SYMBOLS_UNAVAILABLE", "INVALID_MEMORY_LAYER"])
+def test_find_evil_without_symbols_still_runs_memprocfs(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code) -> None:
     """windows.info failing on missing symbols skips only the Volatility plugins: MemProcFS's
     FindEvil needs no symbols and runs."""
     plugins = ["windows.info", "kairon.findevil", "memprocfs.findevil"]
@@ -3306,7 +3309,7 @@ def test_find_evil_without_symbols_still_runs_memprocfs(db_session, tmp_path: Pa
     monkeypatch.setattr(memory_execution, "_index_artifact_results", lambda *_args: {})
 
     def no_symbols(plugin, *_args, **_kwargs):
-        raise volatility_runner.VolatilityRunnerError("SYMBOLS_UNAVAILABLE", f"{plugin} could not resolve required symbols.", stderr=b"symbols", return_code=1, stdout_length=0, stderr_length=7)
+        raise volatility_runner.VolatilityRunnerError(code, f"{plugin} cannot read the image.", stderr=b"symbols", return_code=1, stdout_length=0, stderr_length=7)
 
     ran: list[str] = []
     monkeypatch.setattr(memory_execution, "run_plugin", no_symbols)
