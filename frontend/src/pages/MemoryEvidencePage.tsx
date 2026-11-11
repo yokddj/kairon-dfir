@@ -6,6 +6,7 @@ import { useActiveCase } from "../context/ActiveCaseContext";
 import { MemoryWorkspace } from "../components/MemoryWorkspace";
 import { useHostContext } from "../hooks/useHostContext";
 import { MemoryEvidenceHeader } from "../components/memory/MemoryEvidenceHeader";
+import { VolatilityCopyPanel } from "../components/memory/VolatilityCopyPanel";
 import { MemoryEvidenceSelector } from "../components/memory/MemoryEvidenceSelector";
 import { MemoryAnalysisCatalogueModal } from "../components/memory/MemoryAnalysisCatalogueModal";
 import { MemoryHistoryPanel } from "../components/memory/MemoryHistoryPanel";
@@ -590,6 +591,8 @@ export default function MemoryEvidencePage() {
           {confirmationToast}
         </div>
       ) : null}
+
+      {evidence ? <VolatilityCopyPanel caseId={caseId} evidenceId={evidenceId} /> : null}
 
       {evidence && (symbolReadiness || symbolPreparation || linuxSymbolsRequired) ? (
         <details

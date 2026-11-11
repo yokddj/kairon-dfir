@@ -1800,6 +1800,17 @@ export type MemoryRunWhenReadyResponse = {
   status: string;
 };
 
+export type VolatilityViewStatus = {
+  evidence_id: string;
+  needed: boolean;
+  enabled: boolean;
+  status: "none" | "queued" | "running" | "created" | "failed" | "skipped_disk_space" | "removing";
+  estimated_bytes: number;
+  bytes: number | null;
+  message: string | null;
+  updated_at: string | null;
+};
+
 export type MemorySymbolProbeResult = {
   evidence_id: string;
   status: string;
@@ -6702,6 +6713,12 @@ export const api = {
     request<{ cancelled: number }>(`/cases/${caseId}/memory/evidences/${evidenceId}/run-when-ready/cancel`, {
       method: "POST",
     }),
+  getVolatilityView: (caseId: string, evidenceId: string) =>
+    request<VolatilityViewStatus>(`/cases/${caseId}/memory/evidences/${evidenceId}/volatility-view`),
+  createVolatilityView: (caseId: string, evidenceId: string) =>
+    request<VolatilityViewStatus>(`/cases/${caseId}/memory/evidences/${evidenceId}/volatility-view`, { method: "POST" }),
+  removeVolatilityView: (caseId: string, evidenceId: string) =>
+    request<VolatilityViewStatus>(`/cases/${caseId}/memory/evidences/${evidenceId}/volatility-view`, { method: "DELETE" }),
   probeMemorySymbolRequirement: (caseId: string, evidenceId: string) =>
     request<MemorySymbolProbeResult>(`/cases/${caseId}/memory/evidences/${evidenceId}/symbol-probe`, {
       method: "POST",

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,12 +57,13 @@ from app.services.memory.normalizers import merge_memory_process_results, normal
 from app.services.memory.pids import normalize_pid
 from app.services.memory.process_entities import renormalize_documents
 from app.services.memory.storage import memory_run_dir, relative_to_data_dir, volatility_view_path, write_atomic_bytes, write_atomic_json
+from app.services.memory.volatility_view import mark_volatility_layer_missing
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
 from app.services.memory.volatility_runner import VolatilityRunnerError, probe_windows_symbol_identity, run_plugin
 from app.services.memory.kairon_findevil import KAIRON_FINDEVIL_PLUGIN, run_kairon_findevil
 from app.services.memory.kairon_psreadline import KAIRON_PSREADLINE_PLUGIN, run_kairon_psreadline
 from app.services.memory.kairon_linux_findevil import KAIRON_LINUX_FINDEVIL_PLUGIN, run_kairon_linux_findevil
-from app.services.memory.memprocfs_runner import CONSOLE_PLUGIN as MEMPROCFS_CONSOLE_PLUGIN, INVENTORY_PLUGINS as MEMPROCFS_INVENTORY_PLUGINS, MEMPROCFS_PLUGINS, NETWORK_PLUGIN as MEMPROCFS_NETWORK_PLUGIN, PROCESSES_PLUGIN as MEMPROCFS_PROCESSES_PLUGIN, TIMELINE_DIRNAME as MEMPROCFS_TIMELINE_DIRNAME, memprocfs_available, run_console as run_memprocfs_console, run_crashdump as run_memprocfs_crashdump, run_findevil, run_inventory as run_memprocfs_inventory
+from app.services.memory.memprocfs_runner import CONSOLE_PLUGIN as MEMPROCFS_CONSOLE_PLUGIN, INVENTORY_PLUGINS as MEMPROCFS_INVENTORY_PLUGINS, MEMPROCFS_PLUGINS, NETWORK_PLUGIN as MEMPROCFS_NETWORK_PLUGIN, PROCESSES_PLUGIN as MEMPROCFS_PROCESSES_PLUGIN, TIMELINE_DIRNAME as MEMPROCFS_TIMELINE_DIRNAME, memprocfs_available, run_console as run_memprocfs_console, run_findevil, run_inventory as run_memprocfs_inventory
 from app.services.memory.memprocfs_timeline import index_memprocfs_timeline
 from app.services.memory import volatility_runner
 from app.services.memory.symbol_control import record_symbol_requirement
@@ -615,9 +615,8 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             existing_view = volatility_view_path(run.case_id, run.evidence_id)
             if existing_view.is_file():
                 volatility_path = existing_view
-                run.metadata_json = {**(run.metadata_json or {}), "volatility_view": {"status": "reused", "path": relative_to_data_dir(existing_view)}}
+                run.metadata_json = {**(run.metadata_json or {}), "volatility_view": {"status": "used", "path": relative_to_data_dir(existing_view)}}
                 db.commit()
-            view_attempted = volatility_path != validated.path
             symbol_blocked_code = "SYMBOLS_UNAVAILABLE"
             for plugin_index, plugin in enumerate(plugins, start=1):
                 plugin_run = _plugin_run_for(db, run, plugin)
@@ -790,14 +789,11 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                         requirement = probe_windows_symbol_identity(volatility_path, output_dir)
                         if requirement:
                             record_symbol_requirement(db, run, plugin_run.id, requirement)
-                    if plugin == "windows.info" and exc.code == "INVALID_MEMORY_LAYER" and not view_attempted:
-                        view_attempted = True
-                        view = _build_volatility_view(db, run, validated, output_dir)
-                        if view is not None:
-                            # windows.info again, on the copy; the rest of the profile follows on it.
-                            volatility_path = view
-                            plugins.insert(plugin_index, "windows.info")
-                            continue
+                    if exc.code == "INVALID_MEMORY_LAYER" and volatility_path == validated.path and plugin not in SYMBOL_FREE_PLUGINS:
+                        # Volatility cannot read this image. The evidence page offers the analyst a
+                        # crash-dump copy made by MemProcFS (app.services.memory.volatility_view);
+                        # nothing that size is written without being asked.
+                        mark_volatility_layer_missing(db, validated.evidence, run_id=run.id, plugin=plugin)
                     if exc.code in VOLATILITY_BLOCKED_CODES and run.profile in SYMBOL_FALLBACK_PLUGINS and memprocfs_available():
                         # The rest of the profile needs the same symbols: MemProcFS stands in.
                         symbol_fallback = SYMBOL_FALLBACK_PLUGINS[run.profile]
@@ -1686,60 +1682,6 @@ def _fail_run(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun | Non
         _recount_plugin_states(run)
     db.commit()
     logger.warning("memory scan failed", extra={"run_id": run.id, "status": run.status, "error_code": code})
-
-
-def _build_volatility_view(db: Session, run: MemoryScanRun, validated, output_dir) -> Path | None:
-    """Write MemProcFS's crash-dump view of an image Volatility found no memory layer in, once per
-    evidence, when enabled and the disk has room; the path, or None (the reason is on the run)."""
-    settings = backend_readiness.get_settings()
-    if not settings.memory_volatility_crashdump_view_enabled or not memprocfs_available():
-        return None
-    target = volatility_view_path(run.case_id, run.evidence_id)
-
-    def record(**fields: Any) -> None:
-        run.metadata_json = {**(run.metadata_json or {}), "volatility_view": fields}
-        db.commit()
-
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
-        size = Path(validated.path).stat().st_size
-        free = shutil.disk_usage(target.parent).free
-    except OSError as exc:
-        record(status="failed", code="MEMORY_OUTPUT_WRITE_FAILED", message=_sanitize_message(str(exc)))
-        return None
-    needed = int(size * 1.2) + int(settings.memory_upload_min_free_space_bytes or 0)
-    if free < needed:
-        record(status="skipped_disk_space", needed_bytes=needed, free_bytes=free,
-               message=f"Volatility cannot read this image directly and the crash-dump copy needs about {needed // 2**30} GiB free; {free // 2**30} GiB are.")
-        return None
-    run.metadata_json = {
-        **(run.metadata_json or {}),
-        "progress": {**((run.metadata_json or {}).get("progress") or {}), "current_plugin": "memprocfs.crashdump", "plugin_started_at": utc_iso(), "last_heartbeat": utc_iso()},
-    }
-    db.commit()
-
-    def cancellation_requested() -> bool:
-        db.refresh(run)
-        return bool(run.cancellation_requested)
-
-    try:
-        written = run_memprocfs_crashdump(
-            validated.path, target, output_dir,
-            timeout_seconds=int(settings.memory_volatility_crashdump_timeout_seconds),
-            cancellation_check=cancellation_requested,
-        )
-    except VolatilityRunnerError as exc:
-        target.unlink(missing_ok=True)
-        record(status="failed", code=exc.code, message=_sanitize_message(exc.message))
-        logger.warning("crash-dump copy for Volatility failed", extra={"run_id": run.id, "code": exc.code})
-        return None
-    view = {"status": "created", "path": relative_to_data_dir(target), "bytes": written, "source": "MemProcFS \\memory.dmp", "created_at": utc_iso()}
-    record(**view)
-    evidence = validated.evidence
-    evidence.metadata_json = {**(evidence.metadata_json or {}), "volatility_view": view}
-    db.add(evidence)
-    db.commit()
-    return target
 
 
 def _run_symbol_fallback(

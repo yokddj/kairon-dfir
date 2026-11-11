@@ -148,16 +148,21 @@ import them.
 
 Some raw captures defeat Volatility before symbols even matter: its page-map scan finds no page
 tables (DTB), so it builds no memory layer (`INVALID_MEMORY_LAYER`, "Volatility could not find
-this image's page tables"). MemProcFS finds them its own way and presents the memory it
-reconstructed as a Windows full crash dump, whose header carries the DTB. When `windows.info` fails
-that way, Kairon has MemProcFS write that crash dump once for the evidence
-(`memory/volatility-view/memory.dmp` in the memory worker's output directory), retries on it, and
-from then on every Volatility plugin, the symbol probe and the preparation read the copy; MemProcFS's
-own plugins keep reading the original image. The copy is about the size of the image (a 4 GB test
-image gave 6 GB, written in 13 s) and is made only when that much free space remains on top of
-`MEMORY_UPLOAD_MIN_FREE_SPACE_BYTES`; otherwise the run says how much is needed. Deleting the
-evidence or its case removes it. `MEMORY_VOLATILITY_CRASHDUMP_VIEW_ENABLED=false` turns it off.
-The kernel's symbols are still needed afterwards, as for any image (see above).
+this image's page tables"). MemProcFS finds them its own way: processes, network, Find Evil and the
+console text come from it regardless (see above). For the Volatility analyses as well, MemProcFS
+can present the memory it reconstructed as a Windows full crash dump, whose header carries the DTB,
+and Volatility reads that file.
+
+The copy is about the size of the image (a 4 GB test image gave 6 GB, written in 13 s), so it is
+never written on its own. A run that hits the error marks the evidence, and the memory evidence
+page then shows **Volatility cannot read this image** with **Create the copy for Volatility (about
+N GiB)**. On request the memory worker writes it (`memory/volatility-view/memory.dmp` in its output
+directory) when the disk keeps `MEMORY_UPLOAD_MIN_FREE_SPACE_BYTES` free after it, or says how much
+space is missing. From then on every Volatility analysis, the symbol probe and the preparation read
+the copy; MemProcFS's own analyses keep reading the original image. **Remove the copy** frees the
+space again; deleting the evidence or its case removes it too.
+`MEMORY_VOLATILITY_CRASHDUMP_VIEW_ENABLED=false` turns the offer off. The kernel's symbols are still
+needed afterwards, as for any image (see above).
 
 ### Find Evil
 

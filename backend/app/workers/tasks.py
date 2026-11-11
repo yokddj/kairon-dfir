@@ -990,6 +990,17 @@ def run_memory_output_cleanup(case_id: str, evidence_id: str | None = None) -> d
     return {"removed": removed}
 
 
+def enqueue_volatility_view(evidence_id: str, action: str) -> str:
+    timeout = max(600, int(settings.memory_volatility_crashdump_timeout_seconds) + 300)
+    return memory_queue.enqueue("app.workers.tasks.run_volatility_view", evidence_id, action, job_timeout=timeout).id
+
+
+def run_volatility_view(evidence_id: str, action: str) -> dict:
+    from app.services.memory.volatility_view import run_volatility_view as run
+
+    return run(evidence_id, action)
+
+
 def enqueue_memory_preparation(evidence_id: str) -> str:
     """Enqueue the OS-agnostic memory preparation task.
 
