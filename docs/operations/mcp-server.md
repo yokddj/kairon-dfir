@@ -37,9 +37,18 @@ without restarting it) and runs each call by calling the backend back.
 ### 1. Create a service token
 
 The server reads Kairon with a **service token** (`kairon_svc_...`): a
-long-lived, read-only credential for a non-interactive client. An
-administrator creates it through the API. With `curl`, against the address
-you open Kairon on (here `http://localhost:5173`):
+long-lived, read-only credential for a non-interactive client.
+
+As an administrator, open **Service Tokens** in the sidebar, give the token a
+name (one per integration, e.g. `mcp-server`), pick an expiry and choose
+**Create**. The token is shown **once**: copy it now (a password manager, the
+server's `.env`). Only its hash is kept, so it cannot be shown again; if you
+lose it, create another. The same page lists every token with when it was
+last used, and **Revoke** stops one immediately — do it as soon as a token may
+have leaked.
+
+**From a script.** The same through the API with `curl`, against the address you open Kairon on
+(here `http://localhost:5173`):
 
 ```bash
 # Sign in as an administrator; the session cookie goes to a temporary file.
@@ -47,26 +56,16 @@ curl -s -c kairon.cookies -H 'Content-Type: application/json' \
   -d '{"username": "admin", "password": "<your password>"}' \
   http://localhost:5173/api/auth/login
 
-# Create the token. expires_in_days is optional (omit it for no expiry).
+# Create the token (the response's "token" field). expires_in_days is optional.
 curl -s -b kairon.cookies -H 'Content-Type: application/json' \
   -d '{"name": "mcp-server", "expires_in_days": 90}' \
   http://localhost:5173/api/admin/service-tokens
 
-rm kairon.cookies
-```
-
-The response's `token` field holds the token **once**: store it now (a
-password manager, the server's `.env`). Only its hash is kept, so it cannot
-be shown again; if you lose it, create another. The response's `id` is what
-you revoke it by. To list or revoke tokens, sign in again as above and:
-
-```bash
 curl -s -b kairon.cookies http://localhost:5173/api/admin/service-tokens                       # list (no secrets)
 curl -s -b kairon.cookies -X DELETE http://localhost:5173/api/admin/service-tokens/<token id>  # revoke
-```
 
-Revoke a token immediately if it is ever exposed, and prefer an expiry for
-one tied to an engagement.
+rm kairon.cookies
+```
 
 ### 2. Choose how the server runs
 
@@ -244,7 +243,7 @@ then list the proxy's host name in `KAIRON_MCP_ALLOWED_HOSTS`).
 | --- | --- | --- |
 | Server start | `KAIRON_API_URL is not set` / `KAIRON_SERVICE_TOKEN is not set` | Set both (step 2). |
 | Server start | `The HTTP transport needs a token clients must present` | Set `KAIRON_MCP_HTTP_TOKEN` (at least 32 characters; `--generate-token` makes one). |
-| Server start | `Could not load the tool catalog from Kairon at ...: ... 401` | The service token is wrong, revoked or expired: create a new one (step 1). |
+| Server start | `Could not load the tool catalog from Kairon at ...: ... 401` | The service token is wrong, revoked or expired (check its status under **Service Tokens**): create a new one (step 1). |
 | Server start | `Could not load the tool catalog ...: Could not reach Kairon` | `KAIRON_API_URL` is not reachable from where the server runs (inside Compose it is `http://backend:8000`, set for you). |
 | Client | `401` from the server | The client sends no client token, or the wrong one: check the `Authorization: Bearer` header. |
 | Client | `421 Misdirected Request` | The URL's host name is not listed in `KAIRON_MCP_ALLOWED_HOSTS` (see [Remote clients](#remote-clients)). |
@@ -280,6 +279,7 @@ then list the proxy's host name in `KAIRON_MCP_ALLOWED_HOSTS`).
 | --- | --- |
 | `backend/app/api/routes_ai.py` | `GET /api/ai/tools`, `GET /api/cases/{case_id}/ai/tools/{tool_name}` — the HTTP surface this server calls. |
 | `backend/app/api/routes_admin.py` | `/api/admin/service-tokens`: create, list, revoke. |
+| `frontend/src/pages/ServiceTokensPage.tsx` | The **Service Tokens** admin page. |
 | `backend/app/services/service_tokens.py` | Service token creation, authentication, revocation. |
 | `backend/app/services/auth_dependencies.py` | `ServiceTokenPrincipal`, the read-only-every-case principal. |
 | `backend/mcp_server/mcp_server/kairon_client.py` | The HTTP client this server uses to call Kairon's API. |

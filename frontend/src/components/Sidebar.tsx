@@ -266,6 +266,19 @@ export default function Sidebar() {
         )}
         {user?.is_admin && (
           <NavLink
+            to="/admin/service-tokens"
+            className={({ isActive }) =>
+              `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${
+                isActive ? "bg-accent/10 text-accent shadow-panel" : "text-muted hover:bg-white/5 hover:text-ink"
+              }`
+            }
+          >
+            <KeyRound size={16} />
+            Service Tokens
+          </NavLink>
+        )}
+        {user?.is_admin && (
+          <NavLink
             to="/settings/ai"
             className={({ isActive }) =>
               `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${

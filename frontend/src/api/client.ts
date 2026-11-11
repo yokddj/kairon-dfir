@@ -6350,6 +6350,10 @@ export const api = {
   },
   startS3Import: (caseId: string, payload: { bucket?: string; key: string; declared_platform?: string }) =>
     request<{ session: EvidenceUploadSessionRead }>(`/cases/${caseId}/s3/import`, { method: "POST", body: JSON.stringify(payload) }),
+  listServiceTokens: () => request<ServiceToken[]>("/admin/service-tokens"),
+  createServiceToken: (payload: { name: string; expires_in_days?: number | null }) =>
+    request<CreatedServiceToken>("/admin/service-tokens", { method: "POST", body: JSON.stringify(payload) }),
+  revokeServiceToken: (tokenId: string) => request<ServiceToken>(`/admin/service-tokens/${encodeURIComponent(tokenId)}`, { method: "DELETE" }),
   getAzureBlobConfig: () => request<AzureBlobConfigResponse>("/azure-blob/config"),
   updateAzureBlobConfig: (payload: AzureBlobConfigUpdate) =>
     request<AzureBlobConfigResponse>("/azure-blob/config", { method: "PUT", body: JSON.stringify(payload) }),
@@ -9102,6 +9106,22 @@ export type S3StatusResponse = { enabled: boolean; configured: boolean; default_
 export type S3ObjectEntry = { key: string; name: string; size: number; last_modified: string | null; storage_class: string | null };
 
 export type S3ObjectListResponse = { bucket: string; prefix: string; prefixes: string[]; objects: S3ObjectEntry[]; next_token: string | null };
+
+/** A read-only, every-case credential for an integration such as the MCP server (never contains the secret). */
+export type ServiceToken = {
+  id: string;
+  name: string;
+  token_prefix: string;
+  scope: string;
+  created_at: string;
+  created_by: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+  last_used_at: string | null;
+};
+
+/** Returned once, at creation: ``token`` is the secret and cannot be read again. */
+export type CreatedServiceToken = ServiceToken & { token: string };
 
 /** Buckets (S3) or containers (Azure Blob) the configured credential can list. */
 export type CloudContainerListResponse = { containers: string[]; truncated: boolean };
