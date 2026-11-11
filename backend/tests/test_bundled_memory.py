@@ -211,3 +211,28 @@ def test_a_member_the_inspection_does_not_confirm_as_memory_is_not_registered(en
     with env["make_session"]() as db:
         listed = db.get(Evidence, EV_COLLECTION).metadata_json["bundled_evidence"][0]
         assert listed["registration_status"] == "failed" and "did not confirm" in listed["registration_error"]
+
+
+# --- compressed memory captures ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "entries, forced, expected",
+    [
+        # A .7z holding only the memory image is a compressed memory capture.
+        ([{"path": "PhysicalMemory.dd", "status": "extracted", "bundled_evidence": "memory_dump"}], False, ["PhysicalMemory.dd"]),
+        # A triage collection that also carries a memory image: left for the analyst.
+        ([{"path": "mem.dd", "status": "extracted", "bundled_evidence": "memory_dump"}, {"path": "logs/auth.log", "status": "extracted"}], False, []),
+        # ...unless the analyst forced Memory on it.
+        ([{"path": "mem.dd", "status": "extracted", "bundled_evidence": "memory_dump"}, {"path": "logs/auth.log", "status": "extracted"}], True, ["mem.dd"]),
+        ([{"path": "logs/auth.log", "status": "extracted"}], True, []),
+    ],
+)
+def test_compressed_memory_captures_are_registered_on_their_own(monkeypatch, entries, forced, expected):
+    started: list[tuple] = []
+    monkeypatch.setattr("app.services.bundled_memory.start_registration", lambda db, ev, path, **kw: started.append((path, kw)))
+    evidence = SimpleNamespace(id=EV_COLLECTION, host_id="host-1", detected_host=None, metadata_json={"register_bundled_memory": forced, "provided_host": "WS-MEMORY-01"})
+    tasks._register_bundled_memory_images(None, evidence, entries)
+    assert [path for path, _kw in started] == expected
+    for _path, kw in started:
+        assert kw == {"host_id": "host-1", "provided_host": "WS-MEMORY-01"}

@@ -11,7 +11,7 @@ def test_memory_upload_hybrid_defaults_are_safe() -> None:
     assert settings.memory_upload_direct_threshold_bytes == 1024 * 1024 * 1024
     assert settings.memory_upload_default_concurrency == 2
     assert settings.memory_upload_max_concurrency == 4
-    assert settings.memory_upload_max_bytes == 32 * 1024 * 1024 * 1024
+    assert settings.memory_upload_max_bytes == 256 * 1024 * 1024 * 1024
 
 
 def test_memory_upload_hybrid_environment_overrides() -> None:

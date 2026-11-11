@@ -1280,6 +1280,60 @@ def test_forced_route_metadata_is_written_to_promoted_evidence(tmp_path, monkeyp
     assert evidence.metadata_json["detected_category_before_override"] == "archive"
 
 
+def test_forcing_memory_on_an_archive_extracts_it_and_registers_the_memory_inside(tmp_path, monkeypatch):
+    """A .7z/.zip holding a memory image is not itself a memory image: forcing Memory on it must
+    not send the archive to memory analysis, but process it as a collection and register the
+    memory image found inside."""
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
+    monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_evidence_shared_gid", os.getgid())
+    db = _db()
+    _case(db)
+    source = tmp_path / "PhysicalMemory.zip"
+    _make_zip(source)
+    session, _report = create_upload_session(db, CASE_ID, files=[_upload_file(source)], declared_platform=None, client_sha256=None)
+    assert (session.metadata_json or {}).get("category") == "archive"
+    routes: list[str] = []
+
+    def _fake_upload_evidence(case_id, upload_file, **_kwargs):
+        routes.append("collection")
+        return Evidence(id="dddddddd-4444-4444-8444-dddddddddddd", case_id=case_id, original_filename=upload_file.filename, stored_path="/tmp/x", evidence_type=EvidenceType.unknown, size_bytes=source.stat().st_size, metadata_json={})
+
+    import app.api.routes_evidence as routes_evidence
+    monkeypatch.setattr(routes_evidence, "_upload_evidence_impl", _fake_upload_evidence)
+    monkeypatch.setattr("app.services.memory.upload_sessions.create_memory_upload_session_from_staged_file", lambda *a, **k: pytest.fail("the archive must not be registered as a memory image"))
+
+    evidence = promote_upload_session(
+        db, session,
+        provided_platform=None, host_id=None, provided_host="WS-MEMORY-01", evtx_profile=None,
+        memory_authorization_acknowledged=True, folder_name=None, labels=None, notes=None,
+        current_user=None,
+        forced_evidence_kind="memory",
+    )
+    assert routes == ["collection"]
+    assert evidence.metadata_json["register_bundled_memory"] is True
+    assert evidence.metadata_json["detected_category_before_override"] == "archive"
+
+
+def test_the_upload_limit_message_says_the_sizes_and_what_to_change(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024**3)
+    db = _db()
+    _case(db)
+    with pytest.raises(UploadSessionError) as excinfo:
+        create_resumable_upload_session(db, CASE_ID, filename="PhysicalMemory.dd", expected_size_bytes=34 * 1024**3)
+    message = excinfo.value.message
+    assert "34.0 GiB" in message and "32.0 GiB" in message and "BACKEND_MAX_UPLOAD_SIZE" in message
+
+
+def test_default_upload_limits_fit_large_memory_captures():
+    from app.core.config import Settings
+
+    defaults = Settings.model_fields
+    assert defaults["backend_max_upload_size"].default >= 256 * 1024**3
+    assert defaults["memory_upload_max_bytes"].default >= 256 * 1024**3
+
+
 def test_promote_server_path_session_never_deletes_original(tmp_path, monkeypatch):
     import app.core.evidence_paths as evidence_paths_module
 

@@ -74,6 +74,8 @@ Images of any size are probed (there was a 16 GiB cap until 2026-11-11).
 
 ### A memory image inside a collection
 
+A memory capture uploaded compressed (a `.7z` or `.zip` holding `PhysicalMemory.dd`) is extracted and its memory image registered as memory evidence on its own, with the host chosen in the wizard: an archive whose only content is memory images is a compressed memory capture, and so is any archive the analyst forces to **Memory** in the wizard (the archive itself is never sent to memory analysis).
+
 A memory capture uploaded as part of a collection (a ZIP or a folder, at any depth) is recognized the same way: by its header and firmware tables, and — for a large file nothing else identified — by the kernel search (at most 8 such files per collection; Windows paging files `pagefile.sys`/`swapfile.sys` are never taken for memory images). It is not analysed with the collection: the evidence lists it under **Not processed with this upload**. Choose **Analyse as memory evidence** next to it, confirm the host it was captured on (the collection's by default), and Kairon registers it as its own memory evidence from the file already extracted on the server — no second upload, and no copy when the file system allows a hard link. It goes through the same inspection as an upload (SHA-256, content classification, kernel scan) and the new evidence records which collection and path it came from.
 
 ## Backend readiness checks
@@ -269,7 +271,7 @@ Configuration:
 - `MEMORY_ANALYSIS_ENABLED=false`
 - `MEMORY_ALLOW_EXTERNAL_TOOL_EXECUTION=false`
 - `MEMORY_UPLOAD_ENABLED=false`
-- `MEMORY_UPLOAD_MAX_BYTES=34359738368` (32 GiB default; the startup validator rejects any value below 10 GiB)
+- `MEMORY_UPLOAD_MAX_BYTES=274877906944` (256 GiB default since 2026-11-11, before 32 GiB, which a capture of a 32 GB machine already exceeds; the startup validator rejects any value below 10 GiB)
 - `MEMORY_UPLOAD_CHUNK_SIZE_BYTES=67108864` (64 MiB default)
 - `MEMORY_UPLOAD_STAGING_ROOT=`
 - `MEMORY_UPLOAD_ALLOWED_EXTENSIONS=.raw,.mem,.vmem,.dmp,.lime`

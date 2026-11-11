@@ -132,12 +132,17 @@ def _preupload_storage_check(*, session_id: str, expected_bytes: int | None, tem
             configured_limit_bytes=max_bytes,
             available_bytes=available,
         )
+        limit_message = (
+            f"The selected file ({_format_bytes(expected_bytes)}) is larger than this instance's upload limit "
+            f"({_format_bytes(max_bytes)}). An administrator can raise BACKEND_MAX_UPLOAD_SIZE in the server's .env "
+            "and restart the backend and worker."
+        )
         raise UploadSessionError(
             "upload_size_limit",
-            "Selected evidence exceeds the configured upload limit.",
+            limit_message,
             _upload_error_detail(
                 "upload_size_limit",
-                "Selected evidence exceeds the configured upload limit.",
+                limit_message,
                 expected_bytes=expected_bytes,
                 configured_limit_bytes=max_bytes,
                 available_storage_bytes=available,
@@ -189,6 +194,15 @@ def _touch_upload_session(session: EvidenceUploadSession) -> None:
     session.last_activity_at = utc_now()
     settings = get_settings()
     session.expires_at = utc_now() + timedelta(seconds=max(60, int(settings.evidence_upload_session_ttl_seconds)))
+
+
+def _format_bytes(value: int) -> str:
+    size = float(value)
+    for unit in ("bytes", "KiB", "MiB", "GiB"):
+        if size < 1024 or unit == "GiB":
+            return f"{size:.1f} {unit}" if unit != "bytes" else f"{int(size)} bytes"
+        size /= 1024
+    return f"{size:.1f} TiB"
 
 
 def create_resumable_upload_session(
@@ -1188,6 +1202,12 @@ def promote_upload_session(
                     normalized_forced_kind = "memory_dump"
                 elif normalized_forced_kind not in {"collection", "archive", "unknown", None}:
                     normalized_forced_kind = None
+                # "Memory" forced on an archive is a compressed memory capture (a .7z/.zip holding
+                # the image): the archive itself is not a memory image, so it is extracted like any
+                # collection and the memory image found inside is registered as memory evidence.
+                register_bundled_memory = normalized_forced_kind == "memory_dump" and detected_category in {"archive", "collection", "mixed"}
+                if register_bundled_memory:
+                    normalized_forced_kind = None
                 category = normalized_forced_kind or detected_category
                 if normalized_forced_kind:
                     session.metadata_json = {**metadata, "forced_evidence_kind": normalized_forced_kind, "detected_category_before_override": detected_category}
@@ -1314,11 +1334,12 @@ def promote_upload_session(
                         db=db,
                         current_user=current_user,
                     )
-                if normalized_forced_kind:
+                if normalized_forced_kind or register_bundled_memory:
                     evidence.metadata_json = {
                         **dict(evidence.metadata_json or {}),
-                        "forced_evidence_kind": normalized_forced_kind,
+                        "forced_evidence_kind": normalized_forced_kind or "memory_dump",
                         "detected_category_before_override": detected_category,
+                        **({"register_bundled_memory": True} if register_bundled_memory else {}),
                     }
                     db.add(evidence)
                     db.flush()

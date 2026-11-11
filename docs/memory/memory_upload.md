@@ -45,7 +45,7 @@ Memory uploads are classified as `memory_dump`, bypass normal disk ingest, and d
 
 ## Displayed Limits
 
-The default is `MEMORY_UPLOAD_MAX_BYTES=34359738368`, displayed as `32 GiB`. The startup configuration validator rejects any operator-configured value below `10 GiB` (`10 * 1024^3` bytes), so operators lowering the limit have a hard floor.
+The default is `MEMORY_UPLOAD_MAX_BYTES=274877906944`, displayed as `256 GiB` (32 GiB until 2026-11-11, which a capture of a 32 GB machine already exceeds). The startup configuration validator rejects any operator-configured value below `10 GiB` (`10 * 1024^3` bytes), so operators lowering the limit have a hard floor.
 
 The practical maximum also depends on server storage. The upload readiness check reports safe capacity numbers only; it does not expose host paths, mount names, or internal directories.
 
@@ -145,7 +145,7 @@ Cleanup never deletes completed Evidence. It may remove leftover staging for com
 
 Production validation should run `cleanup --dry-run --json` and `reconcile --dry-run --json` only during first deployment validation. Do not apply cleanup to real data until dry-run output has been reviewed.
 
-`Evidence.size_bytes` is stored as PostgreSQL `BIGINT`; browser memory uploads up to the configured 32 GiB limit must not be written to a 32-bit `INTEGER` column.
+`Evidence.size_bytes` is stored as PostgreSQL `BIGINT`; browser memory uploads up to the configured limit (256 GiB by default) must not be written to a 32-bit `INTEGER` column.
 
 ## Storage Layout
 

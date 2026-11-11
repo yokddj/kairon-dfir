@@ -62,7 +62,9 @@ class Settings(BaseSettings):
     s3_source_enabled: bool = False
     # Same for Azure Blob Storage (AZURE_BLOB_SOURCE_ENABLED=true); credentials are set in the UI.
     azure_blob_source_enabled: bool = False
-    backend_max_upload_size: int = Field(default=34359738368)
+    # 256 GiB: memory captures of 32/64 GB machines and full disk images routinely exceed 32 GiB. The
+    # real guard is the free-space check every upload runs before it starts.
+    backend_max_upload_size: int = Field(default=274877906944)
     backend_upload_idle_timeout_seconds: int = 60
     # Sole authority for activating the Memory capability at application-composition
     # level (router mounting, startup reconciliation, evidence-integration paths).
@@ -109,7 +111,7 @@ class Settings(BaseSettings):
     memory_preferred_backend: str = "volatility3"
     memory_max_upload_size: int = 2147483648
     memory_upload_enabled: bool = False
-    memory_upload_max_bytes: int = 34359738368
+    memory_upload_max_bytes: int = 274877906944
     memory_upload_chunk_size_bytes: int = 67108864
     memory_upload_chunk_size_min_bytes: int = 1048576
     memory_upload_chunk_size_max_bytes: int = 268435456
