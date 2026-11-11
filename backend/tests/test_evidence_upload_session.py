@@ -1295,7 +1295,9 @@ def test_forcing_memory_on_an_archive_extracts_it_and_registers_the_memory_insid
     assert (session.metadata_json or {}).get("category") == "archive"
     routes: list[str] = []
 
-    def _fake_upload_evidence(case_id, upload_file, **_kwargs):
+    def _fake_upload_evidence(case_id, upload_file, **kwargs):
+        # Extracted whole: raw-collection discovery would never look at the memory image.
+        assert kwargs.get("extract_whole_archive") is True
         routes.append("collection")
         return Evidence(id="dddddddd-4444-4444-8444-dddddddddddd", case_id=case_id, original_filename=upload_file.filename, stored_path="/tmp/x", evidence_type=EvidenceType.unknown, size_bytes=source.stat().st_size, metadata_json={})
 

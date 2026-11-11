@@ -354,7 +354,9 @@ def _extract_seven_zip(source: Path, dest_dir: Path, progress_cb: Callable[[dict
                     continue
                 target = _validate_path(dest_dir, str(relative))
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(path, target)
+                # Moved, not copied: the temporary tree is discarded anyway, and a copy would write
+                # every byte twice (tens of gigabytes for a memory capture) and need twice the space.
+                shutil.move(path, target)
                 if progress_cb:
                     progress_cb({"processed_files": processed_files, "total_files": total_files, "processed_bytes": processed_bytes, "total_bytes": total_bytes, "current_path": str(relative)})
             _enforce_limits(manifest_entries)

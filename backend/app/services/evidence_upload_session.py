@@ -1331,6 +1331,7 @@ def promote_upload_session(
                         # other category, since prepare_upload_container
                         # only consults this for an AD1 first segment.
                         extra_segment_paths=[Path(spec["path"]) for spec in extra_segment_specs] or None,
+                        extract_whole_archive=register_bundled_memory,
                         db=db,
                         current_user=current_user,
                     )

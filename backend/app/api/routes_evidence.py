@@ -1436,6 +1436,15 @@ def _looks_like_raw_collection_entries(entries: list[str]) -> bool:
     return False
 
 
+def _has_recognized_raw_artifacts(container) -> bool:
+    """Whether discovery recognizes any artifact (parsed by the core ingest or a later step)."""
+    try:
+        return bool(discover_velociraptor_evidences(container).as_dict()["summary"].get("total_candidates"))
+    except Exception:  # noqa: BLE001
+        logger.warning("Raw collection discovery failed while routing an upload", exc_info=True)
+        return True
+
+
 def _should_route_to_raw_collection_discovery(path: Path, entries: list[str] | None = None) -> bool:
     evidence_type = detect_evidence_type(path, entries)
     if evidence_type == EvidenceType.velociraptor_zip:
@@ -2130,7 +2139,11 @@ def _upload_evidence_impl(
     db: Session = None,
     current_user: User | None = None,
     extra_segment_paths: list[Path] | None = None,
+    extract_whole_archive: bool = False,
 ) -> Evidence:
+    """``extract_whole_archive``: never route the archive to raw-collection discovery (which reads
+    only the triage artifacts it recognizes) -- set when the analyst said it is a compressed memory
+    capture, whose image must be extracted and classified."""
     if hasattr(ingest_mode, "get") and not hasattr(db, "get"):
         db = ingest_mode  # type: ignore[assignment]
         ingest_mode = None
@@ -2336,7 +2349,12 @@ def _upload_evidence_impl(
             container = open_evidence_container(stored_path)
             inventory_entries = container.list_entries()
             entry_paths = [entry.path for entry in inventory_entries if not entry.is_dir]
-            raw_collection = _should_route_to_raw_collection_discovery(stored_path, entry_paths)
+            raw_collection = not extract_whole_archive and _should_route_to_raw_collection_discovery(stored_path, entry_paths)
+            if raw_collection and not _has_recognized_raw_artifacts(container):
+                # Paths that look like a triage collection (Users/..., Windows/...) but nothing the
+                # discovery can parse: selecting would end in "no supported artifacts". Extract it
+                # whole instead, so its files are classified (a memory image inside is found).
+                raw_collection = False
             detected_type = detect_evidence_type(stored_path, entry_paths)
             if folder_upload:
                 folder_entries = [{"path": entry.path, "ignored": entry.ignored, "reason": entry.reason} for entry in inventory_entries]
@@ -2466,6 +2484,10 @@ def _upload_evidence_impl(
             metadata={"source_type": "raw_collection", "evidence_intent": normalized_intent, "packaging": normalized_packaging, "ingest_mode": normalized_ingest_mode},
         )
         return evidence
+    if extract_whole_archive:
+        # Before the ingest is queued: the worker keeps its copy of the metadata, and registers the
+        # memory images it finds when this flag is set.
+        evidence.metadata_json = {**dict(evidence.metadata_json or {}), "register_bundled_memory": True}
     evidence = _persist_generic_ingest_plan(db, evidence)
     log_activity(
         db,
