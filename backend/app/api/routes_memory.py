@@ -1629,12 +1629,44 @@ def post_memory_symbol_probe(
     """
     _require_case(db, case_id)
     evidence = _require_evidence_for_case(db, case_id, evidence_id)
+    if get_settings().memory_execution_mode == "dedicated_worker":
+        # Volatility and its symbol cache live in the memory worker, not in this process.
+        return {"case_id": case_id, **_probe_on_memory_worker(evidence_id)}
     result = probe_evidence_symbol_requirement(db, evidence=evidence)
     return {
         "case_id": case_id,
         "evidence_id": evidence_id,
         **result.to_dict(),
     }
+
+
+_PROBE_WAIT_SECONDS = 45.0
+
+
+def _probe_on_memory_worker(evidence_id: str) -> dict:
+    import time
+
+    from app.workers.tasks import enqueue_memory_symbol_probe
+
+    def answer(status: str, message: str, code: str | None = None) -> dict:
+        return {"evidence_id": evidence_id, "status": status, "requirement": None, "probable_os": None, "layer": None, "confidence": "none", "failure_reason": None, "error_code": code, "sanitized_message": message, "duration_ms": 0}
+
+    try:
+        job = enqueue_memory_symbol_probe(evidence_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("could not queue the symbol probe", exc_info=True)
+        return answer("failed", "The symbol probe could not be queued: is the memory worker's queue (Redis) reachable?", "MEMORY_PROBE_NOT_QUEUED")
+    deadline = time.monotonic() + _PROBE_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        status = job.get_status(refresh=True)
+        if status == "finished":
+            result = job.return_value()
+            return result if isinstance(result, dict) else answer("failed", "The symbol probe returned no result.", "MEMORY_PROBE_FAILED")
+        if status in {"failed", "stopped", "canceled"}:
+            return answer("failed", "The symbol probe failed on the memory worker; see its logs.", "MEMORY_PROBE_FAILED")
+        time.sleep(0.5)
+    # Behind other memory jobs (the worker runs one at a time): it still runs and records what it finds.
+    return answer("probing", "The probe is queued on the memory worker behind other memory jobs; this panel updates when it finishes.")
 
 
 @router.get(
