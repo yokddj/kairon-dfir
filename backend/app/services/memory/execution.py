@@ -90,6 +90,9 @@ PROCESS_PLUGINS = {"windows.pslist", "windows.pstree", "windows.psscan", "window
 # with MemProcFS, which needs no symbols, instead of stopping: the processes and network views are
 # filled from MemProcFS's own walk of the same kernel structures.
 SYMBOL_FALLBACK_PLUGINS = {"processes_basic": "memprocfs.processes", "network_basic": "memprocfs.network"}
+# MemProcFS reads the image without Volatility's symbols: when windows.info cannot resolve them,
+# these still run (Find Evil, console text) and only the Volatility plugins of the profile are skipped.
+SYMBOL_FREE_PLUGINS = MEMPROCFS_PLUGINS
 PROCESS_OBSERVATION_PLUGINS = {"windows.envars", "windows.getsids", "windows.privileges"}
 OPTIONAL_RUNTIME_PROBED_PLUGINS = PROCESS_OBSERVATION_PLUGINS | {"windows.netscan", "windows.netstat", "windows.vadinfo"}
 ARTIFACT_PROFILES = {
@@ -600,12 +603,20 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             fatal = False
             blocking_error: VolatilityRunnerError | None = None
             symbol_fallback: str | None = None
+            symbols_missing = False
             symbol_blocked_plugin = "windows.info"
             for plugin_index, plugin in enumerate(plugins, start=1):
                 plugin_run = _plugin_run_for(db, run, plugin)
                 if time.monotonic() >= profile_deadline:
                     _mark_profile_timeout_pending(db, run, plugins, active_plugin=None, profile_timeout_seconds=profile_timeout_seconds)
                     break
+                if symbols_missing and plugin not in SYMBOL_FREE_PLUGINS:
+                    plugin_run.status = "skipped_dependency"
+                    plugin_run.completed_at = utc_now_naive()
+                    plugin_run.error_code = "SKIPPED_DEPENDENCY"
+                    plugin_run.error_message = "Skipped: Volatility could not resolve this image's kernel symbols (windows.info)."
+                    db.commit()
+                    continue
                 if plugin not in set(backend_readiness.get_settings().allowed_memory_plugins):
                     plugin_run.status = "skipped_disabled"
                     plugin_run.completed_at = utc_now_naive()
@@ -769,6 +780,10 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                         symbol_fallback = SYMBOL_FALLBACK_PLUGINS[run.profile]
                         symbol_blocked_plugin = plugin
                         break
+                    if plugin == "windows.info" and exc.code == "SYMBOLS_UNAVAILABLE" and any(item in SYMBOL_FREE_PLUGINS for item in plugins[plugin_index:]):
+                        # The rest needs the same symbols, except MemProcFS's plugins: run those.
+                        symbols_missing = True
+                        continue
                     if plugin == "windows.info" or exc.code == "PLUGIN_CANCELLED":
                         fatal = True
                         break
