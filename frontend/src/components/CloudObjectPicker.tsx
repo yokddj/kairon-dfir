@@ -30,6 +30,7 @@ export function CloudObjectPicker<T extends CloudObject>({
   defaultContainer,
   queryKey,
   list,
+  listContainers,
   location,
   isArchived,
   archivedTitle,
@@ -42,6 +43,8 @@ export function CloudObjectPicker<T extends CloudObject>({
   defaultContainer: string;
   queryKey: string;
   list: (container: string, prefix: string, token: string | null) => Promise<CloudListing<T>>;
+  /** Containers the credential can list; when it cannot, the analyst types the name. */
+  listContainers?: () => Promise<{ containers: string[]; truncated: boolean }>;
   location: (container: string, key: string) => string;
   isArchived: (item: T) => boolean;
   archivedTitle: string;
@@ -53,6 +56,15 @@ export function CloudObjectPicker<T extends CloudObject>({
   const [prefix, setPrefix] = useState("");
   const [token, setToken] = useState<string | null>(null);
   const [pages, setPages] = useState<{ prefixes: string[]; objects: T[] }>({ prefixes: [], objects: [] });
+
+  const containersQuery = useQuery({
+    queryKey: [queryKey, "containers"],
+    queryFn: () => listContainers!(),
+    enabled: Boolean(listContainers),
+    retry: false,
+    staleTime: 60_000,
+  });
+  const containers = containersQuery.data?.containers ?? [];
 
   const query = useQuery({
     queryKey: [queryKey, container, prefix, token],
@@ -78,15 +90,45 @@ export function CloudObjectPicker<T extends CloudObject>({
 
   const parent = prefix ? prefix.slice(0, prefix.slice(0, -1).lastIndexOf("/") + 1) : null;
 
+  function openContainer(name: string) {
+    setContainerInput(name);
+    setContainer(name);
+    onSelect(null);
+    open("");
+  }
+
   return (
     <div className="space-y-3" data-testid={`${testIdPrefix}-object-picker`}>
+      {containers.length ? (
+        <label className="block text-xs text-muted">
+          {`${containerLabel}s the credential can see`}
+          <select
+            aria-label={`${containerLabel} list`}
+            data-testid={`${testIdPrefix}-container-list`}
+            value={containers.includes(container) ? container : ""}
+            onChange={(event) => event.target.value && openContainer(event.target.value)}
+            className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink"
+          >
+            <option value="">{`Choose a ${containerLabel.toLowerCase()}…`}</option>
+            {containers.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+          {containersQuery.data?.truncated ? <span className="mt-1 block">Only the first {containers.length} are listed; type the name for others.</span> : null}
+        </label>
+      ) : null}
+      {containersQuery.isError ? (
+        <p className="text-xs text-muted" data-testid={`${testIdPrefix}-container-list-unavailable`}>
+          {containersQuery.error instanceof Error ? containersQuery.error.message : `The ${containerLabel.toLowerCase()}s could not be listed; type the name.`}
+        </p>
+      ) : null}
       <form
         className="flex gap-2"
         onSubmit={(event) => {
           event.preventDefault();
-          setContainer(containerInput.trim());
-          onSelect(null);
-          open("");
+          openContainer(containerInput.trim());
         }}
       >
         <input value={containerInput} onChange={(event) => setContainerInput(event.target.value)} placeholder={containerPlaceholder} aria-label={containerLabel} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" />

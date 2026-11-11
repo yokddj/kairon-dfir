@@ -244,6 +244,30 @@ def _is_archived(tier: Any) -> bool:
     return str(getattr(tier, "value", tier) or "").lower() == "archive"
 
 
+CONTAINER_LIST_LIMIT = 500
+
+
+def list_containers(config: dict[str, Any]) -> dict[str, Any]:
+    """The account's containers, for the wizard to offer. Needs account-level listing (an account
+    key, an account SAS with the service resource type, or a role on the account): a container SAS
+    or a container-scoped role cannot list them, and the analyst types the container instead."""
+    try:
+        service = build_service_client(config)
+        names: list[str] = []
+        for item in service.list_containers(results_per_page=200):
+            names.append(item.name)
+            if len(names) >= CONTAINER_LIST_LIMIT:
+                break
+    except AzureBlobSourceError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        error = _client_error(exc)
+        if str(error).startswith("Access denied") or str(error).startswith("Authentication failed"):
+            raise AzureBlobSourceError("This credential cannot list the account's containers (a container SAS or a container-scoped role); type the container name.") from exc
+        raise error from exc
+    return {"containers": sorted(names), "truncated": len(names) >= CONTAINER_LIST_LIMIT}
+
+
 def list_blobs(config: dict[str, Any], *, container: str | None, prefix: str = "", token: str | None = None) -> dict[str, Any]:
     """One page of a container "folder": the virtual sub-folders and the blobs directly under ``prefix``."""
     target = _text(container) or config.get("default_container")

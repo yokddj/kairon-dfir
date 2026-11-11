@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Container and bucket lists in the evidence wizard**: the Azure Blob and S3 pickers list the containers / buckets the configured credential can see, instead of only a name to type. A credential that cannot list them (a container SAS or container-scoped role, an S3 key without `s3:ListAllMyBuckets`) says so and the name can still be typed.
+- **MCP server: client authentication on the HTTP transport**: clients must send `Authorization: Bearer <KAIRON_MCP_HTTP_TOKEN>` (at least 32 characters; `--generate-token` makes one); without the token the HTTP transport refuses to start (`--no-auth` to opt out). Before, anything that could reach the port read every case through the server's service token.
 - **Import evidence from Azure Blob Storage**: the evidence wizard can browse a container of an Azure Storage account and import one blob — block, append or page blob, so an exported VM disk VHD too — through the same upload session, hashing, preflight and registration as a browser upload, like the S3 import. Authentication with a SAS token, an Entra ID service principal (Storage Blob Data Reader) or an account key, set by an administrator under **Azure Blob Source** and encrypted at rest. The exact blob picked is downloaded (version or ETag); Archive-tier blobs are refused until rehydrated. Off by default (`AZURE_BLOB_SOURCE_ENABLED=true`). See [docs/evidence/azure-blob-import.md](docs/evidence/azure-blob-import.md).
 
 - **Case time window shared by every event view**: the time range set in Search, Timeline, Artifact Views, Command History or Linux Authentication now applies to all of them, per case, and survives a reload. A top-bar chip shows it and clears it everywhere. Links that carry `time_from`/`time_to` replace it; links without them keep it. See [docs/search-and-investigation/search.md](docs/search-and-investigation/search.md#case-time-window).
@@ -43,6 +45,7 @@
 
 ### Fixed
 
+- **Security**: the performance tuning reads (`GET /api/admin/performance`, `.../resources`, `.../recommendation`, `.../restart-instructions`) were open to any signed-in user; they now require an administrator, and the System page tells other users it is restricted to administrators.
 - **Security**: the performance tuning endpoints (`PATCH /api/admin/performance`, `POST .../apply`, `.../apply-profile`, `.../apply-recommended`, `.../restart`) were open to any signed-in user; they now require an administrator, like the instance settings since the previous fix.
 - **Security**: service tokens (MCP server, scripts) could read the administration API, instance settings and storage configuration; they are now refused there even for `GET`, as the documentation already stated.
 - **MCP server**: a `case_id` containing `/`, `..`, `?` or `#` reached other API endpoints than the tool's (for example `../admin/performance`), so text planted in case data could steer a connected model past the tool catalog and its result limits; such ids are now refused. A slow tool call no longer blocks every other session on the HTTP transport. The tool catalog is refreshed every 5 minutes instead of only at startup. Remote clients can be allowed with `KAIRON_MCP_ALLOWED_HOSTS`/`--allowed-host` (before, any host name other than localhost got `421`, so the documented remote setup did not work).

@@ -77,10 +77,15 @@ def test_only_administrators_change_or_reset_settings(env, monkeypatch, is_admin
         ("post", "/api/admin/performance/apply-profile", {"profile": "balanced"}),
         ("post", "/api/admin/performance/apply-recommended", {}),
         ("post", "/api/admin/performance/restart", {"services": []}),
+        ("get", "/api/admin/performance", None),
+        ("get", "/api/admin/performance/resources", None),
+        ("get", "/api/admin/performance/recommendation", None),
+        ("get", "/api/admin/performance/restart-instructions", None),
     ],
 )
 def test_only_administrators_change_performance(env, monkeypatch, method, path, body) -> None:
     _db, client = env
     monkeypatch.setattr(settings, "auth_enabled", True)
     monkeypatch.setattr("app.services.auth_dependencies.get_current_user", lambda request, db: SimpleNamespace(is_admin=False))
-    assert getattr(client, method)(path, json=body).status_code == 403
+    response = client.get(path) if method == "get" else getattr(client, method)(path, json=body)
+    assert response.status_code == 403

@@ -23,6 +23,7 @@ export function AzureBlobPicker({
       defaultContainer={defaultContainer}
       queryKey={`azure-blobs-${caseId}`}
       list={(container, prefix, token) => api.listAzureBlobs(caseId, { container: container || undefined, prefix, token: token ?? undefined })}
+      listContainers={() => api.listAzureBlobContainers(caseId)}
       location={(container, key) => `${accountName ? `${accountName}/` : ""}${container}/${key}`}
       isArchived={(item) => item.archived}
       archivedTitle="Archive tier: rehydrate the blob in Azure before importing"

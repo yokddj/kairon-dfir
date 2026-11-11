@@ -269,3 +269,49 @@ def test_remote_host_names_must_be_listed_for_the_http_transport():
     listed = transport_security(["kairon.vpn.example", "192.0.2.10:8800"])
     assert "kairon.vpn.example:*" in listed.allowed_hosts and "192.0.2.10:8800" in listed.allowed_hosts
     assert "https://kairon.vpn.example:*" in listed.allowed_origins
+
+
+# --- HTTP transport authentication ---------------------------------------
+
+
+def _http_client(token):
+    from starlette.testclient import TestClient
+
+    from mcp_server.server import build_http_app
+
+    return TestClient(build_http_app(build_server(FakeKaironClient()), allowed_hosts=[], token=token), base_url="http://localhost:8800")
+
+
+_INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}}
+_ACCEPT = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+TOKEN = "t" * 40
+
+
+@pytest.mark.parametrize("header", [None, "Bearer wrong-token", f"Basic {TOKEN}", f"Bearer {TOKEN}x"])
+def test_the_http_transport_refuses_a_request_without_the_token(header):
+    headers = dict(_ACCEPT)
+    if header:
+        headers["Authorization"] = header
+    with _http_client(TOKEN) as client:
+        response = client.post("/mcp", json=_INIT, headers=headers)
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"].startswith("Bearer")
+
+
+def test_the_http_transport_serves_a_request_with_the_token():
+    with _http_client(TOKEN) as client:
+        response = client.post("/mcp", json=_INIT, headers={**_ACCEPT, "Authorization": f"Bearer {TOKEN}"})
+    assert response.status_code == 200
+
+
+def test_the_http_transport_needs_a_long_enough_token_unless_auth_is_explicitly_off(monkeypatch):
+    from mcp_server.server import http_auth_token
+
+    monkeypatch.delenv("KAIRON_MCP_HTTP_TOKEN", raising=False)
+    with pytest.raises(SystemExit, match="KAIRON_MCP_HTTP_TOKEN"):
+        http_auth_token(None, no_auth=False)
+    with pytest.raises(SystemExit, match="at least"):
+        http_auth_token("short", no_auth=False)
+    monkeypatch.setenv("KAIRON_MCP_HTTP_TOKEN", TOKEN)
+    assert http_auth_token(None, no_auth=False) == TOKEN
+    assert http_auth_token(None, no_auth=True) is None

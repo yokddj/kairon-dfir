@@ -223,3 +223,20 @@ def test_a_download_that_does_not_match_the_listed_size_fails_the_session(env, m
         session = db.get(EvidenceUploadSession, session_id)
         assert session.status == "failed" and session.failure_message.startswith("S3 download failed")
         assert not Path(session.staged_path).exists()
+
+
+def test_the_wizard_can_list_the_buckets(env) -> None:
+    _configure(env["client"])
+    response = env["client"].get(f"/api/cases/{CASE_ID}/s3/buckets")
+    assert response.status_code == 200 and response.json() == {"containers": ["evidence-bucket"], "truncated": False}
+
+
+def test_a_key_that_cannot_list_buckets_says_to_type_the_name(env, monkeypatch) -> None:
+    _configure(env["client"])
+
+    def denied():
+        raise _ClientError("AccessDenied")
+
+    monkeypatch.setattr(env["fake"], "list_buckets", denied)
+    response = env["client"].get(f"/api/cases/{CASE_ID}/s3/buckets")
+    assert response.status_code == 400 and "type the bucket name" in response.json()["detail"]

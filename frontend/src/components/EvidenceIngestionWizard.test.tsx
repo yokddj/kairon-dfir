@@ -37,6 +37,8 @@ const startS3ImportMock = vi.fn();
 const getAzureBlobStatusMock = vi.fn();
 const listAzureBlobsMock = vi.fn();
 const startAzureBlobImportMock = vi.fn();
+const listAzureBlobContainersMock = vi.fn();
+const listS3BucketsMock = vi.fn();
 
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
@@ -71,6 +73,8 @@ vi.mock("../api/client", () => ({
     getAzureBlobStatus: (...args: unknown[]) => getAzureBlobStatusMock(...args),
     listAzureBlobs: (...args: unknown[]) => listAzureBlobsMock(...args),
     startAzureBlobImport: (...args: unknown[]) => startAzureBlobImportMock(...args),
+    listAzureBlobContainers: (...args: unknown[]) => listAzureBlobContainersMock(...args),
+    listS3Buckets: (...args: unknown[]) => listS3BucketsMock(...args),
     finalizeResumableEvidenceUploadSession: (...args: unknown[]) => finalizeResumableEvidenceUploadSessionMock(...args),
   },
   // runResumableUpload (used by both unified and legacy resumable uploads)
@@ -232,6 +236,8 @@ describe("EvidenceIngestionWizard", () => {
   beforeEach(() => {
     getS3StatusMock.mockResolvedValue({ enabled: false, configured: false, default_bucket: "" });
     getAzureBlobStatusMock.mockResolvedValue({ enabled: false, configured: false, default_container: "", account_name: "" });
+    listAzureBlobContainersMock.mockResolvedValue({ containers: ["evidence"], truncated: false });
+    listS3BucketsMock.mockResolvedValue({ containers: ["evidence"], truncated: false });
     vi.clearAllMocks();
     navigateMock.mockReset();
     getActiveMemoryAnalysisBatchMock.mockResolvedValue(null);
@@ -1192,7 +1198,8 @@ describe("EvidenceIngestionWizard", () => {
   }, 10000);
 
   it("imports a blob from Azure: the server downloads it and the normal preflight follows", async () => {
-    getAzureBlobStatusMock.mockResolvedValue({ enabled: true, configured: true, default_container: "evidence", account_name: "irstorage" });
+    getAzureBlobStatusMock.mockResolvedValue({ enabled: true, configured: true, default_container: "", account_name: "irstorage" });
+    listAzureBlobContainersMock.mockResolvedValue({ containers: ["archive-2025", "evidence"], truncated: false });
     listAzureBlobsMock.mockResolvedValue({
       container: "evidence",
       prefix: "",
@@ -1212,6 +1219,7 @@ describe("EvidenceIngestionWizard", () => {
     await goToFileStep(/Collection/);
     await userEvent.click(screen.getByText(/Advanced import options/i));
     await userEvent.click(await screen.findByTestId("import-from-azure-blob"));
+    await userEvent.selectOptions(await screen.findByLabelText("Container list"), "evidence");
     expect((await screen.findByText("old.vhd")).closest("button")).toBeDisabled();
     await userEvent.click(screen.getByText("ws01.zip"));
     expect(screen.getByTestId("azure-blob-selected")).toHaveTextContent("irstorage/evidence/ws01.zip");

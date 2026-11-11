@@ -53,8 +53,18 @@ class FakeBlobService:
         if container != "evidence":
             raise _sdk_error(ResourceNotFoundError, "ContainerNotFound")
 
+    containers_denied = False
+
     def list_containers(self, **kwargs):
-        return SimpleNamespace(by_page=lambda: iter([[SimpleNamespace(name="evidence")]]))
+        if self.containers_denied:
+            raise _sdk_error(ClientAuthenticationError, "AuthorizationResourceTypeMismatch")
+        items = [SimpleNamespace(name="evidence"), SimpleNamespace(name="archive-2025")]
+
+        class Listing(list):
+            def by_page(self_inner):
+                return iter([list(self_inner)])
+
+        return Listing(items)
 
     def get_container_client(self, container):
         service = self
@@ -307,3 +317,16 @@ def test_the_sdk_does_not_log_every_request() -> None:
     import logging
 
     assert logging.getLogger("azure.core.pipeline.policies.http_logging_policy").getEffectiveLevel() >= logging.WARNING
+
+
+def test_the_wizard_can_list_the_containers(env) -> None:
+    _configure(env["client"])
+    response = env["client"].get(f"/api/cases/{CASE_ID}/azure-blob/containers")
+    assert response.status_code == 200 and response.json() == {"containers": ["archive-2025", "evidence"], "truncated": False}
+
+
+def test_a_credential_that_cannot_list_containers_says_to_type_the_name(env) -> None:
+    _configure(env["client"])
+    env["fake"].containers_denied = True
+    response = env["client"].get(f"/api/cases/{CASE_ID}/azure-blob/containers")
+    assert response.status_code == 400 and "type the container name" in response.json()["detail"]

@@ -6340,6 +6340,7 @@ export const api = {
   testS3Config: (payload: S3ConfigUpdate & { bucket?: string }) =>
     request<{ ok: boolean; message?: string; error?: string }>("/s3/test", { method: "POST", body: JSON.stringify(payload) }),
   getS3Status: (caseId: string) => request<S3StatusResponse>(`/cases/${caseId}/s3/status`),
+  listS3Buckets: (caseId: string) => request<CloudContainerListResponse>(`/cases/${caseId}/s3/buckets`),
   listS3Objects: (caseId: string, params: { bucket?: string; prefix?: string; token?: string }) => {
     const query = new URLSearchParams();
     if (params.bucket) query.set("bucket", params.bucket);
@@ -6355,6 +6356,7 @@ export const api = {
   testAzureBlobConfig: (payload: AzureBlobConfigUpdate & { container?: string }) =>
     request<{ ok: boolean; message?: string; error?: string }>("/azure-blob/test", { method: "POST", body: JSON.stringify(payload) }),
   getAzureBlobStatus: (caseId: string) => request<AzureBlobStatusResponse>(`/cases/${caseId}/azure-blob/status`),
+  listAzureBlobContainers: (caseId: string) => request<CloudContainerListResponse>(`/cases/${caseId}/azure-blob/containers`),
   listAzureBlobs: (caseId: string, params: { container?: string; prefix?: string; token?: string }) => {
     const query = new URLSearchParams();
     if (params.container) query.set("container", params.container);
@@ -9100,6 +9102,9 @@ export type S3StatusResponse = { enabled: boolean; configured: boolean; default_
 export type S3ObjectEntry = { key: string; name: string; size: number; last_modified: string | null; storage_class: string | null };
 
 export type S3ObjectListResponse = { bucket: string; prefix: string; prefixes: string[]; objects: S3ObjectEntry[]; next_token: string | null };
+
+/** Buckets (S3) or containers (Azure Blob) the configured credential can list. */
+export type CloudContainerListResponse = { containers: string[]; truncated: boolean };
 
 export type AzureBlobAuthMethod = "account_key" | "sas_token" | "service_principal";
 
