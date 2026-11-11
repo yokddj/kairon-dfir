@@ -281,6 +281,10 @@ def delete_case(db: Session, case_id: str) -> CaseDeletionResult:
     except Exception as exc:  # noqa: BLE001
         result.cleanup_errors.append(f"storage cleanup failed: {exc}")
         logger.warning("Could not remove storage for case %s: %s", case_id, exc)
+    # Memory outputs (runs, crash-dump copies) live in the memory worker's own directory.
+    from app.workers.tasks import enqueue_memory_output_cleanup
+
+    enqueue_memory_output_cleanup(case_id)
 
     for report_id in report_ids:
         try:

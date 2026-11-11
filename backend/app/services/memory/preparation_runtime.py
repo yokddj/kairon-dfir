@@ -94,6 +94,15 @@ def _evidence_canonical_path(evidence) -> Path:
     return resolve_memory_evidence_path(evidence, settings=get_settings())
 
 
+def _volatility_input_path(evidence) -> Path:
+    """What Volatility reads for this evidence: MemProcFS's crash-dump copy when the image needed
+    one (Volatility found no memory layer in it), else the evidence itself."""
+    from app.services.memory.storage import volatility_view_path
+
+    view = volatility_view_path(evidence.case_id, evidence.id)
+    return view if view.is_file() else _evidence_canonical_path(evidence)
+
+
 def _storage_error_for(code: str | None) -> tuple[str, str, str]:
     if code in {"EVIDENCE_PATH_MISSING", "UNSAFE_EVIDENCE_PATH", "UNSAFE_EVIDENCE_FILE"}:
         return (
@@ -506,7 +515,7 @@ def _run_bounded_requirement_discovery(
 
     work_dir = _discovery_work_dir(evidence)
     try:
-        canonical = _evidence_canonical_path(evidence)
+        canonical = _volatility_input_path(evidence)
     except Exception as exc:  # noqa: BLE001
         return _DISCOVERY_RETRYABLE, "windows_evidence_path_missing", (
             "WINDOWS_DISCOVERY_EVIDENCE_PATH_MISSING"
@@ -830,7 +839,7 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
         if readiness.state.value == ReadinessState.BLOCKED_SYMBOLS.value:
             native_result = _run_native_volatility_probe(
                 evidence=evidence,
-                canonical_path=_evidence_canonical_path(evidence),
+                canonical_path=_volatility_input_path(evidence),
             )
             if native_result.get("compatible"):
                 readiness.state = ReadinessState.READY
