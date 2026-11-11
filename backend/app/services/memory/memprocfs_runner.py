@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 FINDEVIL_PLUGIN = "memprocfs.findevil"
 CONSOLE_PLUGIN = "memprocfs.console"
 MEMPROCFS_PLUGINS = frozenset({FINDEVIL_PLUGIN, CONSOLE_PLUGIN})
+# Stand-ins for Volatility's process and network plugins when the kernel's symbols are missing
+# (app.services.memory.memprocfs_inventory): MemProcFS needs no symbols.
+PROCESSES_PLUGIN = "memprocfs.processes"
+NETWORK_PLUGIN = "memprocfs.network"
+INVENTORY_PLUGINS = {PROCESSES_PLUGIN: "processes", NETWORK_PLUGIN: "network"}
 # Where the child leaves the forensic scan's timeline CSVs, under the run's output directory.
 TIMELINE_DIRNAME = "memprocfs-timeline"
 # Left under the run's own output directory (not /tmp) so it survives the plugin process and
@@ -340,6 +345,51 @@ def run_console(
         raise VolatilityRunnerError(code, message, stdout=stdout, stderr=stderr, return_code=returncode, stdout_length=len(stdout), stderr_length=len(stderr))
     return VolatilityRunResult(
         argv_display=["memprocfs", "-device", "[evidence]", "-disable-symbolserver", "console"],
+        stdout=stdout,
+        stderr=stderr,
+        duration_ms=duration_ms,
+    )
+
+
+def run_inventory(
+    plugin: str,
+    evidence_path: Path,
+    work_dir: Path,
+    *,
+    timeout_seconds: int,
+    max_output_bytes: int,
+    cancellation_check: Callable[[], bool] | None = None,
+) -> VolatilityRunResult:
+    """MemProcFS's process or network inventory (app.services.memory.memprocfs_inventory)."""
+    library = memprocfs_library()
+    if not library.is_file():
+        raise VolatilityRunnerError("MEMPROCFS_UNAVAILABLE", "MemProcFS is not installed in the memory worker.")
+    kind = INVENTORY_PLUGINS[plugin]
+    argv = [
+        sys.executable, "-m", "app.services.memory.memprocfs_inventory",
+        "--library", str(library), "--evidence", str(evidence_path), "--kind", kind,
+        "--scan-timeout", str(max(30, int(timeout_seconds) - 30)),
+    ]
+    stdout, stderr, returncode, duration_ms = run_isolated_process(
+        argv,
+        work_dir=work_dir,
+        env=_child_environment(),
+        timeout=int(timeout_seconds),
+        max_bytes=int(max_output_bytes),
+        label=f"MemProcFS {kind}",
+        timeout_label=plugin,
+        cancellation_check=cancellation_check,
+    )
+    if returncode != 0:
+        if returncode < 0:
+            code, message = "PLUGIN_CRASHED", f"MemProcFS was killed by {_signal_name(returncode)} while reading the {kind} (a crash inside MemProcFS itself)."
+        else:
+            code, message = _EXIT_CODES.get(returncode, ("PLUGIN_FAILED", f"MemProcFS could not read the {kind} of this image."))
+            if returncode == 6:
+                code, message = "PLUGIN_FAILED", f"MemProcFS did not produce the {kind} inventory for this image."
+        raise VolatilityRunnerError(code, message, stdout=stdout, stderr=stderr, return_code=returncode, stdout_length=len(stdout), stderr_length=len(stderr))
+    return VolatilityRunResult(
+        argv_display=["memprocfs", "-device", "[evidence]", "-forensic", "1", "-disable-symbolserver", kind],
         stdout=stdout,
         stderr=stderr,
         duration_ms=duration_ms,
