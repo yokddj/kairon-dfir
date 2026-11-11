@@ -45,7 +45,7 @@ from app.services.memory.capability_registry import MEMORY_CAPABILITY_REGISTRY, 
 from app.services.memory.execution import PROFILE_CAPABILITY, PROFILE_PLUGINS, resolve_profile_plugins
 from app.services.memory.platform import PlatformFamily, ReadinessState
 from app.services.memory.profile_planning import PLUGIN_AVAILABLE, PLUGIN_DISABLED, PLUGIN_UNKNOWN, _plugin_worker_state, plan_profile_capability
-from app.services.memory import profile_planning
+from app.services.memory import memprocfs_engine, profile_planning
 from app.services.memory.validation import MemoryExecutionValidationError
 
 
@@ -496,6 +496,19 @@ def build_analysis_catalogue(
         # resolves symbols at plugin execution time and reports the real
         # plugin stderr if resolution fails.
         copy = PLATFORM_COPY.get(detected_platform.value, {}).get(profile, {}) if platform_known else {}
+        # Windows runs on MemProcFS; Volatility only on the analyst's request (memprocfs_engine).
+        windows = detected_platform == PlatformFamily.WINDOWS
+        memprocfs_default = windows and str(getattr(get_settings(), "memory_windows_default_engine", "memprocfs")).lower() != "volatility"
+        engine_info = {
+            "engine": "memprocfs" if memprocfs_default and profile in memprocfs_engine.PROFILE_PLUGINS else "volatility",
+            "memprocfs_plugins": memprocfs_engine.PROFILE_PLUGINS.get(profile, []) if memprocfs_default else [],
+            "volatility_only": bool(memprocfs_default and profile in memprocfs_engine.VOLATILITY_ONLY_PROFILES),
+            "volatility_on_request": bool(memprocfs_default),
+            "volatility_extras": memprocfs_engine.VOLATILITY_EXTRAS.get(profile, []) if memprocfs_default else [],
+        }
+        if engine_info["engine"] == "memprocfs":
+            # Volatility's plugin availability does not apply: MemProcFS runs it.
+            available, availability_reason, gate_type = True, None, GATE_TYPE_AVAILABLE
         items.append(
             {
                 "profile": profile,
@@ -519,6 +532,7 @@ def build_analysis_catalogue(
                 "plugin_count": len(plugin_names),
                 "available_plugin_count": available_plugin_count,
                 "unavailable_plugins": unavailable_plugins,
+                **engine_info,
             }
         )
     return items

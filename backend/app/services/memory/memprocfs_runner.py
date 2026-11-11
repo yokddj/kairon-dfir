@@ -439,3 +439,45 @@ def run_crashdump(
         return int(stdout.decode().strip().splitlines()[-1])
     except (ValueError, IndexError):
         return output_path.stat().st_size if output_path.exists() else 0
+
+
+INVENTORY_STEP = "memprocfs.inventory"
+
+
+def run_inventory_scan(
+    evidence_path: Path,
+    output_dir: Path,
+    work_dir: Path,
+    *,
+    timeout_seconds: int,
+    cancellation_check: Callable[[], bool] | None = None,
+) -> None:
+    """Save MemProcFS's inventory of the image (app.services.memory.memprocfs_inventory --output-dir)."""
+    library = memprocfs_library()
+    if not library.is_file():
+        raise VolatilityRunnerError("MEMPROCFS_UNAVAILABLE", "MemProcFS is not installed in the memory worker.")
+    argv = [
+        sys.executable, "-m", "app.services.memory.memprocfs_inventory",
+        "--library", str(library), "--evidence", str(evidence_path), "--output-dir", str(output_dir),
+        "--scan-timeout", str(max(30, int(timeout_seconds) - 30)),
+    ]
+    stdout, stderr, returncode, _duration_ms = run_isolated_process(
+        argv,
+        work_dir=work_dir,
+        env=_child_environment(),
+        timeout=int(timeout_seconds),
+        max_bytes=64 * 1024,
+        label="MemProcFS inventory",
+        timeout_label=INVENTORY_STEP,
+        cancellation_check=cancellation_check,
+    )
+    if returncode != 0:
+        if returncode < 0:
+            code, message = "PLUGIN_CRASHED", f"MemProcFS was killed by {_signal_name(returncode)} while scanning the image (a crash inside MemProcFS itself)."
+        elif returncode == 7:
+            code, message = "MEMORY_OUTPUT_WRITE_FAILED", "MemProcFS's inventory could not be written (disk full or not writable)."
+        elif returncode == 6:
+            code, message = "PLUGIN_FAILED", "MemProcFS did not produce its process table for this image."
+        else:
+            code, message = _EXIT_CODES.get(returncode, ("PLUGIN_FAILED", "MemProcFS could not scan this image."))
+        raise VolatilityRunnerError(code, message, stdout=stdout, stderr=stderr, return_code=returncode, stdout_length=len(stdout), stderr_length=len(stderr))

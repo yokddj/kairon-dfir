@@ -78,7 +78,8 @@ from app.services.memory.artifact_indexing import (
     search_artifact_documents,
 )
 from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
-from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, derive_memory_timeout_plan, mark_run_queued, resolve_profile_plugins
+from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, derive_memory_timeout_plan, mark_run_queued, resolve_profile_plugins, resolve_run_engine
+from app.services.memory import memprocfs_engine
 from app.services.memory.analysis_plan import build_memory_analysis_plan
 from app.services.memory.capability_registry import MemoryCapability, capabilities_for_platform, platform_result_views, plugins_for_capability
 from app.services.memory.platform import PlatformFamily
@@ -2663,8 +2664,17 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
     except MemoryExecutionValidationError as exc:
         raise HTTPException(status_code=400, detail=exc.message) from exc
     analysis_plan = build_memory_analysis_plan(evidence, canonical_path=getattr(validated_evidence, "path", None))
+    requested_engine = payload.engine if payload else None
     try:
-        resolved_plugins = resolve_profile_plugins(profile, plan=analysis_plan)
+        run_engine = resolve_run_engine(profile, analysis_plan, requested_engine)
+    except MemoryExecutionValidationError as exc:
+        raise HTTPException(status_code=409, detail={"error_code": exc.code, "message": exc.message}) from exc
+    try:
+        if run_engine == memprocfs_engine.ENGINE_MEMPROCFS:
+            # MemProcFS's version of the profile: Volatility's plugin checks do not apply.
+            resolved_plugins = memprocfs_engine.windows_profile_plugins(profile) or []
+        else:
+            resolved_plugins = resolve_profile_plugins(profile, plan=analysis_plan)
     except MemoryExecutionValidationError as exc:
         # Static header/format detection could not determine the
         # platform (e.g. a raw/headerless dump such as a VMware .vmem):
@@ -2697,7 +2707,7 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
                 "readiness_reason": analysis_plan.readiness_reason,
             },
         ) from exc
-    profile_plan = plan_profile_capability(profile) if analysis_plan.detected_platform == PlatformFamily.WINDOWS else None
+    profile_plan = plan_profile_capability(profile) if analysis_plan.detected_platform == PlatformFamily.WINDOWS and run_engine == memprocfs_engine.ENGINE_VOLATILITY else None
     # `plugin_names` is empty for a capability-registry-only profile such as
     # files_basic or shell_history_basic, which resolve per-platform through
     # capability_registry instead of PROFILE_PLUGINS. Without this guard the
@@ -2725,7 +2735,10 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
     if existing:
         raise HTTPException(status_code=409, detail=f"An active metadata analysis run already exists for this memory evidence: {existing.id}")
 
-    run = create_memory_metadata_run(db, evidence.id, profile, plan=analysis_plan)
+    try:
+        run = create_memory_metadata_run(db, evidence.id, profile, plan=analysis_plan, engine=run_engine)
+    except MemoryExecutionValidationError as exc:
+        raise HTTPException(status_code=409, detail={"error_code": exc.code, "message": exc.message}) from exc
     plugin_states = (
         {item["plugin"]: item["state"] for item in profile_plan.get("plugins", []) if isinstance(item, dict) and item.get("plugin")}
         if profile_plan is not None

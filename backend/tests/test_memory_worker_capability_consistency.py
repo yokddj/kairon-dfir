@@ -258,13 +258,15 @@ def test_runner_guardrail_allows_configured_plugins() -> None:
     from app.services.memory.kairon_findevil import KAIRON_FINDEVIL_PLUGIN
     from app.services.memory.kairon_linux_findevil import KAIRON_LINUX_FINDEVIL_PLUGIN, SOURCE_PLUGINS as LINUX_FINDEVIL_SOURCES
     from app.services.memory.kairon_psreadline import KAIRON_PSREADLINE_PLUGIN
+    from app.services.memory.memprocfs_engine import INVENTORY_PLUGINS
     from app.services.memory.memprocfs_runner import MEMPROCFS_PLUGINS
     from app.services.memory.volatility_runner import ALLOWED_VOLATILITY_PLUGINS
 
     settings = Settings()
 
     # Every configured plugin has a runner that accepts it: Volatility's allowlist, the
-    # MemProcFS runner for memprocfs.* plugins, or Kairon's own composite plugins.
-    assert set(settings.allowed_memory_plugins).issubset(ALLOWED_VOLATILITY_PLUGINS | MEMPROCFS_PLUGINS | {KAIRON_FINDEVIL_PLUGIN, KAIRON_PSREADLINE_PLUGIN, KAIRON_LINUX_FINDEVIL_PLUGIN})
+    # MemProcFS runner for memprocfs.* plugins, the MemProcFS engine's inventory analyses, or
+    # Kairon's own composite plugins.
+    assert set(settings.allowed_memory_plugins).issubset(ALLOWED_VOLATILITY_PLUGINS | MEMPROCFS_PLUGINS | INVENTORY_PLUGINS | {KAIRON_FINDEVIL_PLUGIN, KAIRON_PSREADLINE_PLUGIN, KAIRON_LINUX_FINDEVIL_PLUGIN})
     # Kairon's Linux checks run their source plugins through the same runner.
     assert set(LINUX_FINDEVIL_SOURCES) <= ALLOWED_VOLATILITY_PLUGINS

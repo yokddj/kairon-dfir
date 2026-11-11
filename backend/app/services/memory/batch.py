@@ -42,6 +42,8 @@ from app.services.memory.catalogue import (
     NETWORK_UNAVAILABLE_REASON,
     PROFILE_CATALOGUE,
 )
+from app.core.config import get_settings
+from app.services.memory.memprocfs_engine import VOLATILITY_ONLY_PROFILES
 from app.services.memory.execution import (
     MemoryExecutionValidationError,
     PROFILE_CAPABILITY,
@@ -200,6 +202,11 @@ def plan_run_all(
                     else SkipReason.PLUGIN_UNSUPPORTED.value
                 )
                 skipped.append({"profile": profile, "reason": reason})
+                continue
+            if analysis_plan.detected_platform == PlatformFamily.WINDOWS and profile in VOLATILITY_ONLY_PROFILES and str(get_settings().memory_windows_default_engine).lower() != "volatility":
+                # Windows runs on MemProcFS; these have no MemProcFS equivalent and run on
+                # Volatility only when the analyst asks for it.
+                skipped.append({"profile": profile, "reason": "volatility_on_request"})
                 continue
             if analysis_plan.detected_platform != PlatformFamily.WINDOWS and analysis_plan.readiness == ReadinessState.BLOCKED_SYMBOLS:
                 # Every plugin on these platforms needs the kernel's symbols;

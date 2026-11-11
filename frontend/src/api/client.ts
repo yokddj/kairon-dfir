@@ -1263,6 +1263,12 @@ export type MemoryCatalogueGateType =
 
 export type MemoryAnalysisCatalogueItem = {
   profile: string;
+  // Windows runs on MemProcFS; Volatility only on the analyst's request.
+  engine?: "memprocfs" | "volatility";
+  memprocfs_plugins?: string[];
+  volatility_only?: boolean;
+  volatility_on_request?: boolean;
+  volatility_extras?: string[];
   family: string;
   title: string;
   description: string;
@@ -7073,8 +7079,8 @@ export const api = {
     request<MemoryAnalysisBatch>(`/cases/${caseId}/memory/evidences/${evidenceId}/analysis-batches/${batchId}/cancel`, {
       method: "POST",
     }),
-  startMemoryScan: (caseId: string, evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only") =>
-    request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan?case_id=${encodeURIComponent(caseId)}`, { method: "POST", body: JSON.stringify({ profile }) }),
+  startMemoryScan: (caseId: string, evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only", engine?: "memprocfs" | "volatility") =>
+    request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan?case_id=${encodeURIComponent(caseId)}`, { method: "POST", body: JSON.stringify(engine ? { profile, engine } : { profile }) }),
   extractMemoryFile: (caseId: string, evidenceId: string, path: string) =>
     request<MemoryFileExtraction>(`/cases/${caseId}/memory/evidences/${evidenceId}/files/extract`, { method: "POST", body: JSON.stringify({ path }) }),
   getMemoryFileExtraction: (caseId: string, evidenceId: string, extractionId: string) =>
