@@ -8,7 +8,6 @@ from typing import Any
 from app.disk_images.registry import get_image_format_registry
 from app.ingest.velociraptor.zip_inventory import is_supported_archive_container, open_evidence_container
 from app.services.memory.probe import (
-    STATUS_AMBIGUOUS_RAW,
     STATUS_CONFIRMED_MEMORY,
     STATUS_PROBABLE_DISK,
     STATUS_PROBABLE_MEMORY,
@@ -115,7 +114,9 @@ class EvidenceClassifier:
                 fmt = str(disk_result.get("format") or "")
                 supported = bool(disk_result.get("supported", True))
                 confidence = str(disk_result.get("confidence") or "low")
-                if confidence == "extension" and memory_probe.status == STATUS_AMBIGUOUS_RAW:
+                # Only the extension (.dd/.img/.raw) says "disk": with no disk structure found, that
+                # is never enough to call it one -- whatever the memory probe made of it.
+                if confidence == "extension":
                     hint = self._memory_name_hint(path)
                     if hint:
                         return ClassificationResult(

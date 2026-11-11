@@ -92,19 +92,31 @@ def _matches(haystack: bytes, base: int) -> list[KernelSignature]:
     return found
 
 
-def scan_kernel_signatures(path: Path, *, max_seconds: float, stop_at_first: bool = False, max_signatures: int = 64) -> KernelScan:
+def scan_kernel_signatures(
+    path: Path,
+    *,
+    max_seconds: float,
+    stop_at_first: bool = False,
+    max_signatures: int = 64,
+    settle_seconds: float | None = None,
+) -> KernelScan:
     """Every kernel signature in the image, read in chunks for at most ``max_seconds``.
 
-    Never raises: an unreadable file is an empty, incomplete scan.
+    ``settle_seconds`` bounds how long the scan goes on once a first signature is found (to
+    corroborate it), so a large budget for finding the kernel in a big image is not also spent
+    after it has been found. Never raises: an unreadable file is an empty, incomplete scan.
     """
     result = KernelScan()
     started = time.monotonic()
+    first_found: float | None = None
     seen: set[int] = set()
     try:
         with Path(path).open("rb") as handle:
             tail = b""
             offset = 0
             while time.monotonic() - started <= max_seconds:
+                if first_found is not None and settle_seconds is not None and time.monotonic() - first_found > settle_seconds:
+                    break
                 chunk = handle.read(_CHUNK_BYTES)
                 if not chunk:
                     result.complete = True
@@ -115,6 +127,8 @@ def scan_kernel_signatures(path: Path, *, max_seconds: float, stop_at_first: boo
                         continue  # found again in the overlap
                     seen.add(signature.offset)
                     result.signatures.append(signature)
+                    if first_found is None:
+                        first_found = time.monotonic()
                     if stop_at_first or len(result.signatures) >= max_signatures:
                         result.bytes_scanned = offset + len(chunk)
                         return result
