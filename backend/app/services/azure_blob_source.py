@@ -34,6 +34,10 @@ from app.services.ai.crypto import is_sealed, mask, open_sealed, seal
 from app.services.remote_evidence_import import RemoteImportError, download_into_session
 
 logger = logging.getLogger(__name__)
+# The SDK logs every HTTP request and response with its headers at INFO (secrets redacted, but one
+# block per 4 MB chunk of a download); keep its warnings and errors only.
+logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+logging.getLogger("azure.identity").setLevel(logging.WARNING)
 
 AZURE_BLOB_SETTING_KEY = "AZURE_BLOB_SOURCE"
 _CREDENTIAL_INFO = b"kairon-azure-blob-source-credentials-v1"
