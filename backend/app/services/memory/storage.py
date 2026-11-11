@@ -43,6 +43,23 @@ def memory_extraction_dir(case_id: str, evidence_id: str, extraction_id: str) ->
     return path
 
 
+def memory_evidence_output_root(case_id: str, evidence_id: str | None = None) -> Path | None:
+    """The memory worker's output directory of a case (or one evidence of it), when separate from
+    the evidence storage; None when outputs live under the evidence root (removed with it)."""
+    output_root = get_settings().memory_output_root
+    if not output_root:
+        return None
+    path = output_root / "evidence" / case_id
+    return path / evidence_id if evidence_id else path
+
+
+def volatility_view_path(case_id: str, evidence_id: str) -> Path:
+    """Where the crash-dump copy of a memory image Volatility cannot read is kept
+    (app.services.memory.memprocfs_crashdump)."""
+    root = memory_evidence_output_root(case_id, evidence_id) or build_evidence_root(case_id, evidence_id)
+    return root / "memory" / "volatility-view" / "memory.dmp"
+
+
 def relative_to_data_dir(path: Path) -> str:
     resolved = path.resolve()
     settings = get_settings()

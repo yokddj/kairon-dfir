@@ -938,6 +938,58 @@ def _memory_scan_safe_fallback_job_timeout() -> int:
     return max([60, int(getattr(settings, "memory_job_timeout_seconds", 0) or 0), *derived])
 
 
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def enqueue_memory_output_cleanup(case_id: str, evidence_id: str | None = None) -> str | None:
+    """Remove a deleted case's (or evidence's) memory outputs: run directories, extractions and the
+    crash-dump copy Volatility reads. They live in the memory worker's output directory, which only
+    that worker can write, so the deletion happens there."""
+    try:
+        return memory_queue.enqueue("app.workers.tasks.run_memory_output_cleanup", case_id, evidence_id, job_timeout=1800).id
+    except Exception:  # noqa: BLE001
+        logger.warning("could not queue memory output cleanup", extra={"case_id": case_id, "evidence_id": evidence_id}, exc_info=True)
+        return None
+
+
+def run_memory_output_cleanup(case_id: str, evidence_id: str | None = None) -> dict:
+    """Delete the memory outputs of a deleted case or evidence, then those of any case or evidence
+    that no longer exists (left behind before deletion cleaned them)."""
+    from app.models.case import Case
+    from app.services.memory.storage import memory_evidence_output_root
+
+    removed: list[str] = []
+    root = memory_evidence_output_root(case_id) if case_id and _UUID_RE.match(case_id) else None
+    if root is None:
+        return {"removed": removed}
+    cases_root = root.parent
+
+    def remove(path: Path) -> None:
+        if path.is_dir() and cases_root.resolve() in path.resolve().parents:
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(path.relative_to(cases_root).as_posix())
+
+    with SessionLocal() as db:
+        if evidence_id and _UUID_RE.match(evidence_id):
+            if db.get(Evidence, evidence_id) is None:
+                remove(root / evidence_id)
+        elif db.get(Case, case_id) is None:
+            remove(root)
+        if cases_root.is_dir():
+            for case_dir in cases_root.iterdir():
+                if not _UUID_RE.match(case_dir.name):
+                    continue
+                if db.get(Case, case_dir.name) is None:
+                    remove(case_dir)
+                    continue
+                for evidence_dir in case_dir.iterdir():
+                    if _UUID_RE.match(evidence_dir.name) and db.get(Evidence, evidence_dir.name) is None:
+                        remove(evidence_dir)
+    if removed:
+        logger.info("memory outputs removed: %s", ", ".join(removed))
+    return {"removed": removed}
+
+
 def enqueue_memory_preparation(evidence_id: str) -> str:
     """Enqueue the OS-agnostic memory preparation task.
 

@@ -4992,8 +4992,14 @@ def delete_evidence(evidence_id: str, db: Session = Depends(get_db)) -> None:
         case_id=item.case_id,
         evidence_id=item.id,
     )
+    case_id, evidence_id, was_memory = item.case_id, item.id, item.evidence_type == EvidenceType.memory_dump
     db.delete(item)
     db.commit()
+    if was_memory:
+        # Its run outputs and crash-dump copy live in the memory worker's own directory.
+        from app.workers.tasks import enqueue_memory_output_cleanup
+
+        enqueue_memory_output_cleanup(case_id, evidence_id)
 
 
 @router.get("/api/cases/{case_id}/artifacts", response_model=list[ArtifactRead])

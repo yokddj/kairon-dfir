@@ -144,6 +144,21 @@ symbols either. To get every Volatility view, add the symbols: let the memory wo
 (`MEMORY_SYMBOL_DIRECT_DOWNLOAD_ENABLED`, see [Managed Windows symbols](memory_symbols.md)) or
 import them.
 
+### When Volatility finds no memory layer: MemProcFS's crash dump
+
+Some raw captures defeat Volatility before symbols even matter: its page-map scan finds no page
+tables (DTB), so it builds no memory layer (`INVALID_MEMORY_LAYER`, "Volatility could not find
+this image's page tables"). MemProcFS finds them its own way and presents the memory it
+reconstructed as a Windows full crash dump, whose header carries the DTB. When `windows.info` fails
+that way, Kairon has MemProcFS write that crash dump once for the evidence
+(`memory/volatility-view/memory.dmp` in the memory worker's output directory), retries on it, and
+from then on every Volatility plugin, the symbol probe and the preparation read the copy; MemProcFS's
+own plugins keep reading the original image. The copy is about the size of the image (a 4 GB test
+image gave 6 GB, written in 13 s) and is made only when that much free space remains on top of
+`MEMORY_UPLOAD_MIN_FREE_SPACE_BYTES`; otherwise the run says how much is needed. Deleting the
+evidence or its case removes it. `MEMORY_VOLATILITY_CRASHDUMP_VIEW_ENABLED=false` turns it off.
+The kernel's symbols are still needed afterwards, as for any image (see above).
+
 ### Find Evil
 
 The **Find Evil** tab lists indicators from two sources; the **Source** column says which (both, when the two tools report the same indicator: same process and type, and for memory and module indicators the same address).

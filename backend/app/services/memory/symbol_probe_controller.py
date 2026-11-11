@@ -135,6 +135,14 @@ def _extract_layer_from_stderr(stderr: bytes) -> str | None:
     return None
 
 
+def _volatility_input(evidence: Evidence, evidence_path: Path) -> Path:
+    """MemProcFS's crash-dump copy of the image when Volatility needed one, else the image."""
+    from app.services.memory.storage import volatility_view_path
+
+    view = volatility_view_path(evidence.case_id, evidence.id)
+    return view if view.is_file() else Path(evidence_path)
+
+
 def probe_evidence_symbol_requirement(
     db,
     *,
@@ -187,7 +195,7 @@ def probe_evidence_symbol_requirement(
 
     payload: dict[str, object] | None = None
     try:
-        payload = probe_windows_symbol_identity(access.path, work_dir)
+        payload = probe_windows_symbol_identity(_volatility_input(evidence, access.path), work_dir)
     except subprocess.TimeoutExpired:
         return ProbeResult(
             evidence_id=evidence.id,
@@ -370,7 +378,7 @@ def _probe_without_payload(
     try:
         result = run_plugin(
             "windows.info",
-            access.path,
+            _volatility_input(evidence, access.path),
             work_dir,
             timeout_seconds=timeout,
             max_output_bytes=64 * 1024,
