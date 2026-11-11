@@ -77,13 +77,15 @@ NORMALIZATION_VERSION = "memory_process_canonical_v1"
 
 # Plugin precedence (lower index = higher priority).  Linux names are additive;
 # the relative order of all Windows plugins is unchanged.
-NAME_PRECEDENCE = ("windows.pslist", "linux.pslist", "windows.psscan", "windows.pstree", "linux.pstree")
-PPID_PRECEDENCE = ("windows.pstree", "linux.pstree", "windows.pslist", "linux.pslist", "windows.psscan")
-CREATE_TIME_PRECEDENCE = ("windows.pslist", "linux.pslist", "windows.psscan", "windows.pstree", "linux.pstree")
-EXIT_TIME_PRECEDENCE = ("windows.psscan", "windows.pslist", "linux.pslist", "windows.pstree", "linux.pstree")
+# memprocfs.pslist stands in for windows.pslist when the kernel symbols are missing (it walks the
+# same active process list and reads the command line too); it never runs alongside it.
+NAME_PRECEDENCE = ("windows.pslist", "linux.pslist", "windows.psscan", "windows.pstree", "linux.pstree", "memprocfs.pslist")
+PPID_PRECEDENCE = ("windows.pstree", "linux.pstree", "windows.pslist", "linux.pslist", "windows.psscan", "memprocfs.pslist")
+CREATE_TIME_PRECEDENCE = ("windows.pslist", "linux.pslist", "windows.psscan", "windows.pstree", "linux.pstree", "memprocfs.pslist")
+EXIT_TIME_PRECEDENCE = ("windows.psscan", "windows.pslist", "linux.pslist", "windows.pstree", "linux.pstree", "memprocfs.pslist")
 
-CMDLINE_PLUGINS = {"windows.cmdline"}
-PSLIST_PLUGINS = {"windows.pslist", "linux.pslist"}
+CMDLINE_PLUGINS = {"windows.cmdline", "memprocfs.pslist"}
+PSLIST_PLUGINS = {"windows.pslist", "linux.pslist", "memprocfs.pslist"}
 PSSCAN_PLUGINS = {"windows.psscan"}
 PSTREE_PLUGINS = {"windows.pstree", "linux.pstree"}
 

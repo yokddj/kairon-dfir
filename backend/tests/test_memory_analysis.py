@@ -3193,6 +3193,86 @@ def test_windows_info_failure_marks_one_failed_and_later_plugins_skipped(db_sess
     assert run.plugins_skipped == 3
 
 
+@pytest.mark.parametrize(
+    ("profile", "plugins", "fallback", "csv_text"),
+    [
+        (
+            "processes_basic",
+            ["windows.info", "windows.pslist", "windows.pstree", "windows.cmdline"],
+            "memprocfs.processes",
+            'PID,PPID,Name,User,CreateTime,ExitTime,Wow64,EPROCESS,CommandLine\n4,0,System,SYSTEM,"2024-02-29 09:25:57",,0,0xffff1,""\n7432,6120,powershell.exe,analyst,"2024-03-22 12:40:01",,0,0xffff2,"powershell.exe -nop"\n',
+        ),
+        (
+            "network_basic",
+            ["windows.netscan", "windows.netstat"],
+            "memprocfs.network",
+            'Proto,State,SrcAddr,SrcPort,DstAddr,DstPort,Time,Object,PID,Process\nTCP4,ESTABLISHED,192.0.2.10,49733,203.0.113.5,443,"",0x1,7432,powershell.exe\n',
+        ),
+    ],
+)
+def test_missing_symbols_fall_back_to_memprocfs(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile, plugins, fallback, csv_text) -> None:
+    """Volatility cannot run without the kernel's symbols; MemProcFS, which needs none, fills the
+    profile's view instead of the run stopping."""
+    from app.services.memory.memprocfs_inventory import csv_rows
+
+    _case(db_session)
+    evidence_file = tmp_path / "memory.mem"
+    evidence_file.write_bytes(b"synthetic")
+    evidence = _evidence(db_session, stored_path=str(evidence_file))
+    run = MemoryScanRun(case_id=CASE_ID, evidence_id=evidence.id, backend="volatility3", profile=profile, status="queued", requested_plugin_count=len(plugins), plugin_count=len(plugins), metadata_json={"plugins": plugins})
+    db_session.add(run)
+    db_session.commit()
+    for plugin in plugins:
+        db_session.add(MemoryPluginRun(memory_scan_run_id=run.id, case_id=CASE_ID, evidence_id=evidence.id, plugin=plugin, status="pending"))
+    db_session.commit()
+
+    class SessionContext:
+        def __enter__(self):
+            return db_session
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(memory_execution, "SessionLocal", lambda: SessionContext())
+    monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _id: SimpleNamespace(evidence=evidence, path=evidence_file, size_bytes=evidence_file.stat().st_size))
+    monkeypatch.setattr(memory_execution, "validate_current_process_output_access", lambda: tmp_path)
+    monkeypatch.setattr(memory_execution.backend_readiness, "check_volatility3_backend", lambda: {"ready": True, "version": "Volatility 3 Framework 2.28.0"})
+    monkeypatch.setattr(memory_execution, "memory_run_dir", lambda *_args: tmp_path / "run")
+    monkeypatch.setattr(memory_execution, "relative_to_data_dir", lambda _path: "memory-output/run")
+    monkeypatch.setattr(memory_execution, "write_atomic_json", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(memory_execution, "probe_windows_symbol_identity", lambda *_args: None)
+    monkeypatch.setattr(memory_execution, "memprocfs_available", lambda: True)
+    monkeypatch.setattr(memory_execution.volatility_runner, "probe_volatility_plugin", lambda _plugin: True)
+    monkeypatch.setattr(memory_execution, "_run_canonical_materialization", lambda *_args, **_kwargs: None)
+    indexed: list[dict] = []
+    monkeypatch.setattr(memory_execution, "index_memory_documents", lambda _case, docs: indexed.extend(docs) or {"indexed": len(docs)})
+    monkeypatch.setattr(memory_execution, "_index_artifact_results", lambda _case, results, _db, _run: indexed.extend(item for result in results.values() for item in result.get("items", [])) or {})
+
+    def no_symbols(plugin, *_args, **_kwargs):
+        raise volatility_runner.VolatilityRunnerError("SYMBOLS_UNAVAILABLE", f"{plugin} could not resolve required symbols.", stderr=b"symbols", return_code=1, stdout_length=0, stderr_length=7)
+
+    monkeypatch.setattr(memory_execution, "run_plugin", no_symbols)
+    asked: list[str] = []
+
+    def inventory(plugin, *_args, **_kwargs):
+        asked.append(plugin)
+        return volatility_runner.VolatilityRunResult(argv_display=["memprocfs"], stdout=json.dumps(csv_rows(csv_text)).encode(), stderr=b"", duration_ms=5)
+
+    monkeypatch.setattr(memory_execution, "run_memprocfs_inventory", inventory)
+
+    memory_execution.run_memory_metadata_scan(run.id)
+    db_session.refresh(run)
+    plugin_runs = {item.plugin: item for item in db_session.query(MemoryPluginRun).filter(MemoryPluginRun.memory_scan_run_id == run.id).all()}
+
+    assert asked == [fallback]
+    assert run.status == "completed_with_errors"
+    assert run.metadata_json["symbol_fallback"]["plugin"] == fallback
+    assert plugin_runs[plugins[0]].status == "failed"
+    assert plugin_runs[fallback].status == "completed"
+    assert {plugin_runs[name].status for name in plugins[1:]} == {"skipped_dependency"}
+    assert any(doc.get("process", {}).get("pid") == 7432 or doc.get("pid") == 7432 for doc in indexed)
+
+
 HOST_ID = "dddddddd-4444-4444-8444-dddddddddddd"
 OTHER_HOST_ID = "eeeeeeee-5555-4555-8555-eeeeeeeeeeee"
 

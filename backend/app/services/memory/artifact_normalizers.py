@@ -217,6 +217,34 @@ def normalize_windows_netscan(
     }
 
 
+_MEMPROCFS_PROTOCOLS = {"TCP4": "TCPv4", "TCP6": "TCPv6", "UDP4": "UDPv4", "UDP6": "UDPv6"}
+
+
+def memprocfs_net_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """MemProcFS's net.csv rows in the columns windows.netscan uses (protocol written as
+    netscan does, UTC time in ISO form, no address for an unbound listener)."""
+    converted = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        proto = str(row.get("Proto") or "").strip()
+        remote = str(row.get("DstAddr") or "").strip()
+        time_text = str(row.get("Time") or "").strip().removesuffix(" UTC").strip()
+        converted.append({
+            "Proto": _MEMPROCFS_PROTOCOLS.get(proto.upper(), proto or None),
+            "LocalAddr": row.get("SrcAddr") or None,
+            "LocalPort": row.get("SrcPort"),
+            "ForeignAddr": None if remote in ("", "***") else remote,
+            "ForeignPort": row.get("DstPort"),
+            "State": row.get("State") or None,
+            "PID": row.get("PID"),
+            "Owner": row.get("Process") or None,
+            "Created": f"{time_text[:10]}T{time_text[11:]}+00:00" if len(time_text) == 19 else (time_text or None),
+            "Offset": row.get("Object") or None,
+        })
+    return converted
+
+
 def normalize_linux_sockstat(
     payload: Any,
     *,

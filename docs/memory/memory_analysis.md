@@ -123,6 +123,27 @@ Linux plugins need a symbol file for the exact kernel: a Volatility 3 ISF or a V
 
 **Run all** runs every profile above, in this order: metadata, processes, extended processes, shell history, files, Find Evil, network, modules, handles, kernel, suspicious memory.
 
+### Without the kernel's symbols: MemProcFS
+
+Volatility needs the symbols (ISF) of the image's exact Windows kernel; when they are not in the
+cache, every Volatility plugin fails with `SYMBOLS_UNAVAILABLE`. Then `processes_basic` and
+`network_basic` do not stop: the run goes on with MemProcFS, which walks the same kernel
+structures with its own built-in knowledge and needs no symbols.
+
+- `processes_basic` → `memprocfs.processes`: MemProcFS's process list (`\forensic\csv\process.csv`)
+  with parent, user, create/exit time and command line, shown in the Processes view like
+  `pslist` + `pstree` + `cmdline`.
+- `network_basic` → `memprocfs.network`: its connections and listeners (`net.csv`), shown in the
+  Network view like `netscan`.
+
+The run ends as *completed with errors*: the Volatility plugin that hit the missing symbols is
+listed as failed (with the reason) and the rest of the profile as skipped; the MemProcFS step
+completes. On a 4 GB Windows Server 2022 image it listed the same 166 processes (153 with a command
+line) in 49 s, and 5,163 connections in 29 s. Find Evil and the MemProcFS console text need no
+symbols either. To get every Volatility view, add the symbols: let the memory worker download them
+(`MEMORY_SYMBOL_DIRECT_DOWNLOAD_ENABLED`, see [Managed Windows symbols](memory_symbols.md)) or
+import them.
+
 ### Find Evil
 
 The **Find Evil** tab lists indicators from two sources; the **Source** column says which (both, when the two tools report the same indicator: same process and type, and for memory and module indicators the same address).

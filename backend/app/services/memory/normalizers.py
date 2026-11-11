@@ -117,6 +117,10 @@ def _process_from_row(row: dict[str, Any], plugin: str, *, command_limit: int = 
         "session_id": _int_or_none(_lookup(row, "SessionId", "Session ID")),
         "wow64": _lookup(row, "Wow64", "IsWow64"),
     }
+    if plugin.startswith("memprocfs."):
+        user = _str_or_none(_lookup(row, "User"), 512)
+        if user is not None:
+            process_fields["user"] = user
     if plugin.startswith("linux."):
         uid = _int_or_none(_lookup(row, "UID", "Uid", "User ID"))
         user = _str_or_none(_lookup(row, "User", "Username", "USER"), 512)
@@ -177,6 +181,54 @@ def normalize_windows_psscan(payload: Any, **kwargs: Any) -> dict[str, Any]:
 
 def normalize_windows_cmdline(payload: Any, **kwargs: Any) -> dict[str, Any]:
     return _normalize_process_plugin(payload, "windows.cmdline", **kwargs)
+
+
+MEMPROCFS_PROCESS_PLUGIN = "memprocfs.pslist"
+
+
+def _memprocfs_time(value: Any) -> str | None:
+    """MemProcFS writes UTC times as ``2024-02-29 09:25:57`` (sometimes with `` UTC``)."""
+    text = str(value or "").strip().removesuffix(" UTC").strip()
+    if len(text) == 19 and text[4] == "-" and text[10] == " ":
+        return f"{text[:10]}T{text[11:]}+00:00"
+    return text or None
+
+
+def memprocfs_process_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """MemProcFS's process.csv rows in the columns windows.pslist / windows.cmdline use."""
+    converted = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        converted.append({
+            "PID": row.get("PID"),
+            "PPID": row.get("PPID"),
+            "ImageFileName": row.get("Name") or row.get("ShortName"),
+            "CreateTime": _memprocfs_time(row.get("CreateTime")),
+            "ExitTime": _memprocfs_time(row.get("ExitTime")),
+            "Offset(V)": row.get("EPROCESS"),
+            "Args": row.get("CommandLine") or None,
+            "Wow64": str(row.get("Wow64") or "").strip() == "1",
+            "User": row.get("User") or None,
+            "IntegrityLevel": row.get("IntegrityLevel") or None,
+            "Path": row.get("UserPath") or row.get("KernelPath") or None,
+        })
+    return converted
+
+
+def normalize_memprocfs_processes(payload: Any, **kwargs: Any) -> dict[str, Any]:
+    """MemProcFS's process list, standing in for windows.pslist + pstree + cmdline when the kernel
+    symbols Volatility needs are missing: it walks the same active process list, and reads each
+    process's parent and command line."""
+    normalized = _normalize_process_plugin(memprocfs_process_rows(_rows(payload)), MEMPROCFS_PROCESS_PLUGIN, **kwargs)
+    edges = []
+    for item in normalized["processes"]:
+        ppid = item["process"].get("ppid")
+        pid = item["process"].get("pid")
+        if ppid is not None and pid is not None:
+            edges.append({"parent_pid": ppid, "child_pid": pid, "edge_type": "parent_child", "source_plugin": MEMPROCFS_PROCESS_PLUGIN, "confidence": "reported_by_plugin", "warnings": []})
+    normalized["edges"] = edges
+    return normalized
 
 
 def normalize_linux_pslist(payload: Any, **kwargs: Any) -> dict[str, Any]:
@@ -258,6 +310,9 @@ def merge_memory_process_results(results: list[dict[str, Any]], *, case_id: str,
             only_prefix = next(iter(plugin_prefixes))
             if only_prefix in {"windows", "linux"}:
                 os_family = only_prefix
+            elif only_prefix == "memprocfs":
+                # MemProcFS reads Windows images only.
+                os_family = "windows"
         docs.append({
             "document_id": f"{memory_run_id}:memory_process:{identity}",
             "case_id": case_id,
@@ -265,7 +320,7 @@ def merge_memory_process_results(results: list[dict[str, Any]], *, case_id: str,
             "memory_run_id": memory_run_id,
             "source_layer": "memory",
             "memory_artifact_type": "memory_process",
-            "backend": "volatility3",
+            "backend": "memprocfs" if plugin_prefixes == {"memprocfs"} else "volatility3",
             "plugins": sorted(item.get("plugins") or []),
             "os": {"family": os_family},
             "process": item["process"],

@@ -27,6 +27,8 @@ from app.services.memory.artifact_indexing import (
 )
 from app.services.memory.artifact_normalizers import (
     NORMALIZATION_VERSION,
+    _rows as _artifact_rows,
+    memprocfs_net_rows,
     merge_module_documents,
     normalize_linux_bash,
     normalize_linux_lsmod,
@@ -51,7 +53,7 @@ from app.services.memory.artifact_normalizers import (
     normalize_windows_vadinfo,
 )
 from app.services.memory.indexing import index_memory_documents, index_memory_system_info
-from app.services.memory.normalizers import merge_memory_process_results, normalize_linux_psaux, normalize_linux_pslist, normalize_linux_psscan, normalize_linux_pstree, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
+from app.services.memory.normalizers import merge_memory_process_results, normalize_memprocfs_processes, normalize_linux_psaux, normalize_linux_pslist, normalize_linux_psscan, normalize_linux_pstree, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
 from app.services.memory.pids import normalize_pid
 from app.services.memory.process_entities import renormalize_documents
 from app.services.memory.storage import memory_run_dir, relative_to_data_dir, write_atomic_bytes, write_atomic_json
@@ -60,7 +62,7 @@ from app.services.memory.volatility_runner import VolatilityRunnerError, probe_w
 from app.services.memory.kairon_findevil import KAIRON_FINDEVIL_PLUGIN, run_kairon_findevil
 from app.services.memory.kairon_psreadline import KAIRON_PSREADLINE_PLUGIN, run_kairon_psreadline
 from app.services.memory.kairon_linux_findevil import KAIRON_LINUX_FINDEVIL_PLUGIN, run_kairon_linux_findevil
-from app.services.memory.memprocfs_runner import CONSOLE_PLUGIN as MEMPROCFS_CONSOLE_PLUGIN, MEMPROCFS_PLUGINS, TIMELINE_DIRNAME as MEMPROCFS_TIMELINE_DIRNAME, run_console as run_memprocfs_console, run_findevil
+from app.services.memory.memprocfs_runner import CONSOLE_PLUGIN as MEMPROCFS_CONSOLE_PLUGIN, INVENTORY_PLUGINS as MEMPROCFS_INVENTORY_PLUGINS, MEMPROCFS_PLUGINS, NETWORK_PLUGIN as MEMPROCFS_NETWORK_PLUGIN, PROCESSES_PLUGIN as MEMPROCFS_PROCESSES_PLUGIN, TIMELINE_DIRNAME as MEMPROCFS_TIMELINE_DIRNAME, memprocfs_available, run_console as run_memprocfs_console, run_findevil, run_inventory as run_memprocfs_inventory
 from app.services.memory.memprocfs_timeline import index_memprocfs_timeline
 from app.services.memory import volatility_runner
 from app.services.memory.symbol_control import record_symbol_requirement
@@ -83,7 +85,11 @@ PROFILE_PLUGINS = {
     "kernel_basic": ["windows.modules", "windows.driverscan", "windows.info"],
     "suspicious_memory": ["windows.malfind", "windows.vadinfo"],
 }
-PROCESS_PLUGINS = {"windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "linux.pslist", "linux.pstree", "linux.psaux", "linux.psscan"}
+PROCESS_PLUGINS = {"windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "linux.pslist", "linux.pstree", "linux.psaux", "linux.psscan", "memprocfs.processes"}
+# When windows.info fails because the kernel's symbols are not in the cache, these profiles go on
+# with MemProcFS, which needs no symbols, instead of stopping: the processes and network views are
+# filled from MemProcFS's own walk of the same kernel structures.
+SYMBOL_FALLBACK_PLUGINS = {"processes_basic": "memprocfs.processes", "network_basic": "memprocfs.network"}
 PROCESS_OBSERVATION_PLUGINS = {"windows.envars", "windows.getsids", "windows.privileges"}
 OPTIONAL_RUNTIME_PROBED_PLUGINS = PROCESS_OBSERVATION_PLUGINS | {"windows.netscan", "windows.netstat", "windows.vadinfo"}
 ARTIFACT_PROFILES = {
@@ -96,6 +102,7 @@ ARTIFACT_PROFILES = {
 ARTIFACT_PLUGIN_NORMALIZER = {
     "windows.netscan": "memory_network_connection",
     "windows.netstat": "memory_network_connection",
+    "memprocfs.network": "memory_network_connection",
     "windows.dlllist": "memory_process_module",
     "windows.ldrmodules": "memory_process_module",
     "windows.handles": "memory_handle",
@@ -172,6 +179,9 @@ ARTIFACT_PLUGIN_LIMITS = {
     # 4 GB image); each source plugin keeps its own bound inside this one.
     # windows.filescan, then windows.dumpfiles on the PowerShell history files it finds.
     "kairon.psreadline": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    # MemProcFS's forensic scan, then its process or network inventory (symbol-less fallback).
+    "memprocfs.processes": {"timeout_seconds": 1800, "max_output_bytes": 64 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "memprocfs.network": {"timeout_seconds": 1800, "max_output_bytes": 64 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "memprocfs.console": {"timeout_seconds": 900, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "kairon.findevil": {"timeout_seconds": 2400, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     # Linux: psscan and malfind scan all of memory or every process's mappings; lsof walks every
@@ -589,6 +599,8 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             manifest_plugins = []
             fatal = False
             blocking_error: VolatilityRunnerError | None = None
+            symbol_fallback: str | None = None
+            symbol_blocked_plugin = "windows.info"
             for plugin_index, plugin in enumerate(plugins, start=1):
                 plugin_run = _plugin_run_for(db, run, plugin)
                 if time.monotonic() >= profile_deadline:
@@ -752,10 +764,28 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                         requirement = probe_windows_symbol_identity(validated.path, output_dir)
                         if requirement:
                             record_symbol_requirement(db, run, plugin_run.id, requirement)
+                    if exc.code == "SYMBOLS_UNAVAILABLE" and run.profile in SYMBOL_FALLBACK_PLUGINS and memprocfs_available():
+                        # The rest of the profile needs the same symbols: MemProcFS stands in.
+                        symbol_fallback = SYMBOL_FALLBACK_PLUGINS[run.profile]
+                        symbol_blocked_plugin = plugin
+                        break
                     if plugin == "windows.info" or exc.code == "PLUGIN_CANCELLED":
                         fatal = True
                         break
                     continue
+            if symbol_fallback:
+                _mark_dependency_skipped(db, run, blocking_plugin=symbol_blocked_plugin)
+                _run_symbol_fallback(
+                    db,
+                    run,
+                    symbol_fallback,
+                    validated.path,
+                    output_dir,
+                    raw_outputs=raw_outputs,
+                    manifest_plugins=manifest_plugins,
+                    process_results=process_results,
+                    artifact_results=artifact_results,
+                )
             write_atomic_json(output_dir / "run_manifest.json", {"run_id": run.id, "evidence_id": run.evidence_id, "backend": "volatility3", "profile": run.profile, "plugins": manifest_plugins, "completed_at": utc_iso()})
             run.metadata_json = {
                 **(run.metadata_json or {}),
@@ -935,6 +965,8 @@ def _normalize_artifact_payload(
         return normalize_windows_netscan(payload, source_plugin=plugin, **common)
     if plugin == "windows.netstat":
         return normalize_windows_netscan(payload, source_plugin=plugin, **common)
+    if plugin == MEMPROCFS_NETWORK_PLUGIN:
+        return normalize_windows_netscan(memprocfs_net_rows(_artifact_rows(payload)), source_plugin=plugin, **common)
     if plugin == "windows.dlllist":
         return normalize_windows_dlllist(payload, source_plugin=plugin, **common)
     if plugin == "windows.ldrmodules":
@@ -1233,6 +1265,15 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
             max_output_bytes=max_output_bytes,
             cancellation_check=cancellation_requested,
         )
+    elif plugin in MEMPROCFS_INVENTORY_PLUGINS:
+        result = run_memprocfs_inventory(
+            plugin,
+            evidence_path,
+            output_dir,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+            cancellation_check=cancellation_requested,
+        )
     elif plugin in MEMPROCFS_PLUGINS:
         result = run_findevil(
             evidence_path,
@@ -1384,6 +1425,8 @@ def _normalize_process_payload(plugin: str, payload: Any) -> dict[str, Any]:
     kwargs = {"command_limit": int(settings.memory_max_command_line_length), "raw_limit": int(settings.memory_max_raw_field_length)}
     if plugin == "windows.pslist":
         return normalize_windows_pslist(payload, **kwargs)
+    if plugin == MEMPROCFS_PROCESSES_PLUGIN:
+        return normalize_memprocfs_processes(payload, **kwargs)
     if plugin == "windows.pstree":
         return normalize_windows_pstree(payload, **kwargs)
     if plugin == "windows.psscan":
@@ -1603,6 +1646,65 @@ def _fail_run(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun | Non
         _recount_plugin_states(run)
     db.commit()
     logger.warning("memory scan failed", extra={"run_id": run.id, "status": run.status, "error_code": code})
+
+
+def _run_symbol_fallback(
+    db: Session,
+    run: MemoryScanRun,
+    plugin: str,
+    evidence_path,
+    output_dir,
+    *,
+    raw_outputs: dict[str, Any],
+    manifest_plugins: list[dict[str, Any]],
+    process_results: list[dict[str, Any]],
+    artifact_results: dict[str, dict[str, Any]],
+) -> None:
+    """Run MemProcFS's inventory in place of the profile's Volatility plugins, which could not run
+    without the kernel's symbols. Its rows go through the same normalizers."""
+    plugin_run = _plugin_run_for(db, run, plugin)
+    run.metadata_json = {
+        **(run.metadata_json or {}),
+        "symbol_fallback": {"plugin": plugin, "reason": "SYMBOLS_UNAVAILABLE", "backend": "memprocfs"},
+        "progress": {**((run.metadata_json or {}).get("progress") or {}), "current_plugin": plugin, "plugin_started_at": utc_iso(), "last_heartbeat": utc_iso()},
+    }
+    db.commit()
+    try:
+        payload, raw_info, duration_ms, argv_display = _execute_plugin(db, run, plugin_run, plugin, evidence_path, output_dir)
+        raw_outputs[plugin] = raw_info
+        manifest_plugins.append({"plugin": plugin, "argv": argv_display, "raw_output": raw_info, "duration_ms": duration_ms})
+        if plugin == MEMPROCFS_PROCESSES_PLUGIN:
+            process_results.append(_normalize_process_payload(plugin, payload))
+            normalized_type = "memory_process"
+        else:
+            artifact_results[plugin] = _normalize_artifact_payload(
+                plugin, payload, case_id=run.case_id, evidence_id=run.evidence_id, scan_run_id=run.id, plugin_run_id=plugin_run.id,
+            )
+            normalized_type = ARTIFACT_PLUGIN_NORMALIZER[plugin]
+        plugin_run.status = "completed"
+        plugin_run.completed_at = utc_now_naive()
+        plugin_run.duration_ms = duration_ms
+        plugin_run.row_count = _row_count(payload)
+        plugin_run.output_relative_path = raw_info["path"]
+        plugin_run.output_sha256 = raw_info["sha256"]
+        plugin_run.output_size = raw_info["size"]
+        plugin_run.metadata_json = {
+            **(plugin_run.metadata_json or {}),
+            "argv": argv_display,
+            "normalized_type": normalized_type,
+            "raw_output_retained": True,
+            "capability_state": "available",
+            "symbol_fallback_for": "windows.info",
+        }
+        run.plugins_completed += 1
+    except VolatilityRunnerError as exc:
+        _write_plugin_error(run, plugin_run, exc)
+        plugin_run.status = "timed_out" if exc.code == "PLUGIN_TIMEOUT" else "cancelled" if exc.code == "PLUGIN_CANCELLED" else "failed"
+        plugin_run.completed_at = utc_now_naive()
+        plugin_run.error_code = exc.code
+        plugin_run.error_message = _sanitize_message(exc.message)
+        run.plugins_failed += 1
+    db.commit()
 
 
 def _mark_dependency_skipped(db: Session, run: MemoryScanRun, *, blocking_plugin: str) -> None:
