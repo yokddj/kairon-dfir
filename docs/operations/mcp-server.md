@@ -23,9 +23,10 @@ the in-app AI assistant already uses (see
 [operations/ai-assistant.md](ai-assistant.md)) — `describe_case`,
 `search_events`, `get_timeline`, `list_findings`, `get_process_tree`, and the
 rest of that table. Nothing is duplicated: the server fetches the tool
-catalog from the backend at startup and executes a call by calling the
-backend back, so a tool's behavior, its parameters and its description are
-defined once.
+catalog from the backend at startup (and again every 5 minutes, so a backend
+upgrade reaches connected clients without a restart) and executes a call by
+calling the backend back, so a tool's behavior, its parameters and its
+description are defined once.
 
 One tool exists only here, not in the in-app assistant's set: **`list_cases`**,
 to resolve a case by name before calling any of the others, all of which take
@@ -48,9 +49,10 @@ a browser session. A service token's scope is every case on the deployment,
 by design: granting access case by case, the way a human user's access is
 granted, would mean re-granting it every time a new case is opened, which
 does not fit an always-on integration. A service token is never an
-administrator and can never reach anything administrative (user management,
-other tokens, case access grants) or reach a write endpoint, regardless of
-scope.
+administrator: it is refused on every write (any method but `GET`/`HEAD`)
+and, even for reads, on the administration API (`/api/admin/...`, including
+user management, other tokens and performance tuning), instance settings
+(`/api/system/settings`) and storage configuration (`/api/storage/...`).
 
 Create one as an administrator:
 
@@ -94,6 +96,20 @@ address configurable via `KAIRON_MCP_BIND`), reachable at
 `http://localhost:8800/mcp`. Point an MCP client that supports a remote
 server at that URL.
 
+The HTTP transport checks the `Host` and `Origin` headers (protection against
+DNS rebinding: a web page in the analyst's browser must not be able to talk
+to this server). Localhost is always accepted. To let a client on another
+machine connect through a VPN name or a private address, bind beyond
+localhost **and** list that name, or the server answers `421`:
+
+```bash
+# .env
+KAIRON_MCP_BIND=192.0.2.1
+KAIRON_MCP_ALLOWED_HOSTS=kairon.vpn.example,192.0.2.1
+```
+
+Standalone: `kairon-mcp-server --transport http --host 0.0.0.0 --allowed-host kairon.vpn.example`.
+
 ### Standalone, for a local MCP client
 
 Many desktop MCP clients launch a server themselves over stdio rather than
@@ -114,8 +130,8 @@ Kairon's scope.
 
 ## Tools
 
-The catalog is fetched live from `GET /api/ai/tools`, so it always matches
-what the in-app assistant can do — see the table in
+The catalog comes from `GET /api/ai/tools` (refreshed every 5 minutes), so it
+matches what the in-app assistant can do — see the table in
 [operations/ai-assistant.md](ai-assistant.md#what-it-is-and-what-it-is-not)
 for the current list and what each tool reads. Every tool there takes a
 `case_id` here (resolved via `list_cases`); none of them do inside the
@@ -130,6 +146,9 @@ in-app assistant, where the case is already known.
 - Treat the token like a password: anyone who holds it can read every case
   on the deployment for as long as it is valid. Scope its lifetime with
   `expires_in_days` where that fits, and revoke it immediately if it leaks.
+- A `case_id` must be a single id as returned by `list_cases`; anything with
+  `/`, `..`, `?` or `#` is refused before any request, so text planted in
+  case data cannot steer a tool call to another API endpoint.
 - The streamable HTTP transport has no authentication of its own at the
   MCP layer; put it behind the same network boundary (VPN, private network,
   authenticated proxy) the rest of the deployment already requires (see

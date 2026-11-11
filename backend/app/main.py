@@ -79,6 +79,8 @@ PUBLIC_PATH_PREFIXES = [
     "/api/redoc",
 ]
 PUBLIC_PATH_PREFIXES_SET = set(PUBLIC_PATH_PREFIXES)
+# Paths a service token is refused on even for GET (see _authenticate_service_token).
+SERVICE_TOKEN_FORBIDDEN_PREFIXES = ("/api/admin/", "/api/system/settings", "/api/storage/")
 
 
 # Case-scoped requests are recognised by their path (every case route puts the
@@ -132,7 +134,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 # token, for a non-interactive client (an MCP server, a
                 # script) calling the API with Authorization: Bearer.
                 authorization = request.headers.get("authorization")
-                token_error = self._authenticate_service_token(db, authorization, method=request.method)
+                token_error = self._authenticate_service_token(db, authorization, method=request.method, path=path)
                 if isinstance(token_error, JSONResponse):
                     return token_error
                 user = token_error
@@ -187,7 +189,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return user
 
     @staticmethod
-    def _authenticate_service_token(db, authorization: str | None, *, method: str):
+    def _authenticate_service_token(db, authorization: str | None, *, method: str, path: str = ""):
         """Resolve a service token from the Authorization header.
 
         Returns the ``ServiceTokenPrincipal`` on success, a ``JSONResponse``
@@ -210,6 +212,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=403,
                 content={"detail": "Service tokens are read-only"},
+            )
+        # Never administrative either, even for reads: deployment tuning,
+        # performance and the admin API are for administrators' sessions.
+        if path.startswith(SERVICE_TOKEN_FORBIDDEN_PREFIXES):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Service tokens cannot use the administration API"},
             )
         touch_last_used(db, token)
         return ServiceTokenPrincipal(token)

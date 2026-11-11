@@ -67,3 +67,20 @@ def test_only_administrators_change_or_reset_settings(env, monkeypatch, is_admin
     assert client.patch("/api/system/settings", json={"settings": {"INGEST_BATCH_SIZE": 500}}).status_code == expected
     assert client.post("/api/system/settings/reset").status_code == expected
 
+
+
+@pytest.mark.parametrize(
+    "method, path, body",
+    [
+        ("patch", "/api/admin/performance", {"profile": "balanced"}),
+        ("post", "/api/admin/performance/apply", {"profile": "balanced"}),
+        ("post", "/api/admin/performance/apply-profile", {"profile": "balanced"}),
+        ("post", "/api/admin/performance/apply-recommended", {}),
+        ("post", "/api/admin/performance/restart", {"services": []}),
+    ],
+)
+def test_only_administrators_change_performance(env, monkeypatch, method, path, body) -> None:
+    _db, client = env
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    monkeypatch.setattr("app.services.auth_dependencies.get_current_user", lambda request, db: SimpleNamespace(is_admin=False))
+    assert getattr(client, method)(path, json=body).status_code == 403

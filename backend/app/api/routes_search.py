@@ -1604,10 +1604,12 @@ def siem_query(payload: SiemRequest) -> SearchResponse:
 
 
 @router.get("/api/siem/fields")
-def siem_fields(case_id: str | None = None, sample_size: int = 25) -> dict:
+def siem_fields(case_id: str | None = None, sample_size: int = 25, db: Session = Depends(get_db)) -> dict:
     client = get_opensearch_client()
     index = _resolve_index(case_id)
-    facets = search_facets(case_id)
+    # Called as a function, so every parameter is passed: left out, the
+    # Query()/Depends() defaults arrive as objects and the call fails.
+    facets = search_facets(case_id, evidence_id=None, host_id=None, host_scope=None, db=db)
     indexed_fields: list[dict] = []
     normalized_fields = [
         "event.category",
