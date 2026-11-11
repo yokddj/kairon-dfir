@@ -8,8 +8,13 @@ member is flagged at extraction so the evidence says what it did not process,
 instead of the file disappearing silently. Disk images are not listed: they are
 mounted and their files ingested.
 
-Recognition is by content, never by file name: the memory classifier's header
-read, and the pcap/pcapng file signatures.
+Recognition is by content, never by file name: the memory classifier (header,
+firmware tables, and for large unidentified files the running kernel's name
+string), and the pcap/pcapng file signatures. Windows paging files are the one
+exclusion by name: they hold memory pages but are not memory images.
+
+A listed memory image can be registered as its own memory evidence from the
+extracted file, without uploading it again (app.services.bundled_memory).
 """
 
 from __future__ import annotations
@@ -62,9 +67,28 @@ def _is_memory_image(path: Path) -> bool:
     return True
 
 
+# A member nothing identified from its header is searched for a running kernel when it is at least
+# this large (whole-system memory images are), at most this many per collection: each search reads
+# the file for up to two minutes.
+DEEP_SCAN_MIN_BYTES = 128 * 1024 * 1024
+MAX_DEEP_SCANS_PER_COLLECTION = 8
+# Windows paging files hold copies of memory pages, kernel strings included, and are not memory
+# images: never searched, never listed.
+_PAGING_FILES = {"pagefile.sys", "swapfile.sys"}
+
+
+def wants_kernel_scan(path: Path) -> bool:
+    if path.name.lower() in _PAGING_FILES:
+        return False
+    try:
+        return path.stat().st_size >= DEEP_SCAN_MIN_BYTES
+    except OSError:
+        return False
+
+
 def bundled_kind(category: str | None, path: Path) -> str | None:
     """The kind of separate evidence a member is, from its classification."""
-    if category == "memory_dump" and _is_memory_image(path):
+    if category == "memory_dump" and _is_memory_image(path) and path.name.lower() not in _PAGING_FILES:
         return "memory_dump"
     if is_packet_capture(path):
         return "pcap"

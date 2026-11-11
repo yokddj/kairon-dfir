@@ -6350,6 +6350,8 @@ export const api = {
   },
   startS3Import: (caseId: string, payload: { bucket?: string; key: string; declared_platform?: string }) =>
     request<{ session: EvidenceUploadSessionRead }>(`/cases/${caseId}/s3/import`, { method: "POST", body: JSON.stringify(payload) }),
+  registerBundledMemory: (caseId: string, evidenceId: string, payload: { path: string; host_id?: string; provided_host?: string }) =>
+    request<{ status: string; upload_session_id: string }>(`/cases/${caseId}/evidences/${evidenceId}/bundled-memory`, { method: "POST", body: JSON.stringify(payload) }),
   listServiceTokens: () => request<ServiceToken[]>("/admin/service-tokens"),
   createServiceToken: (payload: { name: string; expires_in_days?: number | null }) =>
     request<CreatedServiceToken>("/admin/service-tokens", { method: "POST", body: JSON.stringify(payload) }),
