@@ -22,7 +22,7 @@ Downloading from Azure reaches outside the lab, so the feature is off by default
 
 ## Importing a blob
 
-In the evidence wizard, open **Advanced import options** and tick **Import from Azure Blob container** (shown only when the feature is on and configured). Browse the container folder by folder (virtual folders, or real directories on an account with hierarchical namespace / Data Lake Storage Gen2), select one blob and choose **Inspect evidence**. The wizard shows the download's progress, then the usual preflight report; from there the flow is the normal one.
+In the evidence wizard, open **Advanced import options** and tick **Import from Azure Blob container** (shown only when the feature is on and configured). Pick a container from the list of those the credential can see (an account key, an account SAS with the *service* resource type, or a role on the account can list them; with a container SAS or a container-scoped role, type the container name instead). Browse the container folder by folder (virtual folders, or real directories on an account with hierarchical namespace / Data Lake Storage Gen2), select one blob and choose **Inspect evidence**. The wizard shows the download's progress, then the usual preflight report; from there the flow is the normal one.
 
 - The exact blob that was picked is downloaded: its version when the account keeps blob versions, otherwise a download that fails if the blob's ETag changed in the meantime.
 - Blobs in the **Archive** tier cannot be imported until they are rehydrated to Hot or Cool in Azure (a pending rehydration still counts as archived).

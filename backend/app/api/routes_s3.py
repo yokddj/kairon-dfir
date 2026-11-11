@@ -103,6 +103,16 @@ def s3_status(case_id: str, db: Session = Depends(get_db), user: User | None = D
     return {"enabled": enabled, "configured": enabled and s3_source._is_configured(config), "default_bucket": (config.get("default_bucket") or "") if enabled else ""}  # noqa: SLF001
 
 
+@router.get("/api/cases/{case_id}/s3/buckets")
+def list_s3_buckets(case_id: str, db: Session = Depends(get_db), user: User | None = Depends(get_optional_user)) -> dict:
+    _case(db, case_id, user)
+    config = _usable_config(db)
+    try:
+        return s3_source.list_buckets(config)
+    except (s3_source.S3SourceError, CredentialCryptoError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/api/cases/{case_id}/s3/objects")
 def list_s3_objects(
     case_id: str,

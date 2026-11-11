@@ -410,7 +410,7 @@ def get_doc(slug: str) -> dict:
 
 
 @router.get("/api/admin/performance")
-def get_admin_performance(db: Session = Depends(get_db)) -> dict:
+def get_admin_performance(db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
     return performance_state(db)
 
 
@@ -470,7 +470,7 @@ def restart_admin_performance(payload: dict, _admin: None = Depends(require_sett
 
 
 @router.get("/api/admin/performance/restart-instructions")
-def admin_performance_restart_instructions(db: Session = Depends(get_db)) -> dict:
+def admin_performance_restart_instructions(db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
     state = performance_state(db)
     return manual_restart_instructions(list(state.get("services_to_restart") or []))
 
@@ -478,10 +478,10 @@ def admin_performance_restart_instructions(db: Session = Depends(get_db)) -> dic
 
 
 @router.get("/api/admin/performance/recommendation")
-def admin_performance_recommendation(db: Session = Depends(get_db)) -> dict:
+def admin_performance_recommendation(db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
     return performance_state(db)["recommendation"]
 
 
 @router.get("/api/admin/performance/resources")
-def admin_performance_resources(db: Session = Depends(get_db)) -> dict:
+def admin_performance_resources(db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
     return performance_resources(db)

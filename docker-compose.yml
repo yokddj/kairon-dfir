@@ -427,6 +427,9 @@ services:
       # POST /api/admin/service-tokens. There is no default: this server
       # refuses to start without one (see mcp_server.kairon_client.from_env).
       KAIRON_SERVICE_TOKEN: ${KAIRON_MCP_SERVICE_TOKEN:-}
+      # The token MCP clients must send (Authorization: Bearer ...); the server refuses to start
+      # without one. Generate it with: docker compose run --rm mcp-server --generate-token
+      KAIRON_MCP_HTTP_TOKEN: ${KAIRON_MCP_HTTP_TOKEN:-}
       # Host names remote MCP clients use to reach this server (comma-separated),
       # needed when KAIRON_MCP_BIND exposes it beyond localhost; see docs.
       KAIRON_MCP_ALLOWED_HOSTS: ${KAIRON_MCP_ALLOWED_HOSTS:-}

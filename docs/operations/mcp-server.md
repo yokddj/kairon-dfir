@@ -87,9 +87,12 @@ Off by default; enable its profile and set the token:
 ```bash
 # .env
 KAIRON_MCP_SERVICE_TOKEN=<the token from POST /api/admin/service-tokens>
+KAIRON_MCP_HTTP_TOKEN=<docker compose run --rm mcp-server --generate-token>
 
 docker compose --profile mcp up -d mcp-server
 ```
+
+Two different tokens: `KAIRON_MCP_SERVICE_TOKEN` is how this server reads Kairon; `KAIRON_MCP_HTTP_TOKEN` is what MCP clients must present to this server, as `Authorization: Bearer <token>` (most MCP clients that connect to a remote server let you add a header). Without the client token the HTTP transport refuses to start: the service token reads every case, so anything able to reach the port -- including any local process when it is bound to localhost -- could otherwise read them through it. `--no-auth` turns the check off, only for a port nothing untrusted can reach.
 
 This starts it with the streamable HTTP transport on `127.0.0.1:8800` (bind
 address configurable via `KAIRON_MCP_BIND`), reachable at
@@ -121,6 +124,7 @@ pip install ./backend/mcp_server
 export KAIRON_API_URL=http://localhost:8000
 export KAIRON_SERVICE_TOKEN=<the token>
 kairon-mcp-server                 # stdio, the default
+export KAIRON_MCP_HTTP_TOKEN=$(kairon-mcp-server --generate-token)
 kairon-mcp-server --transport http --port 8800   # streamable HTTP instead
 ```
 
@@ -149,10 +153,15 @@ in-app assistant, where the case is already known.
 - A `case_id` must be a single id as returned by `list_cases`; anything with
   `/`, `..`, `?` or `#` is refused before any request, so text planted in
   case data cannot steer a tool call to another API endpoint.
-- The streamable HTTP transport has no authentication of its own at the
-  MCP layer; put it behind the same network boundary (VPN, private network,
-  authenticated proxy) the rest of the deployment already requires (see
-  [deployment/deployment.md](../deployment/deployment.md)).
+- The streamable HTTP transport requires its own client token
+  (`KAIRON_MCP_HTTP_TOKEN`, compared in constant time); treat it like the
+  service token, since it gives the same read access. Still keep the server
+  behind the network boundary the rest of the deployment requires (VPN,
+  private network, authenticated proxy; see
+  [deployment/deployment.md](../deployment/deployment.md)): a static bearer
+  token travels in clear over plain HTTP, so use TLS (a reverse proxy) for
+  anything beyond localhost. The stdio transport needs no token: the client
+  launches the server itself.
 - Everything the Prompt injection section of
   [operations/ai-assistant.md](ai-assistant.md#prompt-injection) says about
   untrusted data in tool results applies here identically: a hostname, a

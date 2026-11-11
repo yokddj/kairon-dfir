@@ -119,6 +119,16 @@ def azure_blob_status(case_id: str, db: Session = Depends(get_db), user: User | 
     }
 
 
+@router.get("/api/cases/{case_id}/azure-blob/containers")
+def list_azure_containers(case_id: str, db: Session = Depends(get_db), user: User | None = Depends(get_optional_user)) -> dict:
+    _case(db, case_id, user)
+    config = _usable_config(db)
+    try:
+        return azure_blob_source.list_containers(config)
+    except (azure_blob_source.AzureBlobSourceError, CredentialCryptoError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/api/cases/{case_id}/azure-blob/objects")
 def list_azure_blobs(
     case_id: str,

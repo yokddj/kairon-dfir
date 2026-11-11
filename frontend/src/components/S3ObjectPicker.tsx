@@ -23,6 +23,7 @@ export function S3ObjectPicker({
       defaultContainer={defaultBucket}
       queryKey={`s3-objects-${caseId}`}
       list={(bucket, prefix, token) => api.listS3Objects(caseId, { bucket: bucket || undefined, prefix, token: token ?? undefined })}
+      listContainers={() => api.listS3Buckets(caseId)}
       location={(bucket, key) => `s3://${bucket}/${key}`}
       isArchived={(item) => ARCHIVED.has(item.storage_class ?? "")}
       archivedTitle="Archived (Glacier): restore it in S3 before importing"

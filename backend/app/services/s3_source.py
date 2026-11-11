@@ -185,6 +185,21 @@ def test_connection(config: dict[str, Any], bucket: str | None) -> dict[str, Any
         return {"ok": False, "error": str(_client_error(exc))}
 
 
+def list_buckets(config: dict[str, Any]) -> dict[str, Any]:
+    """The buckets the key can see, for the wizard to offer. Needs s3:ListAllMyBuckets; a key
+    limited to the evidence bucket cannot list them, and the analyst types the bucket instead."""
+    try:
+        buckets = build_client(config).list_buckets().get("Buckets") or []
+    except S3SourceError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        error = _client_error(exc)
+        if str(error).startswith("Access denied"):
+            raise S3SourceError("This key cannot list the account's buckets (s3:ListAllMyBuckets); type the bucket name.") from exc
+        raise error from exc
+    return {"containers": sorted(str(item.get("Name")) for item in buckets if item.get("Name")), "truncated": False}
+
+
 def list_objects(config: dict[str, Any], *, bucket: str | None, prefix: str = "", token: str | None = None) -> dict[str, Any]:
     """One page of a bucket "folder": the sub-prefixes and the objects directly under ``prefix``."""
     target = _text(bucket) or config.get("default_bucket")

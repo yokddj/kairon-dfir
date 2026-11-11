@@ -19,7 +19,7 @@ Use a key that can only read the evidence bucket: `s3:ListBucket` on the bucket 
 
 ## Importing an object
 
-In the evidence wizard, open **Advanced import options** and tick **Import from S3 bucket** (shown only when the feature is on and configured). Browse the bucket folder by folder, select one object and choose **Inspect evidence**. The wizard shows the download's progress, then the usual preflight report; from there the flow is the normal one.
+In the evidence wizard, open **Advanced import options** and tick **Import from S3 bucket** (shown only when the feature is on and configured). Pick a bucket from the list of those the key can see (it needs `s3:ListAllMyBuckets`; otherwise type the bucket name). Browse the bucket folder by folder, select one object and choose **Inspect evidence**. The wizard shows the download's progress, then the usual preflight report; from there the flow is the normal one.
 
 - The exact object that was picked is downloaded: its version ID when the bucket is versioned, otherwise a download that fails if the object's ETag changed in the meantime.
 - Objects in Glacier or Deep Archive cannot be imported until they are restored in S3.

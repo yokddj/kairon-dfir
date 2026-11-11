@@ -347,6 +347,13 @@ describe("SystemPage", () => {
     });
   });
 
+  it("tells a non-administrator the page is theirs to read only through an administrator", async () => {
+    getAdminPerformanceMock.mockRejectedValue(Object.assign(new Error("Admin required"), { status: 403 }));
+    renderPage();
+    expect(await screen.findByTestId("system-admin-only")).toHaveTextContent("Restricted to administrators");
+    expect(getAdminPerformanceMock).toHaveBeenCalledTimes(1);
+  });
+
   it("renders system sections", async () => {
     renderPage();
     expect(await screen.findByText(/System settings and deployment guidance/i)).toBeInTheDocument();

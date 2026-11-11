@@ -231,8 +231,10 @@ function SettingInput({
 export default function SystemPage() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const performanceQuery = useQuery({ queryKey: ["admin-performance"], queryFn: api.getAdminPerformance, refetchInterval: 15000 });
-  const recommendationQuery = useQuery({ queryKey: ["admin-performance-recommendation"], queryFn: api.getAdminPerformanceRecommendation, refetchInterval: 30000 });
+  // A 403 (not an administrator) is final: no retries, no polling.
+  const notForbidden = (count: number, error: unknown) => (error as { status?: number }).status !== 403 && count < 3;
+  const performanceQuery = useQuery({ queryKey: ["admin-performance"], queryFn: api.getAdminPerformance, refetchInterval: (query) => (query.state.error ? false : 15000), retry: notForbidden });
+  const recommendationQuery = useQuery({ queryKey: ["admin-performance-recommendation"], queryFn: api.getAdminPerformanceRecommendation, refetchInterval: (query) => (query.state.error ? false : 30000), retry: notForbidden });
   const versionQuery = useQuery<SystemVersionInfo>({ queryKey: ["system-version"], queryFn: api.getSystemVersion, refetchInterval: 60000 });
 
   const [draftProfile, setDraftProfile] = useState<ProfileName>("balanced");
@@ -486,6 +488,18 @@ export default function SystemPage() {
     const confirmMax = recommendedProfile !== "max" ? true : window.confirm("This may use most available resources.");
     if (!confirmMax) return;
     applyRecommendedMutation.mutate(confirmMax);
+  }
+
+  if (performanceQuery.isError && (performanceQuery.error as { status?: number }).status === 403) {
+    return (
+      <div className="space-y-6">
+        <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel" data-testid="system-admin-only">
+          <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">System</p>
+          <h2 className="mt-2 text-2xl font-semibold">Restricted to administrators</h2>
+          <p className="mt-2 text-sm text-muted">Performance tuning and deployment settings are managed by an administrator of this instance.</p>
+        </section>
+      </div>
+    );
   }
 
   if (performanceQuery.isPending || !data || !recommendation) {

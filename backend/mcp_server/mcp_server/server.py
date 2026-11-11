@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hmac
 import logging
 import os
+import secrets
 import time
 
 import mcp_types as types
@@ -113,6 +115,60 @@ def transport_security(extra_hosts: list[str]):  # noqa: ANN201
         hosts.append(host)
         origins.extend([f"http://{host}", f"https://{host}"])
     return TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=hosts, allowed_origins=origins)
+
+
+MIN_HTTP_TOKEN_LENGTH = 32
+
+
+class BearerTokenMiddleware:
+    """Requires ``Authorization: Bearer <token>`` on every HTTP request to this server.
+
+    The service token this server holds reads every case, so without this anything that can
+    reach the port -- any local process when it is bound to localhost -- could read them through
+    it. A static bearer token is what MCP clients that connect to a remote server let a user set
+    (a custom header). Compared in constant time; lifespan events pass through.
+    """
+
+    def __init__(self, app, token: str):  # noqa: ANN001
+        self.app = app
+        self._expected = f"Bearer {token}".encode()
+
+    async def __call__(self, scope, receive, send):  # noqa: ANN001
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        presented = headers.get(b"authorization", b"")
+        if not hmac.compare_digest(presented, self._expected):
+            body = b'{"error":"unauthorized","message":"This MCP server needs Authorization: Bearer <KAIRON_MCP_HTTP_TOKEN>."}'
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [(b"content-type", b"application/json"), (b"www-authenticate", b'Bearer realm="kairon-mcp"'), (b"content-length", str(len(body)).encode())],
+                }
+            )
+            await send({"type": "http.response.body", "body": body})
+            return
+        await self.app(scope, receive, send)
+
+
+def http_auth_token(cli_value: str | None, no_auth: bool) -> str | None:
+    """The bearer token the HTTP transport requires, or None when explicitly disabled.
+
+    Refuses to run without one (or with a short one) unless ``--no-auth`` is given."""
+    token = (cli_value or os.environ.get("KAIRON_MCP_HTTP_TOKEN") or "").strip()
+    if no_auth:
+        return None
+    if not token:
+        raise SystemExit(
+            "The HTTP transport needs a token clients must present: set KAIRON_MCP_HTTP_TOKEN "
+            "(generate one with: kairon-mcp-server --generate-token), or pass --no-auth if only "
+            "trusted clients can reach the port."
+        )
+    if len(token) < MIN_HTTP_TOKEN_LENGTH:
+        raise SystemExit(f"KAIRON_MCP_HTTP_TOKEN must be at least {MIN_HTTP_TOKEN_LENGTH} characters (use --generate-token).")
+    return token
 
 
 def _text_result(payload: object, *, is_error: bool = False) -> types.CallToolResult:
@@ -201,11 +257,17 @@ async def _run_stdio(server: Server) -> None:
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
-def _run_http(server: Server, *, host: str, port: int, allowed_hosts: list[str]) -> None:
+def build_http_app(server: Server, *, allowed_hosts: list[str], token: str | None):  # noqa: ANN201
+    app = server.streamable_http_app(transport_security=transport_security(allowed_hosts))
+    return BearerTokenMiddleware(app, token) if token else app
+
+
+def _run_http(server: Server, *, host: str, port: int, allowed_hosts: list[str], token: str | None) -> None:
     import uvicorn
 
-    app = server.streamable_http_app(transport_security=transport_security(allowed_hosts))
-    uvicorn.run(app, host=host, port=port)
+    if token is None:
+        logger.warning("HTTP transport WITHOUT authentication (--no-auth): anything that reaches %s:%s can read every case.", host, port)
+    uvicorn.run(build_http_app(server, allowed_hosts=allowed_hosts, token=token), host=host, port=port)
 
 
 def main() -> None:
@@ -225,7 +287,21 @@ def main() -> None:
             "Localhost is always allowed."
         ),
     )
+    parser.add_argument(
+        "--auth-token", default=None,
+        help="HTTP transport only: the bearer token clients must send (default: KAIRON_MCP_HTTP_TOKEN). Required.",
+    )
+    parser.add_argument(
+        "--no-auth", action="store_true",
+        help="HTTP transport only: run without a client token. Only when nothing untrusted can reach the port.",
+    )
+    parser.add_argument("--generate-token", action="store_true", help="Print a new random token for KAIRON_MCP_HTTP_TOKEN and exit.")
     args = parser.parse_args()
+
+    if args.generate_token:
+        print(secrets.token_urlsafe(32))
+        return
+    token = http_auth_token(args.auth_token, args.no_auth) if args.transport == "http" else None
 
     client = KaironClient.from_env()
     server = build_server(client)
@@ -234,7 +310,7 @@ def main() -> None:
         asyncio.run(_run_stdio(server))
     else:
         env_hosts = [item for item in os.environ.get("KAIRON_MCP_ALLOWED_HOSTS", "").split(",") if item.strip()]
-        _run_http(server, host=args.host, port=args.port, allowed_hosts=[*env_hosts, *args.allowed_host])
+        _run_http(server, host=args.host, port=args.port, allowed_hosts=[*env_hosts, *args.allowed_host], token=token)
 
 
 if __name__ == "__main__":
