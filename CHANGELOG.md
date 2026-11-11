@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Import evidence from Azure Blob Storage**: the evidence wizard can browse a container of an Azure Storage account and import one blob — block, append or page blob, so an exported VM disk VHD too — through the same upload session, hashing, preflight and registration as a browser upload, like the S3 import. Authentication with a SAS token, an Entra ID service principal (Storage Blob Data Reader) or an account key, set by an administrator under **Azure Blob Source** and encrypted at rest. The exact blob picked is downloaded (version or ETag); Archive-tier blobs are refused until rehydrated. Off by default (`AZURE_BLOB_SOURCE_ENABLED=true`). See [docs/evidence/azure-blob-import.md](docs/evidence/azure-blob-import.md).
+
 - **Case time window shared by every event view**: the time range set in Search, Timeline, Artifact Views, Command History or Linux Authentication now applies to all of them, per case, and survives a reload. A top-bar chip shows it and clears it everywhere. Links that carry `time_from`/`time_to` replace it; links without them keep it. See [docs/search-and-investigation/search.md](docs/search-and-investigation/search.md#case-time-window).
 - **Text match mode on every screen**: Search, Timeline, Artifact Views and Command History offer the same Smart / Contains / Exact selector (`search_mode` on the GET search, timeline and command-history endpoints) backed by one engine.
 

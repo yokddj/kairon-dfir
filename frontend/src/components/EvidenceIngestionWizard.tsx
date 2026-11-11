@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
-import { api, type Evidence, type EvidenceIntent, type EvidencePlatform, type EvidenceUploadSessionCreateResponse, type EvidenceUploadSessionRead, type EvtxProfile, type IngestMode, type MemoryUploadStatus, type PreflightReport, type ResumableUploadSessionRead, type S3ObjectEntry } from "../api/client";
+import { api, type Evidence, type EvidenceIntent, type EvidencePlatform, type EvidenceUploadSessionCreateResponse, type EvidenceUploadSessionRead, type EvtxProfile, type IngestMode, type MemoryUploadStatus, type PreflightReport, type ResumableUploadSessionRead, type S3ObjectEntry, type AzureBlobEntry } from "../api/client";
 import { useNotifications } from "../context/NotificationsContext";
 import { MemoryEvidencePreparationCard } from "./memory/MemoryEvidencePreparationCard";
 import { MemoryInitialAnalysisAction } from "./memory/MemoryInitialAnalysisAction";
 import { S3ObjectPicker } from "./S3ObjectPicker";
+import { AzureBlobPicker } from "./AzureBlobPicker";
 import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
 import { memoryEvidenceRoute } from "../lib/canonicalRoutes";
 import { zipFolder } from "../lib/folderZip";
@@ -15,7 +16,7 @@ import { hashBlob } from "../lib/sha256";
 type IntakeType = "disk_image" | "memory_dump" | "artifact_collection" | "folder" | "server_path";
 type WizardStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 type ProcessingMode = "recommended" | "custom" | "skip";
-type AcquisitionSource = "files" | "server_path" | "s3";
+type AcquisitionSource = "files" | "server_path" | "s3" | "azure_blob";
 type HostChoice = "auto" | "__create__" | "__unassigned__" | string;
 type InspectionState = "idle" | "uploading" | "finalizing_upload" | "preflight_running" | "complete" | "failed";
 type ForcedRoute = "disk_image" | "memory_dump" | "collection" | "archive" | "unknown";
@@ -297,7 +298,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [acquisitionSource, setAcquisitionSource] = useState<AcquisitionSource>("files");
   const [serverPath, setServerPath] = useState("");
   const [s3Selection, setS3Selection] = useState<{ bucket: string; object: S3ObjectEntry } | null>(null);
-  // Set when the wizard closes, so a running S3 import stops waiting for its session.
+  const [azureBlobSelection, setAzureBlobSelection] = useState<{ container: string; object: AzureBlobEntry } | null>(null);
+  // Set when the wizard closes, so a running S3 / Azure Blob import stops waiting for its session.
   const s3AbortRef = useRef(false);
   const [session, setSession] = useState<EvidenceUploadSessionRead | null>(null);
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
@@ -369,6 +371,9 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const importsFromS3 = acquisitionSource === "s3";
   const s3StatusQuery = useQuery({ queryKey: ["s3-status", caseId], queryFn: () => api.getS3Status(caseId), enabled: open, retry: false, staleTime: 60_000 });
   const s3Available = Boolean(s3StatusQuery.data?.enabled && s3StatusQuery.data.configured);
+  const importsFromAzureBlob = acquisitionSource === "azure_blob";
+  const azureBlobStatusQuery = useQuery({ queryKey: ["azure-blob-status", caseId], queryFn: () => api.getAzureBlobStatus(caseId), enabled: open, retry: false, staleTime: 60_000 });
+  const azureBlobAvailable = Boolean(azureBlobStatusQuery.data?.enabled && azureBlobStatusQuery.data.configured);
   const requiresFolderInput = folderUploadSelected;
   const activePreflightReports = batchItems.length ? batchItems.map((item) => item.preflight) : preflight ? [preflight] : [];
   // Auxiliary support files (symbol bundles, Volatility profiles...) are never promoted, so their
@@ -470,6 +475,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setAcquisitionSource("files");
     setServerPath("");
     setS3Selection(null);
+    setAzureBlobSelection(null);
     s3AbortRef.current = true;
     setSession(null);
     setPreflight(null);
@@ -752,29 +758,57 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     return null;
   }
 
-  // The server downloads the object into an ordinary upload session (POST .../s3/import) and then
-  // runs the same preflight a browser upload gets; this follows that session until its report is
-  // ready and returns the same response a finalize does, so everything after is the normal flow.
-  async function importFromS3(selection: { bucket: string; object: S3ObjectEntry }): Promise<EvidenceUploadSessionCreateResponse> {
+  // The server downloads the object into an ordinary upload session (POST .../s3/import or
+  // .../azure-blob/import) and then runs the same preflight a browser upload gets; this follows that
+  // session until its report is ready and returns the same response a finalize does, so everything
+  // after is the normal flow.
+  async function followRemoteImport(label: string, start: () => Promise<{ session: EvidenceUploadSessionRead }>): Promise<EvidenceUploadSessionCreateResponse> {
     s3AbortRef.current = false;
-    let current = (await api.startS3Import(caseId, { bucket: selection.bucket, key: selection.object.key, declared_platform: platform })).session;
+    let current = (await start()).session;
     setSession(current);
     setInspectionState("uploading");
     setUploadProgress(0);
     while (current.status !== "staged") {
       if (["failed", "cancelled", "expired", "promoted"].includes(current.status)) {
-        throw new Error(current.failure_message || `The S3 import ended as ${current.status}.`);
+        throw new Error(current.failure_message || `The ${label} import ended as ${current.status}.`);
       }
       if (current.status === "preflight_running") setInspectionState("preflight_running");
       else if (current.expected_size_bytes) setUploadProgress(Math.min(1, current.bytes_received / current.expected_size_bytes));
       await new Promise((resolve) => window.setTimeout(resolve, 2000));
-      if (s3AbortRef.current) throw new Error("The wizard was closed; the S3 download continues on the server (see Activity Center).");
+      if (s3AbortRef.current) throw new Error(`The wizard was closed; the ${label} download continues on the server (see Activity Center).`);
       current = (await api.getEvidenceUploadSession(caseId, current.id)).session;
       setSession(current);
     }
     setUploadProgress(1);
     setInspectionState("finalizing_upload");
     return api.finalizeResumableEvidenceUploadSession(caseId, current.id);
+  }
+
+  function importFromS3(selection: { bucket: string; object: S3ObjectEntry }) {
+    return followRemoteImport("S3", () => api.startS3Import(caseId, { bucket: selection.bucket, key: selection.object.key, declared_platform: platform }));
+  }
+
+  // Importing from a remote store replaces any local selection; unchecking returns to files.
+  function chooseRemoteSource(source: "s3" | "azure_blob", checked: boolean) {
+    setS3Selection(null);
+    setAzureBlobSelection(null);
+    if (!checked) {
+      setAcquisitionSource("files");
+      return;
+    }
+    setAcquisitionSource(source);
+    setFolderUploadSelected(false);
+    setFiles([]);
+    setSession(null);
+    setPreflight(null);
+    setBatchItems([]);
+    setInspectionState("idle");
+    setInspectionError(null);
+    setUploadProgress(null);
+  }
+
+  function importFromAzureBlob(selection: { container: string; object: AzureBlobEntry }) {
+    return followRemoteImport("Azure Blob", () => api.startAzureBlobImport(caseId, { container: selection.container, blob: selection.object.key, declared_platform: platform }));
   }
 
   const createSessionMutation = useMutation({
@@ -809,6 +843,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       if (importsFromS3) {
         if (!s3Selection) throw new Error("Select an object in the bucket first.");
         return importFromS3(s3Selection);
+      }
+      if (importsFromAzureBlob) {
+        if (!azureBlobSelection) throw new Error("Select a blob in the container first.");
+        return importFromAzureBlob(azureBlobSelection);
       }
       if (requiresPathInput) {
         setInspectionState("preflight_running");
@@ -1189,8 +1227,9 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const canAdvanceStep4 = useMemo(() => {
     if (requiresPathInput) return serverPath.trim().length > 0;
     if (importsFromS3) return s3Selection !== null;
+    if (importsFromAzureBlob) return azureBlobSelection !== null;
     return files.length > 0;
-  }, [requiresPathInput, importsFromS3, s3Selection, serverPath, files]);
+  }, [requiresPathInput, importsFromS3, s3Selection, importsFromAzureBlob, azureBlobSelection, serverPath, files]);
 
   const hashPending = files.length === 1 && !requiresPathInput && hashProgress !== null && hashProgress < 1;
   const inspectionElapsedSeconds = inspectionStartedAt ? Math.max(0, Math.floor((nowMs - inspectionStartedAt) / 1000)) : 0;
@@ -1575,22 +1614,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                       className="mt-1"
                       checked={importsFromS3}
                       data-testid="import-from-s3"
-                      onChange={(event) => {
-                        setS3Selection(null);
-                        if (event.target.checked) {
-                          setAcquisitionSource("s3");
-                          setFolderUploadSelected(false);
-                          setFiles([]);
-                          setSession(null);
-                          setPreflight(null);
-                          setBatchItems([]);
-                          setInspectionState("idle");
-                          setInspectionError(null);
-                          setUploadProgress(null);
-                        } else {
-                          setAcquisitionSource("files");
-                        }
-                      }}
+                      onChange={(event) => chooseRemoteSource("s3", event.target.checked)}
                     />
                     <span>
                       Import from S3 bucket
@@ -1599,6 +1623,24 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                   </label>
                 ) : null}
                 {importsFromS3 ? <S3ObjectPicker caseId={caseId} defaultBucket={s3StatusQuery.data?.default_bucket ?? ""} selected={s3Selection} onSelect={setS3Selection} /> : null}
+                {azureBlobAvailable ? (
+                  <label className="flex items-start gap-2 rounded-2xl border border-line bg-abyss/60 p-3 text-sm text-muted">
+                    <input type="checkbox" className="mt-1" checked={importsFromAzureBlob} data-testid="import-from-azure-blob" onChange={(event) => chooseRemoteSource("azure_blob", event.target.checked)} />
+                    <span>
+                      Import from Azure Blob container
+                      <span className="mt-1 block text-xs text-muted">The server downloads the selected blob and processes it like an upload.</span>
+                    </span>
+                  </label>
+                ) : null}
+                {importsFromAzureBlob ? (
+                  <AzureBlobPicker
+                    caseId={caseId}
+                    accountName={azureBlobStatusQuery.data?.account_name ?? ""}
+                    defaultContainer={azureBlobStatusQuery.data?.default_container ?? ""}
+                    selected={azureBlobSelection}
+                    onSelect={setAzureBlobSelection}
+                  />
+                ) : null}
               </div>
             </details>
             {showAdvancedOptions ? (

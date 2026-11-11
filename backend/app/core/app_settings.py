@@ -140,6 +140,14 @@ SETTING_META: dict[str, dict[str, Any]] = {
         "applies_immediately": True,
         "value_type": "json",
     },
+    "AZURE_BLOB_SOURCE": {
+        "category": "evidence",
+        "description": "Azure Blob Storage account evidence can be imported from. The account key, SAS token or client secret inside it is encrypted at rest.",
+        "requires_restart": False,
+        "restart_scope": "none",
+        "applies_immediately": True,
+        "value_type": "json",
+    },
     "AI_ASSISTANT": {
         "category": "ai",
         "description": "AI assistant provider configuration. API keys inside it are encrypted at rest.",
@@ -517,7 +525,7 @@ def get_performance_profile(db: Session) -> str:
 
 
 # The settings the generic settings API may change or reset: tuning and deployment values. Feature
-# configuration kept in AppSetting (AI_ASSISTANT, S3_SOURCE...) has its own admin endpoints and
+# configuration kept in AppSetting (AI_ASSISTANT, S3_SOURCE, AZURE_BLOB_SOURCE...) has its own admin endpoints and
 # validation, and a settings reset must never wipe it.
 TUNABLE_SETTING_KEYS = frozenset({*RUNTIME_DEFAULTS, *DEPLOYMENT_DEFAULTS, PERFORMANCE_PROFILE_KEY})
 

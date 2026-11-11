@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     # Importing evidence from an S3 bucket makes the backend download from outside the lab, so it is
     # off until the operator turns it on (S3_SOURCE_ENABLED=true); credentials are set in the UI.
     s3_source_enabled: bool = False
+    # Same for Azure Blob Storage (AZURE_BLOB_SOURCE_ENABLED=true); credentials are set in the UI.
+    azure_blob_source_enabled: bool = False
     backend_max_upload_size: int = Field(default=34359738368)
     backend_upload_idle_timeout_seconds: int = 60
     # Sole authority for activating the Memory capability at application-composition

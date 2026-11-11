@@ -450,6 +450,21 @@ def run_s3_import(upload_session_id: str) -> dict:
     return run_import(upload_session_id)
 
 
+def enqueue_azure_blob_import(upload_session_id: str) -> str:
+    job = ingest_queue.enqueue(
+        "app.workers.tasks.run_azure_blob_import",
+        upload_session_id,
+        job_timeout=max(int(settings.ingest_job_timeout_seconds or 0), 3600),
+    )
+    return job.id
+
+
+def run_azure_blob_import(upload_session_id: str) -> dict:
+    from app.services.azure_blob_source import run_import
+
+    return run_import(upload_session_id)
+
+
 def run_evidence_upload_preflight(upload_session_id: str) -> dict:
     from app.models.evidence_upload_session import EvidenceUploadSession
     from app.services.evidence_operations import (
