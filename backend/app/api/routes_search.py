@@ -1603,6 +1603,14 @@ def siem_query(payload: SiemRequest) -> SearchResponse:
     return run_siem_query(payload)
 
 
+def _facet_sample_values(facets: dict, field: str, limit: int = 5) -> list[str]:
+    """Most frequent values of a facet ({value: count}) as samples."""
+    buckets = facets.get(field) or {}
+    if isinstance(buckets, dict):
+        return [str(value) for value, _count in sorted(buckets.items(), key=lambda item: -int(item[1] or 0))[:limit]]
+    return [str(value) for value in list(buckets)[:limit]]
+
+
 @router.get("/api/siem/fields")
 def siem_fields(case_id: str | None = None, sample_size: int = 25, db: Session = Depends(get_db)) -> dict:
     client = get_opensearch_client()
@@ -1688,7 +1696,7 @@ def siem_fields(case_id: str | None = None, sample_size: int = 25, db: Session =
                 "type": "known_normalized",
                 "searchable": True,
                 "aggregatable": resolve_aggregatable_field(client, index, field) is not None if _index_available(index) else False,
-                "sample_values": facets.get(field, [])[:5],
+                "sample_values": _facet_sample_values(facets, field),
             }
             for field in normalized_fields
         ],

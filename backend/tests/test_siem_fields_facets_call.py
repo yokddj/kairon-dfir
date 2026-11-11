@@ -25,3 +25,10 @@ def test_siem_fields_passes_real_values_to_search_facets(monkeypatch) -> None:
         routes_search.siem_fields(case_id="case-1", db=None)
     assert seen["case_id"] == "case-1"
     assert not any(isinstance(value, (QueryParam, DependsParam)) for value in seen.values())
+
+
+def test_sample_values_come_from_the_facet_buckets() -> None:
+    facets = {"event.type": {"logon_success": 3, "process_start": 9}, "tags": ["a", "b"]}
+    assert routes_search._facet_sample_values(facets, "event.type") == ["process_start", "logon_success"]
+    assert routes_search._facet_sample_values(facets, "tags") == ["a", "b"]
+    assert routes_search._facet_sample_values(facets, "missing") == []
