@@ -53,7 +53,7 @@ jobs:
         # own encrypted data streams) and is not preinstalled.
         # The security pocket is also on the archive mirror; security.ubuntu.com has gone
         # unresolvable on the runners for hours (2026-11-11), failing every job here.
-        run: sudo sed -i 's#https\?://security.ubuntu.com/ubuntu#http://azure.archive.ubuntu.com/ubuntu#g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true; sudo apt-get update -qq && sudo apt-get install -y -qq unar
+        run: if [ -f /etc/apt/apt-mirrors.txt ] && grep -qv security.ubuntu.com /etc/apt/apt-mirrors.txt; then sudo sed -i '/security\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt; fi; cat /etc/apt/apt-mirrors.txt 2>/dev/null || true; sudo apt-get update -qq && sudo apt-get install -y -qq unar
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run tests
@@ -121,7 +121,7 @@ jobs:
         # decrypt RAR archives (7-Zip's RAR reader cannot decompress RAR's
         # own encrypted data streams).
         # Same security-pocket mirror as backend-tests.
-        run: sudo sed -i 's#https\?://security.ubuntu.com/ubuntu#http://azure.archive.ubuntu.com/ubuntu#g' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true; sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full unar
+        run: if [ -f /etc/apt/apt-mirrors.txt ] && grep -qv security.ubuntu.com /etc/apt/apt-mirrors.txt; then sudo sed -i '/security\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt; fi; cat /etc/apt/apt-mirrors.txt 2>/dev/null || true; sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full unar
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run integration tests
