@@ -6349,6 +6349,21 @@ export const api = {
   },
   startS3Import: (caseId: string, payload: { bucket?: string; key: string; declared_platform?: string }) =>
     request<{ session: EvidenceUploadSessionRead }>(`/cases/${caseId}/s3/import`, { method: "POST", body: JSON.stringify(payload) }),
+  getAzureBlobConfig: () => request<AzureBlobConfigResponse>("/azure-blob/config"),
+  updateAzureBlobConfig: (payload: AzureBlobConfigUpdate) =>
+    request<AzureBlobConfigResponse>("/azure-blob/config", { method: "PUT", body: JSON.stringify(payload) }),
+  testAzureBlobConfig: (payload: AzureBlobConfigUpdate & { container?: string }) =>
+    request<{ ok: boolean; message?: string; error?: string }>("/azure-blob/test", { method: "POST", body: JSON.stringify(payload) }),
+  getAzureBlobStatus: (caseId: string) => request<AzureBlobStatusResponse>(`/cases/${caseId}/azure-blob/status`),
+  listAzureBlobs: (caseId: string, params: { container?: string; prefix?: string; token?: string }) => {
+    const query = new URLSearchParams();
+    if (params.container) query.set("container", params.container);
+    if (params.prefix) query.set("prefix", params.prefix);
+    if (params.token) query.set("token", params.token);
+    return request<AzureBlobListResponse>(`/cases/${caseId}/azure-blob/objects?${query.toString()}`);
+  },
+  startAzureBlobImport: (caseId: string, payload: { container?: string; blob: string; declared_platform?: string }) =>
+    request<{ session: EvidenceUploadSessionRead }>(`/cases/${caseId}/azure-blob/import`, { method: "POST", body: JSON.stringify(payload) }),
   translateNaturalLanguageSearch: (caseId: string, question: string, provider?: string | null) =>
     request<{ query: string }>(`/cases/${caseId}/ai/nl-search`, { method: "POST", body: JSON.stringify({ question, provider: provider ?? null }) }),
   listCases: (params?: CaseListParams | { queryKey?: unknown }) => request<DfirCase[]>(buildArtifactQuery("/cases", params && "queryKey" in params ? undefined : params)),
@@ -9085,6 +9100,38 @@ export type S3StatusResponse = { enabled: boolean; configured: boolean; default_
 export type S3ObjectEntry = { key: string; name: string; size: number; last_modified: string | null; storage_class: string | null };
 
 export type S3ObjectListResponse = { bucket: string; prefix: string; prefixes: string[]; objects: S3ObjectEntry[]; next_token: string | null };
+
+export type AzureBlobAuthMethod = "account_key" | "sas_token" | "service_principal";
+
+export type AzureBlobConfigResponse = {
+  enabled: boolean;
+  account_url: string;
+  auth_method: AzureBlobAuthMethod;
+  account_name: string;
+  tenant_id: string;
+  client_id: string;
+  default_container: string;
+  has_secret: boolean;
+  secret_masked: string | null;
+  configured: boolean;
+};
+
+export type AzureBlobConfigUpdate = {
+  account_url?: string;
+  auth_method?: AzureBlobAuthMethod;
+  account_name?: string;
+  tenant_id?: string;
+  client_id?: string;
+  // The account key, SAS token or client secret. Omitted keeps the stored one, "" clears it.
+  secret?: string;
+  default_container?: string;
+};
+
+export type AzureBlobStatusResponse = { enabled: boolean; configured: boolean; default_container: string; account_name: string };
+
+export type AzureBlobEntry = { key: string; name: string; size: number; last_modified: string | null; storage_class: string | null; blob_type: string | null; archived: boolean };
+
+export type AzureBlobListResponse = { container: string; prefix: string; prefixes: string[]; objects: AzureBlobEntry[]; next_token: string | null };
 
 export type AiConfigResponse = {
   enabled: boolean;

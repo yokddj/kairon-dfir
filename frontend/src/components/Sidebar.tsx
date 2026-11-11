@@ -290,6 +290,19 @@ export default function Sidebar() {
             S3 Source
           </NavLink>
         )}
+        {user?.is_admin && (
+          <NavLink
+            to="/settings/azure-blob"
+            className={({ isActive }) =>
+              `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${
+                isActive ? "bg-accent/10 text-accent shadow-panel" : "text-muted hover:bg-white/5 hover:text-ink"
+              }`
+            }
+          >
+            <Cloud size={16} />
+            Azure Blob Source
+          </NavLink>
+        )}
         <NavLink
           to="/docs"
           className={({ isActive }) =>

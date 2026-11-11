@@ -15,7 +15,6 @@ outside the lab, so the whole feature is off unless S3_SOURCE_ENABLED=true.
 from __future__ import annotations
 
 import logging
-import time
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.core.app_settings import get_setting, set_setting
 from app.core.config import get_settings
 from app.services.ai.crypto import is_sealed, mask, open_sealed, seal
+from app.services.remote_evidence_import import RemoteImportError, download_into_session, read_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +31,9 @@ S3_SETTING_KEY = "S3_SOURCE"
 _CREDENTIAL_INFO = b"kairon-s3-source-credentials-v1"
 LIST_PAGE_SIZE = 200
 _DOWNLOAD_CHUNK = 8 * 1024 * 1024
-_PROGRESS_EVERY_SECONDS = 2.0
 
 
-class S3SourceError(ValueError):
+class S3SourceError(RemoteImportError):
     """A problem the operator or analyst can act on; the message is safe to show."""
 
 
@@ -257,71 +256,24 @@ def start_import(db: Session, case_id: str, *, bucket: str | None, key: str, dec
     return session
 
 
+def _open_object(db: Session, source: dict[str, Any]):
+    request: dict[str, Any] = {"Bucket": source["bucket"], "Key": source["key"]}
+    # The exact object that was picked, even if the key is overwritten meanwhile.
+    if source.get("version_id"):
+        request["VersionId"] = source["version_id"]
+    elif source.get("etag"):
+        request["IfMatch"] = f'"{source["etag"]}"'
+    body = build_client(load_config(db)).get_object(**request)["Body"]
+    return read_chunks(body, _DOWNLOAD_CHUNK)
+
+
 def run_import(upload_session_id: str) -> dict[str, Any]:
     """Worker side: download the object into the session's staged file, then preflight it."""
-    from app.core.database import SessionLocal
-    from app.models.evidence_upload_session import EvidenceUploadSession
-    from app.services.evidence_operations import get_upload_operation, sync_upload_operation, transition_operation
-    from app.services.evidence_upload_session import _touch_upload_session
-    from app.workers.tasks import run_evidence_upload_preflight
-
-    with SessionLocal() as db:
-        session = db.get(EvidenceUploadSession, upload_session_id)
-        if session is None:
-            return {"status": "missing_session", "upload_session_id": upload_session_id}
-        source = (session.metadata_json or {}).get("s3_source") or {}
-        if session.status not in {"created", "uploading", "interrupted"}:
-            return {"status": "not_downloading", "upload_session_id": upload_session_id, "reason": session.status}
-        target = Path(session.staged_path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        expected = int(session.expected_size_bytes or 0)
-        written = 0
-        try:
-            require_enabled()
-            request: dict[str, Any] = {"Bucket": source["bucket"], "Key": source["key"]}
-            # The exact object that was picked, even if the key is overwritten meanwhile.
-            if source.get("version_id"):
-                request["VersionId"] = source["version_id"]
-            elif source.get("etag"):
-                request["IfMatch"] = f'"{source["etag"]}"'
-            body = build_client(load_config(db)).get_object(**request)["Body"]
-            session.status = "uploading"
-            db.commit()
-            last_report = time.monotonic()
-            with target.open("wb") as out:
-                while chunk := body.read(_DOWNLOAD_CHUNK):
-                    written += len(chunk)
-                    if expected and written > expected:
-                        raise S3SourceError("The object grew while it was being downloaded; import it again.")
-                    out.write(chunk)
-                    if time.monotonic() - last_report >= _PROGRESS_EVERY_SECONDS:
-                        last_report = time.monotonic()
-                        db.refresh(session)
-                        if session.status == "cancelled":
-                            return {"status": "cancelled", "upload_session_id": upload_session_id}
-                        session.bytes_received = session.size_bytes = written
-                        _touch_upload_session(session)
-                        db.commit()
-                        sync_upload_operation(db, session)
-                out.flush()
-            if expected and written != expected:
-                raise S3SourceError(f"The download stopped at {written} of {expected} bytes; import it again.")
-        except Exception as exc:  # noqa: BLE001
-            error = exc if isinstance(exc, S3SourceError) else _client_error(exc)
-            logger.warning("s3 import failed", extra={"upload_session_id": upload_session_id, "error": str(error)}, exc_info=not isinstance(exc, S3SourceError))
-            db.rollback()
-            session = db.get(EvidenceUploadSession, upload_session_id)
-            session.status = "failed"
-            session.failure_message = f"S3 download failed: {error}"
-            session.bytes_received = session.size_bytes = written
-            db.commit()
-            operation = get_upload_operation(db, session)
-            transition_operation(operation, "failed", stage="s3_download_failed", owner="worker", error=str(error), force=True)
-            db.add(operation)
-            db.commit()
-            target.unlink(missing_ok=True)
-            return {"status": "failed", "upload_session_id": upload_session_id, "error": str(error)}
-        session.bytes_received = session.size_bytes = written
-        db.commit()
-        sync_upload_operation(db, session)
-    return run_evidence_upload_preflight(upload_session_id)
+    return download_into_session(
+        upload_session_id,
+        source_key="s3_source",
+        label="S3",
+        require_enabled=require_enabled,
+        open_stream=_open_object,
+        describe_error=_client_error,
+    )

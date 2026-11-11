@@ -34,6 +34,9 @@ const navigateMock = vi.fn();
 const getS3StatusMock = vi.fn();
 const listS3ObjectsMock = vi.fn();
 const startS3ImportMock = vi.fn();
+const getAzureBlobStatusMock = vi.fn();
+const listAzureBlobsMock = vi.fn();
+const startAzureBlobImportMock = vi.fn();
 
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
@@ -65,6 +68,9 @@ vi.mock("../api/client", () => ({
     getS3Status: (...args: unknown[]) => getS3StatusMock(...args),
     listS3Objects: (...args: unknown[]) => listS3ObjectsMock(...args),
     startS3Import: (...args: unknown[]) => startS3ImportMock(...args),
+    getAzureBlobStatus: (...args: unknown[]) => getAzureBlobStatusMock(...args),
+    listAzureBlobs: (...args: unknown[]) => listAzureBlobsMock(...args),
+    startAzureBlobImport: (...args: unknown[]) => startAzureBlobImportMock(...args),
     finalizeResumableEvidenceUploadSession: (...args: unknown[]) => finalizeResumableEvidenceUploadSessionMock(...args),
   },
   // runResumableUpload (used by both unified and legacy resumable uploads)
@@ -225,6 +231,7 @@ async function reachMemoryPreparationStep(evidence: { id: string; original_filen
 describe("EvidenceIngestionWizard", () => {
   beforeEach(() => {
     getS3StatusMock.mockResolvedValue({ enabled: false, configured: false, default_bucket: "" });
+    getAzureBlobStatusMock.mockResolvedValue({ enabled: false, configured: false, default_container: "", account_name: "" });
     vi.clearAllMocks();
     navigateMock.mockReset();
     getActiveMemoryAnalysisBatchMock.mockResolvedValue(null);
@@ -1182,6 +1189,38 @@ describe("EvidenceIngestionWizard", () => {
     expect(startS3ImportMock).toHaveBeenCalledWith("case-1", { bucket: "evidence", key: "ws01.zip", declared_platform: "auto" });
     expect(finalizeResumableEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1");
     expect(createEvidenceUploadSessionMock).not.toHaveBeenCalled();
+  }, 10000);
+
+  it("imports a blob from Azure: the server downloads it and the normal preflight follows", async () => {
+    getAzureBlobStatusMock.mockResolvedValue({ enabled: true, configured: true, default_container: "evidence", account_name: "irstorage" });
+    listAzureBlobsMock.mockResolvedValue({
+      container: "evidence",
+      prefix: "",
+      prefixes: [],
+      objects: [
+        { key: "ws01.zip", name: "ws01.zip", size: 4200, last_modified: null, storage_class: "Hot", blob_type: "BlockBlob", archived: false },
+        { key: "old.vhd", name: "old.vhd", size: 9000, last_modified: null, storage_class: "Archive", blob_type: "PageBlob", archived: true },
+      ],
+      next_token: null,
+    });
+    const downloading = { ...sessionResponse().session, status: "uploading", bytes_received: 1000, expected_size_bytes: 4200 };
+    startAzureBlobImportMock.mockResolvedValue({ session: downloading });
+    getEvidenceUploadSessionMock.mockResolvedValue({ session: { ...downloading, status: "staged", bytes_received: 4200 } });
+    finalizeResumableEvidenceUploadSessionMock.mockResolvedValue(sessionResponse());
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-azure", original_filename: "ws01.zip" });
+    renderWizard();
+    await goToFileStep(/Collection/);
+    await userEvent.click(screen.getByText(/Advanced import options/i));
+    await userEvent.click(await screen.findByTestId("import-from-azure-blob"));
+    expect((await screen.findByText("old.vhd")).closest("button")).toBeDisabled();
+    await userEvent.click(screen.getByText("ws01.zip"));
+    expect(screen.getByTestId("azure-blob-selected")).toHaveTextContent("irstorage/evidence/ws01.zip");
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await waitFor(() => expect(finalizeResumableEvidenceUploadSessionMock).toHaveBeenCalled(), { timeout: 6000 });
+    await screen.findByTestId("preflight-report");
+    expect(startAzureBlobImportMock).toHaveBeenCalledWith("case-1", { container: "evidence", blob: "ws01.zip", declared_platform: "auto" });
+    expect(createEvidenceUploadSessionMock).not.toHaveBeenCalled();
+    expect(startS3ImportMock).not.toHaveBeenCalled();
   }, 10000);
 
   it("does not offer S3 when the instance has it off", async () => {
