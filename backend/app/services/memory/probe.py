@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # makes the final decision based on content; the extension only
 # influences the initial confidence level.
 CANDIDATE_MEMORY_EXTENSIONS: frozenset[str] = frozenset({
-    ".raw", ".mem", ".dmp", ".dump", ".bin", ".img", ".vmem", ".lime",
+    ".raw", ".mem", ".dmp", ".dump", ".bin", ".img", ".dd", ".vmem", ".lime",
 })
 
 
@@ -60,7 +60,6 @@ CONFIDENCE_LOW = "low"
 _HEADER_READ_BYTES = 1024 * 1024          # 1 MiB header
 _FOOTER_READ_BYTES = 64 * 1024            # 64 KiB footer
 _MIN_FILE_SIZE = 1024                      # anything smaller is invalid
-_MAX_PROBE_FILE_SIZE = 16 * 1024 * 1024 * 1024  # 16 GiB hard cap
 
 
 # Signatures detected by the probe.
@@ -329,16 +328,62 @@ def _is_document(header: bytes) -> bool:
 # Formats persisted to evidence.detected_format; the platform probe resolves each to its OS
 # (app.services.memory.platform.PLATFORM_RESOLVING_FORMATS).
 _KERNEL_SCAN_FORMATS = {"windows": "windows_kernel_scan", "linux": "linux_banner_scan", "macos": "macos_kernel_scan"}
-# Upload classification waits for this at most; the memory worker runs a longer scan later.
+# Upload classification looks for the kernel for a time that grows with the image (the kernel can
+# sit anywhere in physical memory: 3-4 GiB in on test images), between these bounds, and for at
+# most _KERNEL_SETTLE_SECONDS more once found; the memory worker runs a longer scan later.
 _KERNEL_SCAN_SECONDS = 30.0
+_KERNEL_SCAN_MAX_SECONDS = 120.0
+_KERNEL_SCAN_BYTES_PER_SECOND = 256 * 1024 * 1024
+_KERNEL_SETTLE_SECONDS = 10.0
 _KERNEL_SCAN_MIN_BYTES = 64 * 1024 * 1024
+
+
+def kernel_scan_seconds(size: int) -> float:
+    return min(_KERNEL_SCAN_MAX_SECONDS, max(_KERNEL_SCAN_SECONDS, size / _KERNEL_SCAN_BYTES_PER_SECOND))
 
 
 @lru_cache(maxsize=64)
 def _cached_kernel_scan(path: str, size: int, mtime: float):
     from app.services.memory.kernel_signatures import identify_kernel, scan_kernel_signatures
 
-    return identify_kernel(scan_kernel_signatures(Path(path), max_seconds=_KERNEL_SCAN_SECONDS, max_signatures=8).signatures)
+    scan = scan_kernel_signatures(Path(path), max_seconds=kernel_scan_seconds(size), max_signatures=8, settle_seconds=_KERNEL_SETTLE_SECONDS)
+    return identify_kernel(scan.signatures)
+
+
+# x86 firmware leaves its tables in the legacy BIOS area of physical memory (0xE0000-0xFFFFF):
+# the ACPI root pointer and the SMBIOS entry points, 16-byte aligned and checksummed. Found there
+# in a headerless file, they mean it is physical memory, whatever its extension -- and finding
+# them costs one 128 KiB read, so it also works where the full kernel scan does not run. Many
+# UEFI machines (and acquisition tools that skip firmware ranges) leave the area empty: then it
+# says nothing, and the kernel scan decides.
+_FIRMWARE_AREA = (0xE0000, 0x100000)
+
+
+def _checksum_ok(block: bytes) -> bool:
+    return len(block) > 0 and sum(block) % 256 == 0
+
+
+def firmware_tables(path: Path, size: int) -> list[str]:
+    """The firmware tables found at their physical-memory location in ``path``."""
+    start, end = _FIRMWARE_AREA
+    if size < end:
+        return []
+    try:
+        with path.open("rb") as handle:
+            handle.seek(start)
+            area = handle.read(end - start)
+    except OSError:
+        return []
+    found: list[str] = []
+    for offset in range(0, len(area) - 32, 16):
+        window = area[offset:offset + 36]
+        if window.startswith(b"RSD PTR ") and _checksum_ok(window[:20]) and "acpi_rsdp" not in found:
+            found.append("acpi_rsdp")
+        elif window.startswith(b"_SM3_") and 0x18 <= window[6] <= 0x20 and _checksum_ok(area[offset:offset + window[6]]) and "smbios3" not in found:
+            found.append("smbios3")
+        elif window.startswith(b"_SM_") and 0x1E <= window[5] <= 0x20 and _checksum_ok(area[offset:offset + window[5]]) and "smbios" not in found:
+            found.append("smbios")
+    return found
 
 
 def _kernel_in_image(path: Path, size: int):
@@ -387,17 +432,6 @@ def probe_memory_image(path: str | os.PathLike[str], *, scan_kernel: bool = Fals
             file_size=size,
             extension=suffix,
         )
-    if size > _MAX_PROBE_FILE_SIZE:
-        return ProbeResult(
-            status=STATUS_INVALID,
-            confidence=CONFIDENCE_HIGH,
-            detected_format="invalid",
-            reason=f"File exceeds the {(_MAX_PROBE_FILE_SIZE // (1024**3))} GiB probe safety cap.",
-            detected_evidence_type="unknown",
-            file_size=size,
-            extension=suffix,
-        )
-
     # Read header (bounded).
     try:
         with file_path.open("rb") as fh:
@@ -530,6 +564,20 @@ def probe_memory_image(path: str | os.PathLike[str], *, scan_kernel: bool = Fals
             extension=suffix,
             can_analyze=True,
             details={"kernel_platform": kernel.platform, "kernel_name": kernel.name, "kernel_pdb_guid": kernel.pdb_guid, "kernel_pdb_age": kernel.pdb_age, "kernel_release": kernel.release, "kernel_offset": kernel.offset},
+        )
+
+    tables = firmware_tables(file_path, size)
+    if tables:
+        return ProbeResult(
+            status=STATUS_PROBABLE_MEMORY,
+            confidence=CONFIDENCE_MEDIUM,
+            detected_format="raw_physical_memory",
+            reason=f"No header, but x86 firmware tables ({', '.join(tables)}) sit at their physical-memory address: a raw memory image.",
+            detected_evidence_type="memory",
+            file_size=size,
+            extension=suffix,
+            can_analyze=True,
+            details={"firmware_tables": tables},
         )
 
     # The .img extension on a large unstructured file is ambiguous.
