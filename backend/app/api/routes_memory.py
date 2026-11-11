@@ -1669,6 +1669,46 @@ def _probe_on_memory_worker(evidence_id: str) -> dict:
     return answer("probing", "The probe is queued on the memory worker behind other memory jobs; this panel updates when it finishes.")
 
 
+def _volatility_view_user(request: Request) -> str | None:
+    user = getattr(request.state, "user", None)
+    return getattr(user, "username", None) or getattr(user, "id", None)
+
+
+@router.get("/cases/{case_id}/memory/evidences/{evidence_id}/volatility-view", response_model=None)
+def get_volatility_view(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> dict:
+    """Whether Volatility could not read this image, and the state of its crash-dump copy."""
+    from app.services.memory.volatility_view import status
+
+    _require_case(db, case_id)
+    return status(_require_evidence_for_case(db, case_id, evidence_id))
+
+
+@router.post("/cases/{case_id}/memory/evidences/{evidence_id}/volatility-view", response_model=None, status_code=202)
+def post_volatility_view(case_id: str, evidence_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
+    """Have MemProcFS write the crash-dump copy Volatility can read (about the size of the image)."""
+    from app.services.memory.volatility_view import VolatilityViewError, request_copy
+
+    _require_case(db, case_id)
+    evidence = _require_evidence_for_case(db, case_id, evidence_id)
+    try:
+        return request_copy(db, evidence, user=_volatility_view_user(request))
+    except VolatilityViewError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.delete("/cases/{case_id}/memory/evidences/{evidence_id}/volatility-view", response_model=None, status_code=202)
+def delete_volatility_view(case_id: str, evidence_id: str, request: Request, db: Session = Depends(get_db)) -> dict:
+    """Remove the crash-dump copy to free its disk space; Volatility can no longer read the image."""
+    from app.services.memory.volatility_view import VolatilityViewError, request_removal
+
+    _require_case(db, case_id)
+    evidence = _require_evidence_for_case(db, case_id, evidence_id)
+    try:
+        return request_removal(db, evidence, user=_volatility_view_user(request))
+    except VolatilityViewError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get(
     "/cases/{case_id}/memory/evidences/{evidence_id}/symbol-preparation",
     response_model=None,
