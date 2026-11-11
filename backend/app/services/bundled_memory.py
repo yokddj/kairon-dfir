@@ -176,6 +176,10 @@ def run_registration(upload_session_id: str) -> dict[str, Any]:
                 archive_password=None,
             )
             evidence.metadata_json = {**(evidence.metadata_json or {}), "bundled_source": {"evidence_id": source.get("evidence_id"), "path": member_path}}
+            # The memory registration keeps wizard notes elsewhere; the provenance must be visible.
+            provenance = f"Memory image found in evidence {parent_name} at {member_path}; registered from the extracted file without uploading it again."
+            if provenance not in (evidence.notes or ""):
+                evidence.notes = f"{evidence.notes}\n{provenance}".strip() if evidence.notes else provenance
             db.add(evidence)
             db.commit()
             new_id = evidence.id

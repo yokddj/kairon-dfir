@@ -190,6 +190,7 @@ def test_the_worker_preflights_then_registers_it_as_memory_and_records_both_ends
         listed = db.get(Evidence, EV_COLLECTION).metadata_json["bundled_evidence"][0]
         assert listed["registration_status"] == "registered" and listed["registered_evidence_id"] == EV_MEMORY
         assert db.get(Evidence, EV_MEMORY).metadata_json["bundled_source"] == {"evidence_id": EV_COLLECTION, "path": env["member"]}
+        assert env["member"] in db.get(Evidence, EV_MEMORY).notes and "hosts.zip" in db.get(Evidence, EV_MEMORY).notes
 
 
 def test_a_member_the_inspection_does_not_confirm_as_memory_is_not_registered(env, monkeypatch):
