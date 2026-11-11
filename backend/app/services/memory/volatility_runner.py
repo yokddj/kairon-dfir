@@ -428,6 +428,13 @@ def _classify_failure(stderr: bytes, plugin: str = "") -> tuple[str, str]:
     plugin_label = plugin or "the plugin"
     if "read-only file system" in lower and ("symbol" in lower or "pdb" in lower):
         return "MEMORY_SYMBOL_CACHE_NOT_WRITABLE", "Volatility could not use its controlled symbol cache under the read-only worker filesystem."
+    # No memory layer at all: the page tables (DTB) were not found, so Volatility never got as far as
+    # needing symbols, although it lists symbol_table_name as unmet too. Symbols would not help.
+    if "unable to validate" in lower and "kernel.layer_name" in lower:
+        return "INVALID_MEMORY_LAYER", (
+            f"Volatility could not find this image's page tables, so it cannot build a memory layer for {plugin_label}; "
+            "kernel symbols would not help. MemProcFS can still read the image."
+        )
     if "symbol_table_name" in lower or ("unable to validate" in lower and "symbol" in lower):
         return "SYMBOLS_UNAVAILABLE", f"Volatility could not resolve the symbol/ISF table required by {plugin_label}."
     # Some plugins only know specific Windows builds (windows.consoles reads conhost.exe's internal

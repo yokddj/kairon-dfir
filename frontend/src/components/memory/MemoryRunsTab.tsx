@@ -27,7 +27,8 @@ function durationLabel(value: number | null | undefined): string {
 function memoryRunError(run: MemoryScanRun): string {
   const code = String(run.error_log?.code || "");
   if (code === "SYMBOLS_UNAVAILABLE") return "The symbols for this image's kernel are not in the symbol cache. An administrator can let the memory worker download them from Microsoft (MEMORY_SYMBOL_DIRECT_DOWNLOAD_ENABLED=true) or import them.";
-  if (code === "UNSUPPORTED_MEMORY_IMAGE" || code === "INVALID_MEMORY_LAYER") return "Volatility could not construct a supported memory layer for this image.";
+  if (code === "UNSUPPORTED_MEMORY_IMAGE") return "Volatility could not construct a supported memory layer for this image.";
+  if (code === "INVALID_MEMORY_LAYER") return "Volatility could not find this image's page tables, so it cannot read it (kernel symbols would not help). Processes, network, Find Evil and console text come from MemProcFS instead.";
   if (code === "VOLATILITY_OUTPUT_INVALID") return "Volatility ran, but its output could not be parsed.";
   if (code === "MEMORY_SYMBOL_CACHE_NOT_WRITABLE") return "The controlled Volatility symbol cache is not writable.";
   if (["MEMORY_EVIDENCE_PERMISSION_DENIED", "MEMORY_OUTPUT_PERMISSION_DENIED"].includes(code)) return "Evidence unavailable to memory worker. No plugin was executed.";

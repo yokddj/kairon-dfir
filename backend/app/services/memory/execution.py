@@ -90,6 +90,12 @@ PROCESS_PLUGINS = {"windows.pslist", "windows.pstree", "windows.psscan", "window
 # with MemProcFS, which needs no symbols, instead of stopping: the processes and network views are
 # filled from MemProcFS's own walk of the same kernel structures.
 SYMBOL_FALLBACK_PLUGINS = {"processes_basic": "memprocfs.processes", "network_basic": "memprocfs.network"}
+# MemProcFS reads the image without Volatility's symbols: when windows.info cannot resolve them,
+# these still run (Find Evil, console text) and only the Volatility plugins of the profile are skipped.
+SYMBOL_FREE_PLUGINS = MEMPROCFS_PLUGINS
+# Volatility cannot read the image: the kernel's symbols are missing, or no memory layer (page
+# tables) was found. MemProcFS finds both on its own.
+VOLATILITY_BLOCKED_CODES = {"SYMBOLS_UNAVAILABLE", "INVALID_MEMORY_LAYER"}
 PROCESS_OBSERVATION_PLUGINS = {"windows.envars", "windows.getsids", "windows.privileges"}
 OPTIONAL_RUNTIME_PROBED_PLUGINS = PROCESS_OBSERVATION_PLUGINS | {"windows.netscan", "windows.netstat", "windows.vadinfo"}
 ARTIFACT_PROFILES = {
@@ -600,12 +606,21 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             fatal = False
             blocking_error: VolatilityRunnerError | None = None
             symbol_fallback: str | None = None
+            symbols_missing = False
             symbol_blocked_plugin = "windows.info"
+            symbol_blocked_code = "SYMBOLS_UNAVAILABLE"
             for plugin_index, plugin in enumerate(plugins, start=1):
                 plugin_run = _plugin_run_for(db, run, plugin)
                 if time.monotonic() >= profile_deadline:
                     _mark_profile_timeout_pending(db, run, plugins, active_plugin=None, profile_timeout_seconds=profile_timeout_seconds)
                     break
+                if symbols_missing and plugin not in SYMBOL_FREE_PLUGINS:
+                    plugin_run.status = "skipped_dependency"
+                    plugin_run.completed_at = utc_now_naive()
+                    plugin_run.error_code = "SKIPPED_DEPENDENCY"
+                    plugin_run.error_message = "Skipped: Volatility cannot read this image (windows.info: no kernel symbols or no memory layer)."
+                    db.commit()
+                    continue
                 if plugin not in set(backend_readiness.get_settings().allowed_memory_plugins):
                     plugin_run.status = "skipped_disabled"
                     plugin_run.completed_at = utc_now_naive()
@@ -764,11 +779,16 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                         requirement = probe_windows_symbol_identity(validated.path, output_dir)
                         if requirement:
                             record_symbol_requirement(db, run, plugin_run.id, requirement)
-                    if exc.code == "SYMBOLS_UNAVAILABLE" and run.profile in SYMBOL_FALLBACK_PLUGINS and memprocfs_available():
+                    if exc.code in VOLATILITY_BLOCKED_CODES and run.profile in SYMBOL_FALLBACK_PLUGINS and memprocfs_available():
                         # The rest of the profile needs the same symbols: MemProcFS stands in.
                         symbol_fallback = SYMBOL_FALLBACK_PLUGINS[run.profile]
                         symbol_blocked_plugin = plugin
+                        symbol_blocked_code = exc.code
                         break
+                    if plugin == "windows.info" and exc.code in VOLATILITY_BLOCKED_CODES and any(item in SYMBOL_FREE_PLUGINS for item in plugins[plugin_index:]):
+                        # The rest needs the same symbols, except MemProcFS's plugins: run those.
+                        symbols_missing = True
+                        continue
                     if plugin == "windows.info" or exc.code == "PLUGIN_CANCELLED":
                         fatal = True
                         break
@@ -785,6 +805,7 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     manifest_plugins=manifest_plugins,
                     process_results=process_results,
                     artifact_results=artifact_results,
+                    reason=symbol_blocked_code,
                 )
             write_atomic_json(output_dir / "run_manifest.json", {"run_id": run.id, "evidence_id": run.evidence_id, "backend": "volatility3", "profile": run.profile, "plugins": manifest_plugins, "completed_at": utc_iso()})
             run.metadata_json = {
@@ -1659,13 +1680,14 @@ def _run_symbol_fallback(
     manifest_plugins: list[dict[str, Any]],
     process_results: list[dict[str, Any]],
     artifact_results: dict[str, dict[str, Any]],
+    reason: str = "SYMBOLS_UNAVAILABLE",
 ) -> None:
     """Run MemProcFS's inventory in place of the profile's Volatility plugins, which could not run
     without the kernel's symbols. Its rows go through the same normalizers."""
     plugin_run = _plugin_run_for(db, run, plugin)
     run.metadata_json = {
         **(run.metadata_json or {}),
-        "symbol_fallback": {"plugin": plugin, "reason": "SYMBOLS_UNAVAILABLE", "backend": "memprocfs"},
+        "symbol_fallback": {"plugin": plugin, "reason": reason, "backend": "memprocfs"},
         "progress": {**((run.metadata_json or {}).get("progress") or {}), "current_plugin": plugin, "plugin_started_at": utc_iso(), "last_heartbeat": utc_iso()},
     }
     db.commit()

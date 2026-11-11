@@ -2656,6 +2656,8 @@ def test_historical_crash_dump_command_matches_working_direct_execution(tmp_path
     ("stderr", "expected"),
     [
         (b"Unable to validate the plugin requirements: ['plugins.Info.kernel.symbol_table_name']", "SYMBOLS_UNAVAILABLE"),
+        # A 34 GB raw capture: PageMapScanner found no page tables, so no layer and no symbol lookup.
+        (b"Progress:  100.00\t\tPDB scanning finished\nUnable to validate the plugin requirements: ['plugins.Info.kernel.layer_name', 'plugins.Info.kernel.symbol_table_name']", "INVALID_MEMORY_LAYER"),
         (b"Unable to validate plugin requirement", "PLUGIN_REQUIREMENTS_UNSATISFIED"),
         (b"No suitable translation layer was found", "UNSUPPORTED_MEMORY_IMAGE"),
         (b"Unable to validate layer requirement", "INVALID_MEMORY_LAYER"),
@@ -3271,6 +3273,58 @@ def test_missing_symbols_fall_back_to_memprocfs(db_session, tmp_path: Path, monk
     assert plugin_runs[fallback].status == "completed"
     assert {plugin_runs[name].status for name in plugins[1:]} == {"skipped_dependency"}
     assert any(doc.get("process", {}).get("pid") == 7432 or doc.get("pid") == 7432 for doc in indexed)
+
+
+@pytest.mark.parametrize("code", ["SYMBOLS_UNAVAILABLE", "INVALID_MEMORY_LAYER"])
+def test_find_evil_without_symbols_still_runs_memprocfs(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code) -> None:
+    """windows.info failing on missing symbols skips only the Volatility plugins: MemProcFS's
+    FindEvil needs no symbols and runs."""
+    plugins = ["windows.info", "kairon.findevil", "memprocfs.findevil"]
+    _case(db_session)
+    evidence_file = tmp_path / "memory.mem"
+    evidence_file.write_bytes(b"synthetic")
+    evidence = _evidence(db_session, stored_path=str(evidence_file))
+    run = MemoryScanRun(case_id=CASE_ID, evidence_id=evidence.id, backend="volatility3", profile="find_evil", status="queued", requested_plugin_count=3, plugin_count=3, metadata_json={"plugins": plugins})
+    db_session.add(run)
+    db_session.commit()
+    for plugin in plugins:
+        db_session.add(MemoryPluginRun(memory_scan_run_id=run.id, case_id=CASE_ID, evidence_id=evidence.id, plugin=plugin, status="pending"))
+    db_session.commit()
+
+    class SessionContext:
+        def __enter__(self):
+            return db_session
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(memory_execution, "SessionLocal", lambda: SessionContext())
+    monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _id: SimpleNamespace(evidence=evidence, path=evidence_file, size_bytes=evidence_file.stat().st_size))
+    monkeypatch.setattr(memory_execution, "validate_current_process_output_access", lambda: tmp_path)
+    monkeypatch.setattr(memory_execution.backend_readiness, "check_volatility3_backend", lambda: {"ready": True, "version": "Volatility 3 Framework 2.28.0"})
+    monkeypatch.setattr(memory_execution, "memory_run_dir", lambda *_args: tmp_path / "run")
+    monkeypatch.setattr(memory_execution, "relative_to_data_dir", lambda _path: "memory-output/run")
+    monkeypatch.setattr(memory_execution, "write_atomic_json", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(memory_execution, "probe_windows_symbol_identity", lambda *_args: None)
+    monkeypatch.setattr(memory_execution, "_index_artifact_results", lambda *_args: {})
+
+    def no_symbols(plugin, *_args, **_kwargs):
+        raise volatility_runner.VolatilityRunnerError(code, f"{plugin} cannot read the image.", stderr=b"symbols", return_code=1, stdout_length=0, stderr_length=7)
+
+    ran: list[str] = []
+    monkeypatch.setattr(memory_execution, "run_plugin", no_symbols)
+    monkeypatch.setattr(memory_execution, "run_kairon_findevil", lambda *_a, **_k: pytest.fail("kairon.findevil needs Volatility's symbols"))
+    monkeypatch.setattr(memory_execution, "run_findevil", lambda *_a, **_k: ran.append("memprocfs.findevil") or volatility_runner.VolatilityRunResult(argv_display=["memprocfs"], stdout=b"[]", stderr=b"", duration_ms=5))
+
+    memory_execution.run_memory_metadata_scan(run.id)
+    db_session.refresh(run)
+    plugin_runs = {item.plugin: item for item in db_session.query(MemoryPluginRun).filter(MemoryPluginRun.memory_scan_run_id == run.id).all()}
+
+    assert ran == ["memprocfs.findevil"]
+    assert run.status == "completed_with_errors"
+    assert plugin_runs["windows.info"].status == "failed"
+    assert plugin_runs["kairon.findevil"].status == "skipped_dependency"
+    assert plugin_runs["memprocfs.findevil"].status == "completed"
 
 
 HOST_ID = "dddddddd-4444-4444-8444-dddddddddddd"
