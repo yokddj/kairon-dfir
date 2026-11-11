@@ -1864,7 +1864,13 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                             {OVERRIDE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                           </select>
                         </label>
-                        {forcedRoute ? <p className="mt-2 text-xs text-amber">You are forcing the processing pipeline. Use this only when you have external evidence that Kairon's detection is incomplete.</p> : null}
+                        {forcedRoute === "memory_dump" && report.classification.category === "archive" ? (
+                          <p className="mt-2 text-xs text-amber" data-testid="compressed-memory-note">
+                            A compressed memory capture: Kairon extracts the archive and registers the memory image inside as memory evidence, on the host chosen below. The archive itself is not sent to memory analysis.
+                          </p>
+                        ) : forcedRoute ? (
+                          <p className="mt-2 text-xs text-amber">You are forcing the processing pipeline. Use this only when you have external evidence that Kairon's detection is incomplete.</p>
+                        ) : null}
                         {wrongRoute ? (
                           <div className="mt-3 rounded-xl border border-danger/30 bg-danger/10 p-3 text-xs text-danger" data-testid="wrong-route-warning">
                             <p className="font-semibold">Forced route conflicts with strong structural detection.</p>

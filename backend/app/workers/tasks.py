@@ -450,6 +450,38 @@ def run_s3_import(upload_session_id: str) -> dict:
     return run_import(upload_session_id)
 
 
+def _register_bundled_memory_images(db: Session, evidence: Evidence, archive_entries: list[dict]) -> None:
+    """Register the memory images of a compressed memory capture as memory evidence.
+
+    An archive is a compressed memory capture when its only content is memory images (a .7z
+    holding PhysicalMemory.dd), or when the analyst forced "Memory" on it in the wizard. Anything
+    else keeps its memory images listed for the analyst to register (Analyse as memory evidence).
+    Never fails the collection's ingest: a registration that cannot start stays listed.
+    """
+    from app.services.bundled_memory import BundledMemoryError, start_registration
+
+    memory_paths = [entry["path"] for entry in archive_entries if entry.get("bundled_evidence") == "memory_dump"]
+    if not memory_paths:
+        return
+    other_files = [
+        entry for entry in archive_entries
+        if entry.get("status") == "extracted" and not entry.get("ignored") and not entry.get("bundled_evidence")
+    ]
+    forced = bool((evidence.metadata_json or {}).get("register_bundled_memory"))
+    if other_files and not forced:
+        return
+    metadata = evidence.metadata_json or {}
+    host_label = metadata.get("provided_host") or evidence.detected_host or None
+    for path in memory_paths:
+        try:
+            start_registration(db, evidence, path, host_id=evidence.host_id, provided_host=host_label)
+        except BundledMemoryError as exc:
+            logger.info("Memory image %s of evidence %s left for the analyst: %s", path, evidence.id, exc)
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            logger.exception("Could not start registering memory image %s of evidence %s", path, evidence.id)
+
+
 def enqueue_bundled_memory_registration(upload_session_id: str) -> str:
     job = ingest_queue.enqueue(
         "app.workers.tasks.run_bundled_memory_registration",
@@ -5606,9 +5638,14 @@ def ingest_evidence(evidence_id: str) -> None:
             if linux_inventory.get("hostname") and not metadata.get("provided_host"):
                 metadata.setdefault("linux_detected_hostname", linux_inventory.get("hostname"))
         metadata["bundled_evidence"] = bundled_evidence(archive_entries)
+        # The override may have been recorded after this ingest read the metadata.
+        stored_metadata = db.query(Evidence.metadata_json).filter(Evidence.id == evidence.id).scalar() or {}
+        if stored_metadata.get("register_bundled_memory"):
+            metadata["register_bundled_memory"] = True
         evidence.metadata_json = metadata
         db.add(evidence)
         db.commit()
+        _register_bundled_memory_images(db, evidence, archive_entries)
         write_manifest(manifest_path, manifest)
         if artifacts:
             _benchmark_mark_first(benchmark_state, "time_to_first_artifact_ready")

@@ -674,6 +674,32 @@ describe("EvidenceIngestionWizard", () => {
     expect(screen.getByTestId("hash-mismatch-warning")).toBeInTheDocument();
   });
 
+  it("explains that forcing Memory on an archive registers the memory image inside, not the archive", async () => {
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+      preflight: readyReport({
+        status: "blocked",
+        status_checks: [{ label: "Supported", ok: false, detail: "We could not confidently determine the evidence type." }],
+        diagnostics: [{
+          problem: "Low confidence classification",
+          reason: "We could not confidently determine the evidence type. You can continue with a manual override.",
+          current_configuration: {},
+          required_configuration: {},
+          configuration_key: null,
+          configuration_file: null,
+          how_to_fix: ["Use the Advanced options override to set platform/classification manually"],
+          severity: "recommendation",
+        }],
+      }),
+    }));
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "PhysicalMemory.7z"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.selectOptions(within(screen.getByTestId("manual-override-panel")).getByRole("combobox"), "memory_dump");
+    expect(screen.getByTestId("compressed-memory-note")).toHaveTextContent("registers the memory image inside");
+  });
+
   it("shows blocking diagnostics with severity and requires manual override to continue", async () => {
     createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
       preflight: readyReport({
