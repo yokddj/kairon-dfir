@@ -214,6 +214,17 @@ def test_a_service_token_cannot_write(db_for_middleware):
     assert response.json() == {"detail": "Service tokens are read-only"}
 
 
+@pytest.mark.parametrize("path", ["/api/admin/performance", "/api/admin/performance/resources", "/api/system/settings", "/api/storage/allowed-roots"])
+def test_a_service_token_cannot_read_the_administration_api(db_for_middleware, path):
+    """Read-only is not enough: deployment tuning, performance and storage
+    configuration are for administrators, not for an integration."""
+    db = db_for_middleware
+    _row, plaintext = service_tokens.create_token(db, name="integration", created_by=None)
+    response = TestClient(app).get(path, headers={"Authorization": f"Bearer {plaintext}"})
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Service tokens cannot use the administration API"}
+
+
 def test_a_service_token_reaches_any_case_without_a_grant(db_for_middleware):
     """By design: see app.services.service_tokens for why this is not
     case-by-case the way human access is."""

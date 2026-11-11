@@ -11,8 +11,16 @@ with its own lifecycle, independent of the backend's.
 from __future__ import annotations
 
 import os
+import re
+from urllib.parse import quote
 
 import httpx
+
+# A case id is a single path segment (a UUID today). Anything else -- a "/",
+# "..", "?" or "#" -- would make the request reach another endpoint than
+# the tool's, e.g. "../admin/..." from text an attacker planted in case data
+# that a connected model then passes along. Refused before any request.
+_CASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 
 
 class KaironAPIError(RuntimeError):
@@ -70,10 +78,13 @@ class KaironClient:
         return self.get("/api/cases", params=_drop_none(params))
 
     def call_tool(self, case_id: str, tool_name: str, arguments: dict) -> dict:
+        if not isinstance(case_id, str) or not _CASE_ID.fullmatch(case_id):
+            raise KaironAPIError(400, "Invalid case_id: use an id returned by list_cases.")
         # Every tool parameter is a scalar (see app.services.ai.tools), so
         # plain query parameters always suffice -- no request body, no
         # encoding scheme to agree on with the backend.
-        return self.get(f"/api/cases/{case_id}/ai/tools/{tool_name}", params=_drop_none(arguments))
+        path = f"/api/cases/{quote(case_id, safe='')}/ai/tools/{quote(tool_name, safe='')}"
+        return self.get(path, params=_drop_none(arguments))
 
 
 def _drop_none(params: dict) -> dict:

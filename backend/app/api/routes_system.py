@@ -415,7 +415,7 @@ def get_admin_performance(db: Session = Depends(get_db)) -> dict:
 
 
 @router.patch("/api/admin/performance")
-def patch_admin_performance(payload: dict, db: Session = Depends(get_db)) -> dict:
+def patch_admin_performance(payload: dict, db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
     try:
         return save_performance_profile(
             db,
@@ -428,7 +428,7 @@ def patch_admin_performance(payload: dict, db: Session = Depends(get_db)) -> dic
 
 
 @router.post("/api/admin/performance/apply")
-def apply_admin_performance(payload: dict, db: Session = Depends(get_db)) -> dict:
+def apply_admin_performance(payload: dict, db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
     try:
         return save_performance_profile(
             db,
@@ -441,7 +441,7 @@ def apply_admin_performance(payload: dict, db: Session = Depends(get_db)) -> dic
 
 
 @router.post("/api/admin/performance/apply-profile")
-def apply_admin_performance_profile(payload: dict, db: Session = Depends(get_db)) -> dict:
+def apply_admin_performance_profile(payload: dict, db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
     try:
         return save_performance_profile(
             db,
@@ -454,7 +454,7 @@ def apply_admin_performance_profile(payload: dict, db: Session = Depends(get_db)
 
 
 @router.post("/api/admin/performance/apply-recommended")
-def apply_admin_performance_recommended(payload: dict | None = None, db: Session = Depends(get_db)) -> dict:
+def apply_admin_performance_recommended(payload: dict | None = None, db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
     try:
         return apply_recommended_profile(db, confirm_max=bool((payload or {}).get("confirm_max")))
     except ValueError as exc:
@@ -462,7 +462,7 @@ def apply_admin_performance_recommended(payload: dict | None = None, db: Session
 
 
 @router.post("/api/admin/performance/restart")
-def restart_admin_performance(payload: dict) -> dict:
+def restart_admin_performance(payload: dict, _admin: None = Depends(require_settings_admin)) -> dict:
     try:
         return restart_plan(payload.get("services") or [])
     except ValueError as exc:

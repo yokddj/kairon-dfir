@@ -196,3 +196,76 @@ def test_a_backend_api_error_is_surfaced_as_an_error_result_not_a_crash():
     body = _result_json(result)
     assert body["error"] == "Case not found"
     assert body["status_code"] == 404
+
+
+# --- concurrency, catalog refresh, transport security -------------------
+
+
+def test_a_slow_tool_call_does_not_block_another_session():
+    import threading
+    import time
+
+    gate = threading.Event()
+
+    class SlowClient(FakeKaironClient):
+        def call_tool(self, case_id, tool_name, arguments):
+            gate.wait(2)
+            return {"slow": True}
+
+        def list_cases(self, **params):
+            gate.set()
+            return []
+
+    server = build_server(SlowClient())
+    handler = server._request_handlers["tools/call"].handler
+
+    async def scenario():
+        started = time.monotonic()
+        slow = asyncio.create_task(handler(None, types.CallToolRequestParams(name="list_hosts", arguments={"case_id": "case-1"})))
+        await asyncio.sleep(0.05)
+        await handler(None, types.CallToolRequestParams(name="list_cases", arguments={}))
+        fast_done = time.monotonic() - started
+        await slow
+        return fast_done
+
+    # list_cases releases the slow call; if the event loop were blocked by the
+    # slow call, list_cases could only run after its 2 s wait.
+    assert asyncio.run(scenario()) < 1.0
+
+
+def test_the_catalog_is_refreshed_after_its_ttl(monkeypatch):
+    import mcp_server.server as server_module
+
+    client = FakeKaironClient()
+    server = build_server(client)
+    client._tool_specs = client._tool_specs + [{"name": "new_tool", "description": "New.", "input_schema": {"type": "object", "properties": {}}}]
+    assert "new_tool" not in {tool.name for tool in _list_tools(server).tools}
+    real_monotonic = server_module.time.monotonic
+    monkeypatch.setattr(server_module.time, "monotonic", lambda: real_monotonic() + server_module.CATALOG_TTL_SECONDS + 1)
+    assert "new_tool" in {tool.name for tool in _list_tools(server).tools}
+
+
+def test_a_failed_catalog_refresh_keeps_the_previous_catalog(monkeypatch):
+    import mcp_server.server as server_module
+
+    client = FakeKaironClient()
+    server = build_server(client)
+
+    def broken():
+        raise KaironAPIError(0, "down")
+
+    client.list_tool_specs = broken
+    real_monotonic = server_module.time.monotonic
+    monkeypatch.setattr(server_module.time, "monotonic", lambda: real_monotonic() + server_module.CATALOG_TTL_SECONDS + 1)
+    assert "search_events" in {tool.name for tool in _list_tools(server).tools}
+
+
+def test_remote_host_names_must_be_listed_for_the_http_transport():
+    from mcp_server.server import transport_security
+
+    default = transport_security([])
+    assert default.enable_dns_rebinding_protection is True
+    assert "localhost:*" in default.allowed_hosts and not any("vpn" in host for host in default.allowed_hosts)
+    listed = transport_security(["kairon.vpn.example", "10.0.0.5:8800"])
+    assert "kairon.vpn.example:*" in listed.allowed_hosts and "10.0.0.5:8800" in listed.allowed_hosts
+    assert "https://kairon.vpn.example:*" in listed.allowed_origins

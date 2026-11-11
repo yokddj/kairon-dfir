@@ -133,3 +133,30 @@ def test_list_cases_forwards_its_keyword_filters_as_query_params(monkeypatch):
 
     assert captured["url"] == "http://localhost:8000/api/cases"
     assert captured["params"] == {"q": "smith"}
+
+
+@pytest.mark.parametrize(
+    "case_id",
+    ["../admin/performance?x=", "case-1/../../admin", "case-1?x=1", "case-1#frag", "", "%2e%2e", "a b", "x" * 200],
+)
+def test_a_case_id_that_is_not_one_path_segment_never_reaches_the_backend(monkeypatch, case_id):
+    """Text in case data is attacker-controlled; a model passing it on as a
+    case_id must not be able to steer a tool call to another endpoint."""
+    calls = []
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: calls.append(args) or _Response(200, {}))
+    with pytest.raises(KaironAPIError) as excinfo:
+        KaironClient("http://kairon.test", "token").call_tool(case_id, "describe_case", {})
+    assert excinfo.value.status_code == 400
+    assert calls == []
+
+
+def test_a_uuid_case_id_reaches_the_tool_endpoint(monkeypatch):
+    seen = {}
+
+    def fake_get(url, **kwargs):
+        seen["url"] = url
+        return _Response(200, {"ok": True})
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    KaironClient("http://kairon.test", "token").call_tool("3f2b8c1e-7d4a-4e9b-a6c2-5b1d9e0f4a7c", "describe_case", {})
+    assert seen["url"] == "http://kairon.test/api/cases/3f2b8c1e-7d4a-4e9b-a6c2-5b1d9e0f4a7c/ai/tools/describe_case"
