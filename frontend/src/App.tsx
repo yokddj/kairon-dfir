@@ -17,6 +17,7 @@ import { TimezoneProvider } from "./context/TimezoneContext";
 const LoginPage = lazy(() => import("./pages/LoginPage"));
 const SetupWizardPage = lazy(() => import("./pages/SetupWizardPage"));
 const AdminUsersPage = lazy(() => import("./pages/AdminUsersPage"));
+const ServiceTokensPage = lazy(() => import("./pages/ServiceTokensPage"));
 const AiSettingsPage = lazy(() => import("./pages/AiSettingsPage"));
 const S3SettingsPage = lazy(() => import("./pages/S3SettingsPage"));
 const AzureBlobSettingsPage = lazy(() => import("./pages/AzureBlobSettingsPage"));
@@ -228,6 +229,7 @@ export default function App() {
                         <Route path="/system" element={<SystemPage />} />
                         <Route path="/system/performance" element={<SystemPage />} />
                         <Route path="/admin/users" element={<AdminUsersPage />} />
+                        <Route path="/admin/service-tokens" element={<ServiceTokensPage />} />
                         <Route path="/settings/ai" element={<AiSettingsPage />} />
                         <Route path="/settings/s3" element={<S3SettingsPage />} />
                         <Route path="/settings/azure-blob" element={<AzureBlobSettingsPage />} />
