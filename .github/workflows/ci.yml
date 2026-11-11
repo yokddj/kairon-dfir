@@ -51,9 +51,11 @@ jobs:
         # The runner ships 7z (p7zip-full) already; unar is the backend
         # image's RAR decryptor (7-Zip's RAR reader cannot decompress RAR's
         # own encrypted data streams) and is not preinstalled.
-        # The security pocket is also on the archive mirror; security.ubuntu.com has gone
-        # unresolvable on the runners for hours (2026-11-11), failing every job here.
-        run: if [ -f /etc/apt/apt-mirrors.txt ] && grep -qv security.ubuntu.com /etc/apt/apt-mirrors.txt; then sudo sed -i '/security\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt; fi; cat /etc/apt/apt-mirrors.txt 2>/dev/null || true; sudo apt-get update -qq && sudo apt-get install -y -qq unar
+        # When Ubuntu's mirrors cannot be reached (ubuntu.com unresolvable on the runners for
+        # hours on 2026-11-11), go on without unar: the encrypted-RAR tests that need it skip
+        # themselves, and the warning says so on the run.
+        run: |
+          (sudo timeout 600 apt-get update -qq && sudo timeout 600 apt-get install -y -qq unar) || echo "::warning::unar could not be installed (Ubuntu mirrors unreachable): encrypted-RAR tests are skipped in this run."
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run tests
@@ -120,8 +122,9 @@ jobs:
         # The backend image ships 7z to extract tar/7z archives, and unar to
         # decrypt RAR archives (7-Zip's RAR reader cannot decompress RAR's
         # own encrypted data streams).
-        # Same security-pocket mirror as backend-tests.
-        run: if [ -f /etc/apt/apt-mirrors.txt ] && grep -qv security.ubuntu.com /etc/apt/apt-mirrors.txt; then sudo sed -i '/security\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt; fi; cat /etc/apt/apt-mirrors.txt 2>/dev/null || true; sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full unar
+        # Same fallback as backend-tests; 7z ships with the runner image.
+        run: |
+          (sudo timeout 600 apt-get update -qq && sudo timeout 600 apt-get install -y -qq p7zip-full unar) || { command -v 7z >/dev/null && echo "::warning::p7zip-full/unar could not be installed (Ubuntu mirrors unreachable): the runner's 7z is used and encrypted-RAR tests are skipped."; }
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run integration tests
