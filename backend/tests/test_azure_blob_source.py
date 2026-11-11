@@ -301,3 +301,9 @@ def test_sdk_errors_become_safe_messages() -> None:
     assert "expired" in str(azure_blob_source._client_error(_sdk_error(ClientAuthenticationError, "AuthenticationFailed")))
     message = str(azure_blob_source._client_error(ClientAuthenticationError(message="AADSTS7000215: Invalid client secret secret-internal-detail")))
     assert "Entra ID" in message and "secret-internal-detail" not in message
+
+
+def test_the_sdk_does_not_log_every_request() -> None:
+    import logging
+
+    assert logging.getLogger("azure.core.pipeline.policies.http_logging_policy").getEffectiveLevel() >= logging.WARNING
