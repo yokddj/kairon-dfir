@@ -1657,6 +1657,13 @@ function formatReportStatus(status: string | null | undefined) {
           </div>
         ) : null}
 
+        {isActive && metadata.register_bundled_memory && !bundledEvidence.length ? (
+          <p className="mt-5 rounded-2xl border border-accent/30 bg-accent/5 p-4 text-sm text-ink" data-testid="compressed-memory-extracting">
+            Compressed memory capture: the archive is being extracted (a large capture takes several minutes without visible progress). The memory image inside is then registered as its own memory
+            evidence, where memory analysis runs; this page links to it.
+          </p>
+        ) : null}
+
         {bundledEvidence.length && data ? (
           <BundledEvidencePanel
             caseId={data.case_id}

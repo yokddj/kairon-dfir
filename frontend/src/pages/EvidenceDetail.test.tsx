@@ -616,6 +616,14 @@ describe("EvidenceDetail minimal processing UX", () => {
     expect(banner).toHaveTextContent("without uploading it again");
   });
 
+  it("explains a compressed memory capture while it is extracted", async () => {
+    setupMinimalEvidenceDetail({
+      evidence: { ingest_status: "processing", metadata_json: { ...evidencePayload.metadata_json, register_bundled_memory: true } },
+    });
+    renderPage();
+    expect(await screen.findByTestId("compressed-memory-extracting")).toHaveTextContent("registered as its own memory");
+  });
+
   it("shows no unprocessed-members notice for a plain collection", async () => {
     renderPage();
     await screen.findAllByText(/Evidence/);
