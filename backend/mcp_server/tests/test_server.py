@@ -266,6 +266,6 @@ def test_remote_host_names_must_be_listed_for_the_http_transport():
     default = transport_security([])
     assert default.enable_dns_rebinding_protection is True
     assert "localhost:*" in default.allowed_hosts and not any("vpn" in host for host in default.allowed_hosts)
-    listed = transport_security(["kairon.vpn.example", "10.0.0.5:8800"])
-    assert "kairon.vpn.example:*" in listed.allowed_hosts and "10.0.0.5:8800" in listed.allowed_hosts
+    listed = transport_security(["kairon.vpn.example", "192.0.2.10:8800"])
+    assert "kairon.vpn.example:*" in listed.allowed_hosts and "192.0.2.10:8800" in listed.allowed_hosts
     assert "https://kairon.vpn.example:*" in listed.allowed_origins

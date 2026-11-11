@@ -104,8 +104,8 @@ localhost **and** list that name, or the server answers `421`:
 
 ```bash
 # .env
-KAIRON_MCP_BIND=10.8.0.1
-KAIRON_MCP_ALLOWED_HOSTS=kairon.vpn.example,10.8.0.1
+KAIRON_MCP_BIND=192.0.2.1
+KAIRON_MCP_ALLOWED_HOSTS=kairon.vpn.example,192.0.2.1
 ```
 
 Standalone: `kairon-mcp-server --transport http --host 0.0.0.0 --allowed-host kairon.vpn.example`.
