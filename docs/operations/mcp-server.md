@@ -3,179 +3,284 @@
 Kairon can expose a case's parsed data, read-only, to any client that speaks
 the [Model Context Protocol](https://modelcontextprotocol.io) (MCP): an IDE,
 a desktop assistant, a chat application with MCP support, or a custom
-integration. This is a generic protocol, not tied to any particular vendor —
-the server is useful to whatever MCP-compatible client an analyst or a team
-already uses.
+integration. It is a generic protocol, not tied to any vendor: the server
+works with whatever MCP-compatible client an analyst or a team already uses,
+so that client's model can search a case's events, read its timeline, list
+its findings and detections or walk a process tree while you investigate.
 
-## What MCP is, briefly
-
-MCP standardizes how a client (the part a person or a model interacts with)
-discovers and calls tools exposed by a server. A client connects, asks what
-tools exist (with a name, a description and a JSON Schema of parameters),
-and later calls one by name with arguments; the server runs it and returns a
-result. That is the entire shape of the protocol Kairon's MCP server
-implements.
+- [Set it up](#set-it-up) — four steps, about ten minutes.
+- [Tools](#tools) — what a connected client can do.
+- [Troubleshooting](#troubleshooting) — the errors you can meet and what they mean.
 
 ## What it is, and what it is not
 
-Kairon's MCP server is a thin bridge to the same **read-only lookup tools**
-the in-app AI assistant already uses (see
-[operations/ai-assistant.md](ai-assistant.md)) — `describe_case`,
-`search_events`, `get_timeline`, `list_findings`, `get_process_tree`, and the
-rest of that table. Nothing is duplicated: the server fetches the tool
-catalog from the backend at startup (and again every 5 minutes, so a backend
-upgrade reaches connected clients without a restart) and executes a call by
-calling the backend back, so a tool's behavior, its parameters and its
-description are defined once.
+The MCP server is a thin bridge to the same **read-only lookup tools** the
+in-app AI assistant uses (see [ai-assistant.md](ai-assistant.md)). Nothing is
+duplicated: the server fetches the tool catalog from the backend at startup
+(and again every 5 minutes, so a Kairon upgrade reaches connected clients
+without restarting it) and runs each call by calling the backend back.
 
-One tool exists only here, not in the in-app assistant's set: **`list_cases`**,
-to resolve a case by name before calling any of the others, all of which take
-a `case_id`. The in-app assistant has no equivalent need — its case is
-already fixed by the page it runs on — but an external client asking about
-"the Smith investigation" needs a way to find that case's id first.
+- **It cannot write.** It authenticates with a service token that Kairon
+  refuses on any method but `GET`/`HEAD`: no findings, notes, timeline
+  changes or jobs, whatever a client tries. Results are capped like the
+  in-app assistant's (a sample, not a dump).
+- **It sees every case.** A service token's scope is every case on the
+  deployment, by design (an always-on integration should not need a new
+  grant for every new case). It never reaches the administration API, the
+  instance settings or the storage configuration, even for reads.
+- **The AI assistant does not need to be enabled.** The tools read the case
+  directly; no model provider is involved on Kairon's side. The model is the
+  one in your MCP client.
 
-**It cannot write.** The server authenticates with a service token that is
-refused on any method but `GET`/`HEAD` (see below), so this holds regardless
-of which tools a future client tries to call. It cannot create findings,
-edit notes, change the timeline or start a job, the same guarantee the
-in-app assistant has. Results are capped the same way too (a sample, not a
-dump): see ai-assistant.md's limits.
+## Set it up
 
-## Authentication: service tokens
+### 1. Create a service token
 
-The server authenticates to Kairon's API with a **service token** — a
-long-lived, read-only credential for a non-interactive client, distinct from
-a browser session. A service token's scope is every case on the deployment,
-by design: granting access case by case, the way a human user's access is
-granted, would mean re-granting it every time a new case is opened, which
-does not fit an always-on integration. A service token is never an
-administrator: it is refused on every write (any method but `GET`/`HEAD`)
-and, even for reads, on the administration API (`/api/admin/...`, including
-user management, other tokens and performance tuning), instance settings
-(`/api/system/settings`) and storage configuration (`/api/storage/...`).
+The server reads Kairon with a **service token** (`kairon_svc_...`): a
+long-lived, read-only credential for a non-interactive client. An
+administrator creates it through the API. With `curl`, against the address
+you open Kairon on (here `http://localhost:5173`):
 
-Create one as an administrator:
+```bash
+# Sign in as an administrator; the session cookie goes to a temporary file.
+curl -s -c kairon.cookies -H 'Content-Type: application/json' \
+  -d '{"username": "admin", "password": "<your password>"}' \
+  http://localhost:5173/api/auth/login
 
-```
-POST /api/admin/service-tokens
-{"name": "mcp-server"}
+# Create the token. expires_in_days is optional (omit it for no expiry).
+curl -s -b kairon.cookies -H 'Content-Type: application/json' \
+  -d '{"name": "mcp-server", "expires_in_days": 90}' \
+  http://localhost:5173/api/admin/service-tokens
+
+rm kairon.cookies
 ```
 
-The response includes the token's plaintext value **once** — store it now;
-only its hash is kept afterward, so it cannot be recovered later, the same
-as a password. List and revoke tokens with:
+The response's `token` field holds the token **once**: store it now (a
+password manager, the server's `.env`). Only its hash is kept, so it cannot
+be shown again; if you lose it, create another. The response's `id` is what
+you revoke it by. To list or revoke tokens, sign in again as above and:
 
+```bash
+curl -s -b kairon.cookies http://localhost:5173/api/admin/service-tokens                       # list (no secrets)
+curl -s -b kairon.cookies -X DELETE http://localhost:5173/api/admin/service-tokens/<token id>  # revoke
 ```
-GET    /api/admin/service-tokens
-DELETE /api/admin/service-tokens/{token_id}
+
+Revoke a token immediately if it is ever exposed, and prefer an expiry for
+one tied to an engagement.
+
+### 2. Choose how the server runs
+
+| | **A. Launched by the client (stdio)** | **B. Always-on server (HTTP)** |
+| --- | --- | --- |
+| Best for | One analyst, a desktop client on their own machine | A team, clients on other machines, clients that only connect to a URL |
+| Runs | Your MCP client starts it as a local process | A container next to Kairon (`docker compose --profile mcp`) |
+| Client authenticates with | Nothing (the client launched it) | A client token, `Authorization: Bearer <KAIRON_MCP_HTTP_TOKEN>` |
+| Needs on the client machine | Python 3.12+ and this repository (or the package) | Only the URL and the client token |
+
+**A. stdio.** Install the package on the machine the MCP client runs on:
+
+```bash
+pip install ./backend/mcp_server        # from a checkout of this repository
+kairon-mcp-server --help                # check it is on the PATH
 ```
 
-Revoke a token (and issue a new one) if it is ever exposed, and set
-`expires_in_days` at creation for one that should not outlive a fixed
-engagement or review period.
+The client launches `kairon-mcp-server` with two environment variables (step 3
+shows where they go):
 
-## Running the server
+- `KAIRON_API_URL`: the address you open Kairon on, e.g. `http://localhost:5173`
+  (the UI port proxies the API; `http://localhost:8000` also works on the
+  Kairon server itself).
+- `KAIRON_SERVICE_TOKEN`: the token from step 1.
 
-The server is a standalone package, `backend/mcp_server/`: it never imports
-Kairon's backend code and talks to it purely over HTTP, so it can run on its
-own host or container, independent of the backend's own lifecycle.
-
-### With Docker Compose
-
-Off by default; enable its profile and set the token:
+**B. HTTP with Docker Compose.** On the Kairon server, add two values to `.env`:
 
 ```bash
 # .env
-KAIRON_MCP_SERVICE_TOKEN=<the token from POST /api/admin/service-tokens>
-KAIRON_MCP_HTTP_TOKEN=<docker compose run --rm mcp-server --generate-token>
+KAIRON_MCP_SERVICE_TOKEN=<the kairon_svc_... token from step 1>
+KAIRON_MCP_HTTP_TOKEN=<output of: docker compose run --rm --no-deps mcp-server --generate-token>
+```
 
+and start it:
+
+```bash
 docker compose --profile mcp up -d mcp-server
+docker compose logs mcp-server      # "Uvicorn running on http://0.0.0.0:8800"
 ```
 
-Two different tokens: `KAIRON_MCP_SERVICE_TOKEN` is how this server reads Kairon; `KAIRON_MCP_HTTP_TOKEN` is what MCP clients must present to this server, as `Authorization: Bearer <token>` (most MCP clients that connect to a remote server let you add a header). Without the client token the HTTP transport refuses to start: the service token reads every case, so anything able to reach the port -- including any local process when it is bound to localhost -- could otherwise read them through it. `--no-auth` turns the check off, only for a port nothing untrusted can reach.
+It listens on `http://localhost:8800/mcp`. The two tokens are different
+things: `KAIRON_MCP_SERVICE_TOKEN` is how the MCP server reads Kairon;
+`KAIRON_MCP_HTTP_TOKEN` is what every MCP client must send to the MCP
+server. Without the client token the HTTP transport refuses to start: the
+service token reads every case, so anything able to reach the port —
+including any local process when it only listens on localhost — could
+otherwise read them through it. (`--no-auth` turns the check off; only for a
+port nothing untrusted can reach.) To reach it from other machines, see
+[Remote clients](#remote-clients).
 
-This starts it with the streamable HTTP transport on `127.0.0.1:8800` (bind
-address configurable via `KAIRON_MCP_BIND`), reachable at
-`http://localhost:8800/mcp`. Point an MCP client that supports a remote
-server at that URL.
+Outside Docker the same server runs with
+`KAIRON_MCP_HTTP_TOKEN=$(kairon-mcp-server --generate-token) kairon-mcp-server --transport http --port 8800`
+(plus `KAIRON_API_URL` and `KAIRON_SERVICE_TOKEN`).
 
-The HTTP transport checks the `Host` and `Origin` headers (protection against
-DNS rebinding: a web page in the analyst's browser must not be able to talk
-to this server). Localhost is always accepted. To let a client on another
-machine connect through a VPN name or a private address, bind beyond
-localhost **and** list that name, or the server answers `421`:
+### 3. Connect your MCP client
+
+Every client has its own configuration format; the values are always the
+same: for stdio a command (`kairon-mcp-server`) with the two environment
+variables, for HTTP a URL (`http://<server>:8800/mcp`) with an
+`Authorization: Bearer <client token>` header. Examples for some common
+clients follow; check your client's documentation if its format has changed.
+
+**Claude Code** (`claude mcp add`):
 
 ```bash
-# .env
-KAIRON_MCP_BIND=192.0.2.1
-KAIRON_MCP_ALLOWED_HOSTS=kairon.vpn.example,192.0.2.1
+# A. stdio
+claude mcp add kairon -e KAIRON_API_URL=http://localhost:5173 -e KAIRON_SERVICE_TOKEN=kairon_svc_... -- kairon-mcp-server
+# B. HTTP
+claude mcp add --transport http kairon http://localhost:8800/mcp --header "Authorization: Bearer <client token>"
 ```
 
-Standalone: `kairon-mcp-server --transport http --host 0.0.0.0 --allowed-host kairon.vpn.example`.
+**Claude Desktop** (stdio; `claude_desktop_config.json`, opened from the
+app's developer settings):
 
-### Standalone, for a local MCP client
+```json
+{
+  "mcpServers": {
+    "kairon": {
+      "command": "kairon-mcp-server",
+      "env": { "KAIRON_API_URL": "http://localhost:5173", "KAIRON_SERVICE_TOKEN": "kairon_svc_..." }
+    }
+  }
+}
+```
 
-Many desktop MCP clients launch a server themselves over stdio rather than
-connecting to one already running. Install the package and point it at a
-reachable Kairon backend:
+Use the full path of `kairon-mcp-server` (`which kairon-mcp-server`) if the app
+does not find it on its own `PATH`.
+
+**VS Code** (HTTP; `.vscode/mcp.json`, the token asked once and kept by VS Code):
+
+```json
+{
+  "inputs": [{ "type": "promptString", "id": "kairon-token", "description": "Kairon MCP client token", "password": true }],
+  "servers": {
+    "kairon": {
+      "type": "http",
+      "url": "http://localhost:8800/mcp",
+      "headers": { "Authorization": "Bearer ${input:kairon-token}" }
+    }
+  }
+}
+```
+
+A client configuration file holds the token in clear unless the client keeps
+it in a secret store, as the VS Code example does: do not commit it.
+
+### 4. Check that it works
+
+Ask the client something like *"List my Kairon cases"*: it should call
+`list_cases` and answer with your case names. Then *"In case X, which hosts
+are there and what happened on the first one?"* exercises the case tools.
+
+For the HTTP server, this answers `200` with the right token and `401` without it:
 
 ```bash
-pip install ./backend/mcp_server
-export KAIRON_API_URL=http://localhost:8000
-export KAIRON_SERVICE_TOKEN=<the token>
-kairon-mcp-server                 # stdio, the default
-export KAIRON_MCP_HTTP_TOKEN=$(kairon-mcp-server --generate-token)
-kairon-mcp-server --transport http --port 8800   # streamable HTTP instead
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8800/mcp \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -H 'Authorization: Bearer <client token>' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}'
 ```
-
-Consult your MCP client's own documentation for how it is configured to
-launch or connect to a server; that step is client-specific and outside
-Kairon's scope.
 
 ## Tools
 
-The catalog comes from `GET /api/ai/tools` (refreshed every 5 minutes), so it
-matches what the in-app assistant can do — see the table in
-[operations/ai-assistant.md](ai-assistant.md#what-it-is-and-what-it-is-not)
-for the current list and what each tool reads. Every tool there takes a
-`case_id` here (resolved via `list_cases`); none of them do inside the
-in-app assistant, where the case is already known.
+A connected client sees these tools. Every one but `list_cases` takes a
+`case_id`, which the client gets from `list_cases` (so you can simply name
+the case). The catalog comes from Kairon itself, so it follows upgrades;
+[ai-assistant.md](ai-assistant.md#what-it-is-and-what-it-is-not) describes
+each tool in detail.
+
+| Tool | Reads |
+| --- | --- |
+| `list_cases` | The cases, with id, name, status and evidence/host counts; filters by text, status, archived. |
+| `describe_case` | Which artifact types, parsers, event types and hosts actually exist in the case, with counts. |
+| `list_hosts` | The hosts with their event and evidence counts. |
+| `get_host_coverage` | Per host: which telemetry families it has or lacks compared with the others, and from when. |
+| `search_events` | The case's parsed events, by text and filters. |
+| `get_event_detail` | One event in full, by its id. |
+| `get_timeline` | A window of the case timeline in chronological order. |
+| `search_command_history` | Commands actually executed: PowerShell, cmd, scheduled tasks, Prefetch, Linux shell history, memory. |
+| `get_process_tree` | One process's parent and children. |
+| `list_persistence` | Startup and persistence: run keys, services, scheduled tasks, startup folders... |
+| `list_downloads` | Files downloaded from the internet. |
+| `list_email_artifacts` | Webmail activity and local mail stores (OST/PST, .eml/.msg, attachment caches). |
+| `list_lateral_movement` | Remote logons between machines (Windows network/RDP, Linux SSH). |
+| `list_findings` | Findings recorded by the analyst or by detection rules. |
+| `list_detections` | Rule-engine detections (Sigma, YARA, built-in). |
+| `search_memory_artifacts` | Processes, connections, modules, command lines and suspicious findings recovered from memory images. |
+| `get_memory_triage` | Per memory image: Defender detections still in memory and processes worth a look. |
+
+## Remote clients
+
+The HTTP server listens on `127.0.0.1:8800` by default. To let clients on
+other machines connect (over the VPN or private network Kairon already sits
+behind):
+
+```bash
+# .env
+KAIRON_MCP_BIND=192.0.2.1                                # the address to listen on
+KAIRON_MCP_ALLOWED_HOSTS=kairon.vpn.example,192.0.2.1    # the names clients use in the URL
+```
+
+and restart it (`docker compose --profile mcp up -d mcp-server`). The server
+checks the `Host` and `Origin` headers against DNS rebinding (a web page in a
+browser must not be able to talk to it): localhost is always accepted, any
+other name must be listed, or the server answers `421`. Standalone:
+`kairon-mcp-server --transport http --host 0.0.0.0 --allowed-host kairon.vpn.example`.
+
+The client token is a static bearer token: over plain HTTP it travels in
+clear, so beyond localhost put the server behind a TLS reverse proxy (and
+then list the proxy's host name in `KAIRON_MCP_ALLOWED_HOSTS`).
+
+## Troubleshooting
+
+| Where | Message or status | Meaning and fix |
+| --- | --- | --- |
+| Server start | `KAIRON_API_URL is not set` / `KAIRON_SERVICE_TOKEN is not set` | Set both (step 2). |
+| Server start | `The HTTP transport needs a token clients must present` | Set `KAIRON_MCP_HTTP_TOKEN` (at least 32 characters; `--generate-token` makes one). |
+| Server start | `Could not load the tool catalog from Kairon at ...: ... 401` | The service token is wrong, revoked or expired: create a new one (step 1). |
+| Server start | `Could not load the tool catalog ...: Could not reach Kairon` | `KAIRON_API_URL` is not reachable from where the server runs (inside Compose it is `http://backend:8000`, set for you). |
+| Client | `401` from the server | The client sends no client token, or the wrong one: check the `Authorization: Bearer` header. |
+| Client | `421 Misdirected Request` | The URL's host name is not listed in `KAIRON_MCP_ALLOWED_HOSTS` (see [Remote clients](#remote-clients)). |
+| Client | `403` | The request carried a browser `Origin` that is not allowed: MCP clients normally send none. |
+| Tool result | `Invalid case_id: use an id returned by list_cases` | The model passed a case name or other text as the id; ask it to call `list_cases` first. |
+| Tool result | `Case not found` (`404`) | The case was deleted, or the id belongs to another Kairon instance. |
+| Tool result | `Service tokens cannot use the administration API` | Expected: the server never reads administrative data. |
 
 ## Security notes
 
-- The token is supplied once, via the `KAIRON_SERVICE_TOKEN` environment
-  variable, and is never visible to the connected MCP client — which only
-  ever sees tool names, descriptions and results, the same surface the
-  in-app assistant's model sees.
-- Treat the token like a password: anyone who holds it can read every case
-  on the deployment for as long as it is valid. Scope its lifetime with
-  `expires_in_days` where that fits, and revoke it immediately if it leaks.
+- **Two secrets.** The service token (`KAIRON_SERVICE_TOKEN` /
+  `KAIRON_MCP_SERVICE_TOKEN`) lives only where the server runs and is never
+  shown to MCP clients, which see tool names, descriptions and results. The
+  client token (`KAIRON_MCP_HTTP_TOKEN`, HTTP transport only) is what clients
+  hold. Both give read access to every case: treat them like passwords,
+  revoke or rotate them if they leak (a new client token is just a new value
+  in `.env` and a restart).
 - A `case_id` must be a single id as returned by `list_cases`; anything with
   `/`, `..`, `?` or `#` is refused before any request, so text planted in
   case data cannot steer a tool call to another API endpoint.
-- The streamable HTTP transport requires its own client token
-  (`KAIRON_MCP_HTTP_TOKEN`, compared in constant time); treat it like the
-  service token, since it gives the same read access. Still keep the server
-  behind the network boundary the rest of the deployment requires (VPN,
-  private network, authenticated proxy; see
-  [deployment/deployment.md](../deployment/deployment.md)): a static bearer
-  token travels in clear over plain HTTP, so use TLS (a reverse proxy) for
-  anything beyond localhost. The stdio transport needs no token: the client
-  launches the server itself.
-- Everything the Prompt injection section of
-  [operations/ai-assistant.md](ai-assistant.md#prompt-injection) says about
-  untrusted data in tool results applies here identically: a hostname, a
-  filename or a command line can be attacker-controlled. The server's job
-  is read-only and scoped to the tools it was given; what a connected
-  client's own model does with the text it gets back is that client's
-  concern, same as any other data source it might read.
+- Tool results contain case data, and case data can be attacker-controlled (a
+  host name, a file name, a command line). Everything the
+  [Prompt injection](ai-assistant.md#prompt-injection) section of the AI
+  assistant's documentation says applies identically: the server is read-only
+  and limited to its tools; what a connected client's own model does with the
+  text it reads is that client's concern, as with any other data source.
+- Keep the HTTP server behind the same network boundary the rest of the
+  deployment requires (see [deployment/deployment.md](../deployment/deployment.md)).
 
 ## Code map
 
 | Path | Responsibility |
 | --- | --- |
 | `backend/app/api/routes_ai.py` | `GET /api/ai/tools`, `GET /api/cases/{case_id}/ai/tools/{tool_name}` — the HTTP surface this server calls. |
+| `backend/app/api/routes_admin.py` | `/api/admin/service-tokens`: create, list, revoke. |
 | `backend/app/services/service_tokens.py` | Service token creation, authentication, revocation. |
 | `backend/app/services/auth_dependencies.py` | `ServiceTokenPrincipal`, the read-only-every-case principal. |
 | `backend/mcp_server/mcp_server/kairon_client.py` | The HTTP client this server uses to call Kairon's API. |
-| `backend/mcp_server/mcp_server/server.py` | Tool catalog bridging, `list_cases`, the MCP server itself. |
+| `backend/mcp_server/mcp_server/server.py` | Tool catalog bridging, `list_cases`, transports, client token, Host/Origin checks. |
