@@ -101,6 +101,8 @@ docker compose --profile memory build memory-worker
 docker compose --profile memory up -d memory-worker
 ```
 
+To let the memory worker download missing Windows kernel symbols from Microsoft, set `MEMORY_SYMBOL_DIRECT_DOWNLOAD_ENABLED=true` (see [Managed Windows symbols](../memory/memory_symbols.md#download-missing-symbols-from-microsoft-simple-mode)); off, analysis uses only the local cache.
+
 Keep `MEMORY_SYMBOL_MODE=offline_only`. Do not enable managed symbol acquisition
 unless restricted official-source egress and authenticated administrator
 authorization have both been implemented and independently verified. A normal

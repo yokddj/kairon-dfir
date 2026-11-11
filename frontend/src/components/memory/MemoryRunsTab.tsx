@@ -26,7 +26,7 @@ function durationLabel(value: number | null | undefined): string {
 
 function memoryRunError(run: MemoryScanRun): string {
   const code = String(run.error_log?.code || "");
-  if (code === "SYMBOLS_UNAVAILABLE") return "Volatility could not resolve the symbols this image's kernel needs under offline-only mode.";
+  if (code === "SYMBOLS_UNAVAILABLE") return "The symbols for this image's kernel are not in the symbol cache. An administrator can let the memory worker download them from Microsoft (MEMORY_SYMBOL_DIRECT_DOWNLOAD_ENABLED=true) or import them.";
   if (code === "UNSUPPORTED_MEMORY_IMAGE" || code === "INVALID_MEMORY_LAYER") return "Volatility could not construct a supported memory layer for this image.";
   if (code === "VOLATILITY_OUTPUT_INVALID") return "Volatility ran, but its output could not be parsed.";
   if (code === "MEMORY_SYMBOL_CACHE_NOT_WRITABLE") return "The controlled Volatility symbol cache is not writable.";

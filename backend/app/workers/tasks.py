@@ -974,7 +974,14 @@ def run_memory_symbol_probe(evidence_id: str) -> dict:
         evidence = db.get(Evidence, evidence_id)
         if evidence is None:
             return {"evidence_id": evidence_id, "status": "failed", "error_code": "EVIDENCE_NOT_FOUND", "sanitized_message": "The evidence no longer exists."}
-        return probe_evidence_symbol_requirement(db, evidence=evidence).to_dict()
+        result = probe_evidence_symbol_requirement(db, evidence=evidence).to_dict()
+    if result.get("status") == "identified" and settings.memory_symbol_direct_download_enabled:
+        # The preparation fetches the identified symbol from Microsoft when it is not cached.
+        try:
+            enqueue_memory_preparation(evidence_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("could not queue memory preparation after the symbol probe", exc_info=True)
+    return result
 
 
 def enqueue_linux_symbol_validation(validation_job_id: str) -> str:
