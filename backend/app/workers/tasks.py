@@ -956,6 +956,27 @@ def enqueue_memory_preparation(evidence_id: str) -> str:
     return job.id
 
 
+def enqueue_memory_symbol_probe(evidence_id: str):
+    """Queue the Windows symbol probe on the memory worker: only that container has Volatility and
+    its symbol cache (the API process has neither). Returns the RQ job."""
+    return memory_queue.enqueue(
+        "app.workers.tasks.run_memory_symbol_probe",
+        evidence_id,
+        job_timeout=max(300, int(settings.memory_plugin_timeout_seconds or 0)),
+        result_ttl=900,
+    )
+
+
+def run_memory_symbol_probe(evidence_id: str) -> dict:
+    from app.services.memory.symbol_probe_controller import probe_evidence_symbol_requirement
+
+    with SessionLocal() as db:
+        evidence = db.get(Evidence, evidence_id)
+        if evidence is None:
+            return {"evidence_id": evidence_id, "status": "failed", "error_code": "EVIDENCE_NOT_FOUND", "sanitized_message": "The evidence no longer exists."}
+        return probe_evidence_symbol_requirement(db, evidence=evidence).to_dict()
+
+
 def enqueue_linux_symbol_validation(validation_job_id: str) -> str:
     """Enqueue Memory Preparation Phase 3's Linux ISF validation task.
 

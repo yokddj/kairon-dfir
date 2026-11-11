@@ -485,6 +485,27 @@ describe("Per-evidence Windows symbol resolution", () => {
     expect(screen.queryByTestId("memory-symbol-acquire-button")).toBeNull();
   });
 
+  it("says when the probe could not identify the kernel instead of doing nothing", async () => {
+    const user = userEvent.setup();
+    const apiMock = buildApiMock();
+    (apiMock.getMemorySymbolReadiness as ReturnType<typeof vi.fn>).mockImplementation(async () => makeReadiness({ state: "unknown" }));
+    (apiMock.probeMemorySymbolRequirement as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      evidence_id: EVIDENCE_ID,
+      status: "failed",
+      requirement: null,
+      probable_os: null,
+      layer: null,
+      confidence: "none",
+      failure_reason: "x",
+      error_code: "MEMORY_PROBE_FAILED",
+      sanitized_message: "The Windows symbol probe failed.",
+      duration_ms: 100,
+    }));
+    setup(apiMock);
+    await user.click(await screen.findByTestId("memory-symbol-probe-button"));
+    expect(await screen.findByTestId("memory-symbol-probe-error")).toHaveTextContent("The Windows symbol probe failed.");
+  });
+
   it("re-runs the probe via the button and refreshes the readiness", async () => {
     const user = userEvent.setup();
     const apiMock = buildApiMock();

@@ -69,20 +69,29 @@ export function MemorySymbolResolutionPanel({
 }: Props) {
   const queryClient = useQueryClient();
   const [probeError, setProbeError] = useState<string | null>(null);
+  const [probeNotice, setProbeNotice] = useState<string | null>(null);
   const [acquireError, setAcquireError] = useState<string | null>(null);
   const [ackChecked, setAckChecked] = useState(false);
   const [acquisitionModalOpen, setAcquisitionModalOpen] = useState(false);
 
   const probeMutation = useMutation({
     mutationFn: () => api.probeMemorySymbolRequirement(caseId, evidenceId),
-    onSuccess: () => {
-      setProbeError(null);
+    onSuccess: (result) => {
+      // The probe answers 200 whether or not it identified the kernel: say what it found.
+      if (result?.status === "identified" || result?.status === "probing") {
+        setProbeError(null);
+        setProbeNotice(result.sanitized_message || (result.status === "probing" ? "The probe is queued on the memory worker." : "Kernel symbol requirement identified."));
+      } else {
+        setProbeNotice(null);
+        setProbeError(result?.sanitized_message || "The symbol probe could not identify this image's kernel.");
+      }
       void queryClient.invalidateQueries({ queryKey: ["memory-symbol-readiness", caseId, evidenceId] });
       void queryClient.invalidateQueries({ queryKey: ["memory-landing", caseId] });
       void queryClient.invalidateQueries({ queryKey: ["memory-catalogue", caseId, evidenceId] });
       onProbeCompleted?.();
     },
     onError: (err: Error) => {
+      setProbeNotice(null);
       setProbeError(err.message || "The symbol probe failed.");
     },
   });
@@ -172,6 +181,12 @@ export function MemorySymbolResolutionPanel({
           ) : null}
         </div>
       </div>
+
+      {probeNotice && !probeError ? (
+        <p className="mt-3 text-xs text-emerald-200" data-testid="memory-symbol-probe-notice" role="status">
+          {probeNotice}
+        </p>
+      ) : null}
 
       {probeError ? (
         <p
