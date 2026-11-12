@@ -93,6 +93,8 @@ def _load(library: str) -> ctypes.CDLL:
     lib.VMMDLL_InitializePlugins.argtypes = [ctypes.c_void_p]
     lib.VMMDLL_VfsReadU.restype = ctypes.c_uint32
     lib.VMMDLL_VfsReadU.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint64]
+    lib.VMMDLL_MemReadEx.restype = ctypes.c_int
+    lib.VMMDLL_MemReadEx.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint64]
     lib.VMMDLL_Close.restype = None
     lib.VMMDLL_Close.argtypes = [ctypes.c_void_p]
     return lib
@@ -277,6 +279,36 @@ def _save_timelines(lib: ctypes.CDLL, handle: int, directory: str) -> None:
     _save_evtx(lib, handle, directory)
 
 
+# VMMDLL_FLAG_NOCACHE | VMMDLL_FLAG_ZEROPAD_ON_FAIL: unreadable pages come back as zeros.
+_READ_FLAGS = 0x0001 | 0x0002
+
+
+def _process_reader(lib: ctypes.CDLL, handle: int):
+    def read(pid: int, address: int, size: int) -> bytes | None:
+        buffer = ctypes.create_string_buffer(size)
+        read_bytes = ctypes.c_uint32()
+        if not lib.VMMDLL_MemReadEx(handle, pid, address, buffer, size, ctypes.byref(read_bytes), _READ_FLAGS):
+            return None
+        return buffer.raw
+    return read
+
+
+def _with_beacons(lib: ctypes.CDLL, handle: int, rows: list[dict[str, str]], watchdog: "_Watchdog") -> list[dict[str, str]]:
+    """FindEvil's rows plus a CS_BEACON row for each Cobalt Strike configuration in the regions
+    they flag (app.services.memory.beacon_config). A failure here never costs the FindEvil rows."""
+    from app.services.memory.beacon_config import beacon_rows, candidate_regions
+
+    try:
+        started = time.monotonic()
+        regions = candidate_regions(rows)
+        found = beacon_rows(regions, _process_reader(lib, handle), progress=watchdog.update)
+        print(f"Beacon configuration search: {len(regions)} regions, {len(found)} configurations, {time.monotonic() - started:.1f} s.", file=sys.stderr)
+        return rows + found
+    except Exception as exc:  # noqa: BLE001
+        print(f"Beacon configuration search skipped: {type(exc).__name__}", file=sys.stderr)
+        return rows
+
+
 def findevil_rows(csv_text: str) -> list[dict[str, str]]:
     rows = []
     for record in csv.DictReader(io.StringIO(csv_text)):
@@ -343,7 +375,7 @@ def main(argv: list[str] | None = None) -> int:
             print("MemProcFS produced no FindEvil result for this image (FindEvil needs 64-bit Windows 10 or later).", file=sys.stderr)
             watchdog.finished(EXIT_FINDEVIL_MISSING)
             return EXIT_FINDEVIL_MISSING
-        json.dump(findevil_rows(data.decode("utf-8", "replace")), sys.stdout)
+        json.dump(_with_beacons(lib, handle, findevil_rows(data.decode("utf-8", "replace")), watchdog), sys.stdout)
         sys.stdout.flush()
         watchdog.finished(0)
         return 0
