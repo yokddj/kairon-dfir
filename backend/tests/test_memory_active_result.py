@@ -1368,3 +1368,41 @@ def test_active_result_total_stays_the_unfiltered_count_when_no_filters_given(db
             db, case_id=case.id, evidence_id=ev.id, family="files",
         )
     assert result["total"] == 13191
+
+
+def test_a_memprocfs_processes_extended_run_is_not_a_failed_process_listing(db: Session) -> None:
+    """On MemProcFS, processes_extended lists no processes (environment, SIDs, privileges only):
+    it must neither be the processes view's result nor make it say the latest attempt failed."""
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "PhysicalMemory.dd")
+    old_ext = _make_run(db, case.id, ev.id, "processes_extended", "completed", _utc(2026, 11, 12, 10), _utc(2026, 11, 12, 10, 5))
+    old_ext.metadata_json = {"plugins": ["windows.pslist", "windows.psscan", "windows.cmdline", "windows.envars"]}
+    old_ext.canonical_materialization_status = "completed"
+    old_ext.canonical_entity_count = 170
+    basic = _make_run(db, case.id, ev.id, "processes_basic", "completed", _utc(2026, 11, 12, 13), _utc(2026, 11, 12, 13, 1))
+    basic.metadata_json = {"plugins": ["memprocfs.processes"]}
+    basic.canonical_materialization_status = "completed"
+    basic.canonical_entity_count = 173
+    new_ext = _make_run(db, case.id, ev.id, "processes_extended", "completed", _utc(2026, 11, 12, 13, 2), _utc(2026, 11, 12, 13, 3))
+    new_ext.metadata_json = {"plugins": ["memprocfs.envars", "memprocfs.getsids", "memprocfs.privileges"]}
+    new_ext.canonical_materialization_status = "not_required"
+    new_ext.canonical_entity_count = 0
+    db.commit()
+    result = resolve_active_memory_result(db, case_id=case.id, evidence_id=ev.id, family="processes")
+    assert result["using_fallback"] is False
+    assert result["active_run"]["id"] == old_ext.id
+    assert result["latest_attempt"]["id"] == old_ext.id
+
+
+def test_a_failed_process_listing_still_says_so(db: Session) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "PhysicalMemory.dd")
+    basic = _make_run(db, case.id, ev.id, "processes_basic", "completed", _utc(2026, 11, 12, 13), _utc(2026, 11, 12, 13, 1))
+    basic.metadata_json = {"plugins": ["memprocfs.processes"]}
+    basic.canonical_materialization_status = "completed"
+    basic.canonical_entity_count = 173
+    failed = _make_run(db, case.id, ev.id, "processes_basic", "failed", _utc(2026, 11, 12, 14), _utc(2026, 11, 12, 14, 1), plugins_completed=0, plugin_count=1)
+    failed.metadata_json = {"plugins": ["memprocfs.processes"]}
+    db.commit()
+    result = resolve_active_memory_result(db, case_id=case.id, evidence_id=ev.id, family="processes")
+    assert result["using_fallback"] is True and result["active_run"]["id"] == basic.id

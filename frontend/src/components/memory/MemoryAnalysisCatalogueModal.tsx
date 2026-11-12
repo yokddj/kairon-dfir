@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
   type MemoryAnalysisBatch,
@@ -23,6 +23,8 @@ type Props = {
   volatilityBackend: MemoryBackendStatus | null;
   canRun: boolean;
   onClose: () => void;
+  /** Open with "Scan the image again with MemProcFS" ticked (from the MemProcFS tab's notice). */
+  initialRescan?: boolean;
 };
 
 type Section = "quick" | "artifacts" | "unavailable";
@@ -699,6 +701,7 @@ export function MemoryAnalysisCatalogueModal({
   volatilityBackend,
   canRun,
   onClose,
+  initialRescan,
 }: Props) {
   // Profiles with no plugin for this evidence's platform (Handles, VADs,
   // Files... on Linux) are not options for it at all, so they are not listed.
@@ -711,9 +714,15 @@ export function MemoryAnalysisCatalogueModal({
   const [error, setError] = useState<string | null>(null);
   const [runAllOpen, setRunAllOpen] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // A new MemProcFS scan of the image for the analyses started from here (Windows): every
+  // analysis reads the saved scan, so this is the one place a fresh one is asked for.
+  const [rescan, setRescan] = useState(Boolean(initialRescan));
+  const scanQuery = useQuery({ queryKey: ["memprocfs-scan", caseId, evidenceId], queryFn: () => api.getMemProcFSScan(caseId, evidenceId), refetchOnWindowFocus: false });
+  const savedScan = scanQuery.data?.exists ? scanQuery.data : null;
+  const rescanRequested = Boolean(savedScan) && rescan;
 
   const startMutation = useMutation<MemoryStartScanResponse, Error, { profile: string; engine?: "volatility" }>({
-    mutationFn: (vars) => api.startMemoryScan(caseId, evidenceId, vars.profile as never, vars.engine),
+    mutationFn: (vars) => api.startMemoryScan(caseId, evidenceId, vars.profile as never, vars.engine, rescanRequested && vars.engine !== "volatility"),
     onSuccess: (result) => {
       setFeedback(result.message);
       setError(null);
@@ -733,6 +742,7 @@ export function MemoryAnalysisCatalogueModal({
       mode: "missing_or_failed",
       authorization_acknowledged: true,
       continue_on_failure: true,
+      ...(rescanRequested ? { memprocfs_rescan: true } : {}),
     }),
     onSuccess: (batch) => {
       const queuedCount = batch.requested_profiles?.length ?? 0;
@@ -827,6 +837,17 @@ export function MemoryAnalysisCatalogueModal({
           </p>
         ) : null}
 
+        {savedScan ? (
+          <label className="mt-3 flex items-start gap-2 rounded-2xl border border-line bg-abyss/50 p-3 text-xs text-muted" data-testid="memprocfs-rescan-option">
+            <input type="checkbox" checked={rescan} onChange={(event) => setRescan(event.target.checked)} className="mt-0.5" data-testid="memprocfs-rescan-checkbox" />
+            <span>
+              <span className="font-semibold text-ink">Scan the image again with MemProcFS</span> for the analyses started here. Every analysis now reads the saved scan of{" "}
+              {(savedScan.scanned_at || "").replace("T", " ").replace("Z", " UTC")}
+              {savedScan.yara_rules ? "" : " (made without the YARA rules)"}; a new one takes as long as the first (minutes on a large image). The analyses run after it read the new scan.
+            </span>
+          </label>
+        ) : null}
+
         {stage === "first" ? (
           <FirstAnalysisView
             caseId={caseId}
@@ -891,6 +912,7 @@ export function MemoryAnalysisCatalogueModal({
             catalogue={catalogue}
             volatilityBackend={volatilityBackend}
             canRun={canRun}
+            memprocfsRescan={rescanRequested}
             onClose={() => setRunAllOpen(false)}
             onCompleted={() => {
               setRunAllOpen(false);

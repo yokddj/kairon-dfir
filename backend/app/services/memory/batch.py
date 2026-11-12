@@ -283,8 +283,12 @@ def create_run_all_batch(
     authorization_acknowledged: bool,
     continue_on_failure: bool = True,
     enqueue_fn,
+    memprocfs_rescan: bool = False,
 ) -> dict[str, Any]:
     """Create a batch and enqueue the first profile (if any).
+
+    ``memprocfs_rescan``: the batch's first MemProcFS run scans the image again
+    (app.services.memory.memprocfs_engine); the runs after it read that scan.
 
     ``enqueue_fn`` is a callable ``(run_id) -> worker_task_id`` that
     pushes the run onto the worker's queue.  The callable is injected
@@ -367,7 +371,7 @@ def create_run_all_batch(
         continue_on_failure=continue_on_failure,
         authorization_acknowledged=True,
         authorization_acknowledged_at=utc_now_naive(),
-        audit_metadata_json={"requested_mode": mode},
+        audit_metadata_json={"requested_mode": mode, **({"memprocfs_rescan": True} if memprocfs_rescan else {})},
     )
     db.add(batch)
     db.flush()
@@ -418,6 +422,11 @@ def _enqueue_profile(
     enqueue_fn,
 ) -> MemoryScanRun:
     run = create_memory_metadata_run(db, batch.evidence_id, profile)
+    audit = dict(batch.audit_metadata_json or {})
+    if audit.get("memprocfs_rescan") and not audit.get("memprocfs_rescan_assigned") and run.backend == "memprocfs":
+        # Runs of a batch go one after another: the first MemProcFS one makes the new scan.
+        run.metadata_json = {**(run.metadata_json or {}), "memprocfs_rescan": True}
+        batch.audit_metadata_json = {**audit, "memprocfs_rescan_assigned": run.id}
     run.batch_id = batch.id
     run.batch_position = position
     run.batch_total = len(batch.requested_profiles)

@@ -163,6 +163,21 @@ TERMINAL_SUCCESS_STATUSES = {"completed", "completed_with_errors"}
 _CANONICAL_REQUIRED_PROFILES = frozenset({"processes_extended", "processes_basic"})
 
 
+# Plugins that only add details to processes listed by another run. On MemProcFS,
+# processes_extended runs just these (environment variables, SIDs, privileges) -- the list comes
+# from processes_basic -- so such a run neither is nor replaces the processes family's result.
+PROCESS_DETAIL_ONLY_PLUGINS = frozenset({
+    "memprocfs.envars", "memprocfs.getsids", "memprocfs.privileges",
+    "windows.envars", "windows.getsids", "windows.privileges",
+})
+
+
+def _lists_processes(run: MemoryScanRun) -> bool:
+    plugins = list((run.metadata_json or {}).get("plugins") or []) or [item.plugin for item in (getattr(run, "plugin_runs", None) or [])]
+    # Any other run (and one whose plugins are not recorded) is judged as before.
+    return not plugins or not set(plugins) <= PROCESS_DETAIL_ONLY_PLUGINS
+
+
 def _is_canonical_usable(run: MemoryScanRun) -> bool:
     """Return True when ``run`` has a completed canonical materialization
     with at least one entity.
@@ -305,16 +320,15 @@ def resolve_active_memory_result(
     # of status.  We iterate the preferred profiles in order so the
     # "latest attempt" is consistent with the family preference.
     latest_attempt = None
+    lists_processes_only = family == "processes"
     for preferred_profile in rules["preferred_profiles"]:
-        candidate = (
-            base_query.filter(MemoryScanRun.profile == preferred_profile)
-            .order_by(
-                desc(MemoryScanRun.completed_at.is_(None)),
-                desc(func.coalesce(MemoryScanRun.completed_at, MemoryScanRun.created_at)),
-                desc(MemoryScanRun.created_at),
-            )
-            .first()
+        ordered = base_query.filter(MemoryScanRun.profile == preferred_profile).order_by(
+            desc(MemoryScanRun.completed_at.is_(None)),
+            desc(func.coalesce(MemoryScanRun.completed_at, MemoryScanRun.created_at)),
+            desc(MemoryScanRun.created_at),
         )
+        candidates = ordered.all() if lists_processes_only else [ordered.first()]
+        candidate = next((item for item in candidates if item is not None and (not lists_processes_only or _lists_processes(item))), None)
         if candidate is not None:
             latest_attempt = candidate
             break
@@ -349,6 +363,8 @@ def resolve_active_memory_result(
         if not candidates:
             continue
         for candidate in candidates:
+            if lists_processes_only and not _lists_processes(candidate):
+                continue
             if requires_canonical and not _is_canonical_usable(candidate):
                 continue
             active_run = candidate

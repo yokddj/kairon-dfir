@@ -9,6 +9,7 @@ import { MemoryEvidenceHeader } from "../components/memory/MemoryEvidenceHeader"
 import { VolatilityCopyPanel } from "../components/memory/VolatilityCopyPanel";
 import { MemoryEvidenceSelector } from "../components/memory/MemoryEvidenceSelector";
 import { MemoryAnalysisCatalogueModal } from "../components/memory/MemoryAnalysisCatalogueModal";
+import { MEMPROCFS_RESCAN_EVENT } from "../components/memory/MemoryMemProcFSScanPanel";
 import { MemoryHistoryPanel } from "../components/memory/MemoryHistoryPanel";
 import { MemoryTypeConfirmationModal } from "../components/memory/MemoryTypeConfirmationModal";
 import { MemorySymbolResolutionPanel } from "../components/memory/MemorySymbolResolutionPanel";
@@ -64,6 +65,17 @@ export default function MemoryEvidencePage() {
   const { setActiveCaseId } = useActiveCase();
   const { activeHost, activeHostId, hasHostFilter, clearHostFilter, withHostScope } = useHostContext();
   const [catalogueOpen, setCatalogueOpen] = useState(false);
+  const [catalogueRescan, setCatalogueRescan] = useState(false);
+  // The MemProcFS tab's "Re-run the analyses with a new scan": the catalogue, its option ticked.
+  useEffect(() => {
+    function onRescan(event: Event) {
+      if ((event as CustomEvent<{ evidenceId?: string }>).detail?.evidenceId !== evidenceId) return;
+      setCatalogueRescan(true);
+      setCatalogueOpen(true);
+    }
+    window.addEventListener(MEMPROCFS_RESCAN_EVENT, onRescan);
+    return () => window.removeEventListener(MEMPROCFS_RESCAN_EVENT, onRescan);
+  }, [evidenceId]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [confirmationError, setConfirmationError] = useState<string | null>(null);
@@ -739,7 +751,8 @@ export default function MemoryEvidencePage() {
           catalogue={catalogueQuery.data}
           volatilityBackend={volatilityBackend}
           canRun={canRun}
-          onClose={() => setCatalogueOpen(false)}
+          onClose={() => { setCatalogueOpen(false); setCatalogueRescan(false); }}
+          initialRescan={catalogueRescan}
         />
       ) : null}
 

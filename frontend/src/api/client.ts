@@ -7080,7 +7080,7 @@ export const api = {
     request<MemoryAnalysisCatalogue>(`/cases/${caseId}/memory/evidences/${evidenceId}/catalogue`),
   previewMemoryRunAll: (caseId: string, evidenceId: string, mode: MemoryRunAllMode) =>
     request<MemoryRunAllPlan>(`/cases/${caseId}/memory/evidences/${evidenceId}/run-all/preview?mode=${mode}`),
-  startMemoryRunAll: (caseId: string, evidenceId: string, payload: { mode: MemoryRunAllMode; authorization_acknowledged: boolean; continue_on_failure?: boolean }) =>
+  startMemoryRunAll: (caseId: string, evidenceId: string, payload: { mode: MemoryRunAllMode; authorization_acknowledged: boolean; continue_on_failure?: boolean; memprocfs_rescan?: boolean }) =>
     request<MemoryAnalysisBatch>(`/cases/${caseId}/memory/evidences/${evidenceId}/run-all`, {
       method: "POST",
       body: JSON.stringify(payload),
@@ -7093,8 +7093,8 @@ export const api = {
     request<MemoryAnalysisBatch>(`/cases/${caseId}/memory/evidences/${evidenceId}/analysis-batches/${batchId}/cancel`, {
       method: "POST",
     }),
-  startMemoryScan: (caseId: string, evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only", engine?: "memprocfs" | "volatility") =>
-    request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan?case_id=${encodeURIComponent(caseId)}`, { method: "POST", body: JSON.stringify(engine ? { profile, engine } : { profile }) }),
+  startMemoryScan: (caseId: string, evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only", engine?: "memprocfs" | "volatility", rescan = false) =>
+    request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan?case_id=${encodeURIComponent(caseId)}`, { method: "POST", body: JSON.stringify({ profile, ...(engine ? { engine } : {}), ...(rescan ? { rescan: true } : {}) }) }),
   extractMemoryFile: (caseId: string, evidenceId: string, path: string) =>
     request<MemoryFileExtraction>(`/cases/${caseId}/memory/evidences/${evidenceId}/files/extract`, { method: "POST", body: JSON.stringify({ path }) }),
   getMemoryFileExtraction: (caseId: string, evidenceId: string, extractionId: string) =>
@@ -7102,8 +7102,6 @@ export const api = {
   listMemoryFileExtractions: (caseId: string, evidenceId: string) =>
     request<{ items: MemoryFileExtraction[] }>(`/cases/${caseId}/memory/evidences/${evidenceId}/files`),
   getMemProcFSScan: (caseId: string, evidenceId: string) => request<MemProcFSScanStatus>(`/cases/${caseId}/memory/evidences/${evidenceId}/memprocfs-scan`),
-  rescanMemProcFS: (caseId: string, evidenceId: string) =>
-    request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan?case_id=${encodeURIComponent(caseId)}`, { method: "POST", body: JSON.stringify({ profile: "find_evil", rescan: true }) }),
   downloadMemProcFSScan: async (caseId: string, evidenceId: string, path: string | null) => {
     const suffix = path === null ? "archive" : `files/${path.split("/").map(encodeURIComponent).join("/")}`;
     const response = await apiFetch(`/cases/${caseId}/memory/evidences/${evidenceId}/memprocfs-scan/${suffix}`);
