@@ -1808,10 +1808,12 @@ export type MemoryRunWhenReadyResponse = {
 
 export type VolatilityViewStatus = {
   evidence_id: string;
+  /** Volatility could not read this image, not even with MemProcFS's page-table base. */
   needed: boolean;
-  enabled: boolean;
-  status: "none" | "queued" | "running" | "created" | "failed" | "skipped_disk_space" | "removing";
-  estimated_bytes: number;
+  /** The page-table base Volatility reads the image with, when its own scan found none. */
+  layer: { page_map_offset: string; source: string } | null;
+  /** A crash-dump copy an earlier version made, still taking space. */
+  status: "none" | "created" | "removing";
   bytes: number | null;
   message: string | null;
   updated_at: string | null;
@@ -6721,8 +6723,6 @@ export const api = {
     }),
   getVolatilityView: (caseId: string, evidenceId: string) =>
     request<VolatilityViewStatus>(`/cases/${caseId}/memory/evidences/${evidenceId}/volatility-view`),
-  createVolatilityView: (caseId: string, evidenceId: string) =>
-    request<VolatilityViewStatus>(`/cases/${caseId}/memory/evidences/${evidenceId}/volatility-view`, { method: "POST" }),
   removeVolatilityView: (caseId: string, evidenceId: string) =>
     request<VolatilityViewStatus>(`/cases/${caseId}/memory/evidences/${evidenceId}/volatility-view`, { method: "DELETE" }),
   probeMemorySymbolRequirement: (caseId: string, evidenceId: string) =>

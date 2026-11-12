@@ -3329,12 +3329,15 @@ def test_find_evil_without_symbols_still_runs_memprocfs(db_session, tmp_path: Pa
     assert plugin_runs["memprocfs.findevil"].status == "completed"
 
 
-def _layerless_run(db_session, tmp_path, monkeypatch):
+def _layerless_run(db_session, tmp_path, monkeypatch, *, dtb=None, recorded=None):
+    """A Windows image Volatility's own scan finds no page tables in; MemProcFS gives ``dtb``."""
     plugins = ["windows.info", "windows.pslist", "memprocfs.findevil"]
     _case(db_session)
     evidence_file = tmp_path / "PhysicalMemory.dd"
     evidence_file.write_bytes(b"raw capture")
     evidence = _evidence(db_session, stored_path=str(evidence_file))
+    if recorded is not None:
+        evidence.metadata_json = {**(evidence.metadata_json or {}), "volatility_layer": recorded}
     run = MemoryScanRun(case_id=CASE_ID, evidence_id=evidence.id, backend="volatility3", profile="processes_basic", status="queued", requested_plugin_count=3, plugin_count=3, metadata_json={"plugins": plugins})
     db_session.add(run)
     db_session.commit()
@@ -3349,7 +3352,6 @@ def _layerless_run(db_session, tmp_path, monkeypatch):
         def __exit__(self, *_args):
             return False
 
-    view = tmp_path / "output" / "memory" / "volatility-view" / "memory.dmp"
     monkeypatch.setattr(memory_execution, "SessionLocal", lambda: SessionContext())
     monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _id: SimpleNamespace(evidence=evidence, path=evidence_file, size_bytes=evidence_file.stat().st_size))
     monkeypatch.setattr(memory_execution, "validate_current_process_output_access", lambda: tmp_path)
@@ -3357,49 +3359,73 @@ def _layerless_run(db_session, tmp_path, monkeypatch):
     monkeypatch.setattr(memory_execution, "memory_run_dir", lambda *_args: tmp_path / "run")
     monkeypatch.setattr(memory_execution, "relative_to_data_dir", lambda path: Path(path).name)
     monkeypatch.setattr(memory_execution, "write_atomic_json", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(memory_execution, "volatility_view_path", lambda *_args: view)
     monkeypatch.setattr(memory_execution, "memprocfs_available", lambda: True)
-    monkeypatch.setattr(memory_execution, "probe_windows_symbol_identity", lambda *_args: None)
+    monkeypatch.setattr(memory_execution, "probe_windows_symbol_identity", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(memory_execution, "index_memory_system_info", lambda *_args: {})
     monkeypatch.setattr(memory_execution, "index_memory_documents", lambda *_args: {})
     monkeypatch.setattr(memory_execution, "_run_canonical_materialization", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(memory_execution, "_create_memory_windows_host_facts", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(memory_execution, "_index_artifact_results", lambda *_args: {})
-    reads: list[tuple[str, str]] = []
+    dtb_lookups: list[str] = []
 
-    def volatility(plugin, path, *_args, **_kwargs):
-        reads.append((plugin, Path(path).name))
-        if Path(path) == evidence_file:
+    def run_dtb(path, _work_dir, **_kwargs):
+        dtb_lookups.append(Path(path).name)
+        if dtb is None:
+            raise volatility_runner.VolatilityRunnerError("MEMPROCFS_NO_CRASH_DUMP", "none")
+        return {"page_map_offset": dtb, "architecture": "Intel64", "pae": False}
+
+    monkeypatch.setattr("app.services.memory.memprocfs_runner.memprocfs_available", lambda: True)
+    monkeypatch.setattr("app.services.memory.memprocfs_runner.run_dtb", run_dtb)
+    reads: list[tuple[str, str, dict | None]] = []
+
+    def volatility(plugin, path, *_args, layer_config=None, **_kwargs):
+        reads.append((plugin, Path(path).name, json.loads(Path(layer_config).read_text()) if layer_config else None))
+        if layer_config is None:
             raise volatility_runner.VolatilityRunnerError("INVALID_MEMORY_LAYER", "no page tables", stderr=b"x", return_code=1, stdout_length=0, stderr_length=1)
         payload = [{"Variable": "Kernel Base", "Value": "0xf80157e00000"}] if plugin == "windows.info" else []
         return volatility_runner.VolatilityRunResult(argv_display=["vol"], stdout=json.dumps(payload).encode(), stderr=b"", duration_ms=5)
 
     monkeypatch.setattr(memory_execution, "run_plugin", volatility)
-    monkeypatch.setattr(memory_execution, "run_findevil", lambda path, *_a, **_k: reads.append(("memprocfs.findevil", Path(path).name)) or volatility_runner.VolatilityRunResult(argv_display=["memprocfs"], stdout=b"[]", stderr=b"", duration_ms=5))
+    monkeypatch.setattr(memory_execution, "run_findevil", lambda path, *_a, **_k: reads.append(("memprocfs.findevil", Path(path).name, None)) or volatility_runner.VolatilityRunResult(argv_display=["memprocfs"], stdout=b"[]", stderr=b"", duration_ms=5))
     memory_execution.run_memory_metadata_scan(run.id)
     db_session.refresh(run)
     db_session.refresh(evidence)
     plugin_runs = {item.plugin: item for item in db_session.query(MemoryPluginRun).filter(MemoryPluginRun.memory_scan_run_id == run.id).all()}
-    return run, evidence, plugin_runs, reads, view
+    return run, evidence, plugin_runs, reads, dtb_lookups
 
 
-def test_no_memory_layer_marks_the_evidence_and_writes_nothing(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The copy is about the size of the image: a run only marks the evidence, the analyst decides."""
-    run, evidence, _plugin_runs, reads, view = _layerless_run(db_session, tmp_path, monkeypatch)
-    assert not view.exists()
-    assert ("windows.info", "PhysicalMemory.dd") in reads and all(name != "memory.dmp" for _plugin, name in reads)
+def test_no_memory_layer_and_no_page_tables_from_memprocfs_marks_the_evidence(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run, evidence, plugin_runs, reads, dtb_lookups = _layerless_run(db_session, tmp_path, monkeypatch, dtb=None)
+    assert dtb_lookups == ["PhysicalMemory.dd"]
+    assert [item[:2] for item in reads if item[0].startswith("windows.")] == [("windows.info", "PhysicalMemory.dd")]
+    assert plugin_runs["windows.info"].error_code == "INVALID_MEMORY_LAYER"
     assert evidence.metadata_json["volatility_layer_missing"]["plugin"] == "windows.info"
+    assert "volatility_layer" not in evidence.metadata_json
 
 
-def test_volatility_reads_the_copy_once_it_exists(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    view = tmp_path / "output" / "memory" / "volatility-view" / "memory.dmp"
-    view.parent.mkdir(parents=True)
-    view.write_bytes(b"PAGEDU64")
-    run, evidence, plugin_runs, reads, _view = _layerless_run(db_session, tmp_path, monkeypatch)
-    assert reads == [("windows.info", "memory.dmp"), ("windows.pslist", "memory.dmp"), ("memprocfs.findevil", "PhysicalMemory.dd")]
+def test_volatility_reads_the_image_with_the_page_tables_memprocfs_found(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Volatility's scan finds no DTB; MemProcFS's is pinned in a layer over the original image."""
+    run, evidence, plugin_runs, reads, dtb_lookups = _layerless_run(db_session, tmp_path, monkeypatch, dtb=0x1AE000)
+    assert dtb_lookups == ["PhysicalMemory.dd"]
+    assert [item[:2] for item in reads] == [("windows.info", "PhysicalMemory.dd"), ("windows.info", "PhysicalMemory.dd"), ("windows.pslist", "PhysicalMemory.dd"), ("memprocfs.findevil", "PhysicalMemory.dd")]
+    config = reads[1][2]
+    assert config["kernel.layer_name.class"].endswith("intel.WindowsIntel32e")
+    assert config["kernel.layer_name.page_map_offset"] == 0x1AE000
+    assert config["kernel.layer_name.memory_layer.class"].endswith("physical.FileLayer")
+    assert config["kernel.layer_name.memory_layer.location"].endswith("/PhysicalMemory.dd")
+    assert reads[2][2] == config and reads[3][2] is None
+    assert run.status == "completed" and plugin_runs["windows.info"].status == "completed"
+    assert evidence.metadata_json["volatility_layer"]["page_map_offset"] == 0x1AE000
+    assert run.metadata_json["volatility_layer"] == {"source": "MemProcFS", "page_map_offset": "0x1ae000"}
+    assert "volatility_layer_missing" not in evidence.metadata_json
+
+
+def test_a_recorded_page_table_base_is_used_from_the_first_plugin(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded = {"page_map_offset": 0x1AE000, "architecture": "Intel64", "pae": False, "source": "MemProcFS"}
+    run, _evidence_row, _plugin_runs, reads, dtb_lookups = _layerless_run(db_session, tmp_path, monkeypatch, dtb=None, recorded=recorded)
+    assert dtb_lookups == []
+    assert [item[:2] for item in reads] == [("windows.info", "PhysicalMemory.dd"), ("windows.pslist", "PhysicalMemory.dd"), ("memprocfs.findevil", "PhysicalMemory.dd")]
     assert run.status == "completed"
-    assert run.metadata_json["volatility_view"]["status"] == "used"
-    assert "volatility_layer_missing" not in (evidence.metadata_json or {})
 
 
 @pytest.mark.parametrize(("profile", "expected"), [

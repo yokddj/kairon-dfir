@@ -56,7 +56,8 @@ from app.services.memory.indexing import index_memory_documents, index_memory_sy
 from app.services.memory.normalizers import merge_memory_process_results, normalize_memprocfs_processes, normalize_linux_psaux, normalize_linux_pslist, normalize_linux_psscan, normalize_linux_pstree, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
 from app.services.memory.pids import normalize_pid
 from app.services.memory.process_entities import renormalize_documents
-from app.services.memory.storage import memory_run_dir, relative_to_data_dir, volatility_view_path, write_atomic_bytes, write_atomic_json
+from app.services.memory.storage import memory_run_dir, relative_to_data_dir, write_atomic_bytes, write_atomic_json
+from app.services.memory import volatility_layer
 from app.services.memory.volatility_view import mark_volatility_layer_missing
 from app.services.memory import memprocfs_engine
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
@@ -658,14 +659,11 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             symbol_fallback: str | None = None
             symbols_missing = False
             symbol_blocked_plugin = "windows.info"
-            # Volatility reads MemProcFS's crash-dump copy of an image whose page tables it cannot find
-            # (made once per evidence, below); MemProcFS's own plugins read the original.
-            volatility_path = validated.path
-            existing_view = volatility_view_path(run.case_id, run.evidence_id)
-            if existing_view.is_file():
-                volatility_path = existing_view
-                run.metadata_json = {**(run.metadata_json or {}), "volatility_view": {"status": "used", "path": relative_to_data_dir(existing_view)}}
-                db.commit()
+            # When Volatility's own scan finds no page tables in the image, it reads it through a memory
+            # layer pinned to the page-table base MemProcFS finds (looked up once, below, and kept on
+            # the evidence): app.services.memory.volatility_layer.
+            layer_config = volatility_layer.write_config(output_dir, validated.path, validated.evidence)
+            layer_lookup_done = layer_config is not None
             symbol_blocked_code = "SYMBOLS_UNAVAILABLE"
             for plugin_index, plugin in enumerate(plugins, start=1):
                 plugin_run = _plugin_run_for(db, run, plugin)
@@ -727,8 +725,21 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                         },
                     }
                     db.commit()
-                    plugin_path = validated.path if plugin in MEMPROCFS_PLUGINS or plugin in MEMPROCFS_INVENTORY_PLUGINS or plugin in memprocfs_engine.INVENTORY_PLUGINS else volatility_path
-                    payload, raw_info, duration_ms, argv_display = _execute_plugin(db, run, plugin_run, plugin, plugin_path, output_dir)
+                    volatility_plugin = not (plugin in MEMPROCFS_PLUGINS or plugin in MEMPROCFS_INVENTORY_PLUGINS or plugin in memprocfs_engine.INVENTORY_PLUGINS)
+                    layer_kwargs = {"layer_config": layer_config} if volatility_plugin and layer_config is not None else {}
+                    try:
+                        payload, raw_info, duration_ms, argv_display = _execute_plugin(db, run, plugin_run, plugin, validated.path, output_dir, **layer_kwargs)
+                    except VolatilityRunnerError as layer_exc:
+                        if layer_exc.code != "INVALID_MEMORY_LAYER" or not volatility_plugin or not plugin.startswith("windows.") or layer_lookup_done:
+                            raise
+                        layer_lookup_done = True
+                        layer_config = volatility_layer.find_and_record(db, validated.evidence, validated.path, output_dir)
+                        if layer_config is None:
+                            raise
+                        found = volatility_layer.recorded(validated.evidence) or {}
+                        run.metadata_json = {**(run.metadata_json or {}), "volatility_layer": {"source": "MemProcFS", "page_map_offset": hex(int(found.get("page_map_offset") or 0))}}
+                        db.commit()
+                        payload, raw_info, duration_ms, argv_display = _execute_plugin(db, run, plugin_run, plugin, validated.path, output_dir, layer_config=layer_config)
                     raw_outputs[plugin] = raw_info
                     manifest_plugins.append({"plugin": plugin, "argv": argv_display, "raw_output": raw_info, "duration_ms": duration_ms})
                     try:
@@ -837,13 +848,12 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     blocking_error = exc
                     db.commit()
                     if plugin == "windows.info" and exc.code == "SYMBOLS_UNAVAILABLE":
-                        requirement = probe_windows_symbol_identity(volatility_path, output_dir)
+                        requirement = probe_windows_symbol_identity(validated.path, output_dir, **({"layer_config": layer_config} if layer_config is not None else {}))
                         if requirement:
                             record_symbol_requirement(db, run, plugin_run.id, requirement)
-                    if exc.code == "INVALID_MEMORY_LAYER" and volatility_path == validated.path and plugin not in SYMBOL_FREE_PLUGINS:
-                        # Volatility cannot read this image. The evidence page offers the analyst a
-                        # crash-dump copy made by MemProcFS (app.services.memory.volatility_view);
-                        # nothing that size is written without being asked.
+                    if exc.code == "INVALID_MEMORY_LAYER" and plugin not in SYMBOL_FREE_PLUGINS:
+                        # Volatility cannot read this image, not even with MemProcFS's page-table base:
+                        # the evidence page says so (app.services.memory.volatility_view).
                         mark_volatility_layer_missing(db, validated.evidence, run_id=run.id, plugin=plugin)
                     if exc.code in VOLATILITY_BLOCKED_CODES and run.profile in SYMBOL_FALLBACK_PLUGINS and memprocfs_available():
                         # The rest of the profile needs the same symbols: MemProcFS stands in.
@@ -1333,7 +1343,7 @@ def _index_artifact_results(
     return result
 
 
-def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun, plugin: str, evidence_path, output_dir) -> tuple[Any, dict, int, list[str]]:
+def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun, plugin: str, evidence_path, output_dir, layer_config: Path | None = None) -> tuple[Any, dict, int, list[str]]:
     plugin_run.status = "running"
     plugin_run.started_at = utc_now_naive()
     timeout_seconds = plugin_execution_timeout_seconds(plugin)
@@ -1417,6 +1427,7 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
                 timeout_seconds=timeout_seconds,
                 max_output_bytes=max_output_bytes,
                 cancellation_check=cancellation_requested,
+                **({"layer_config": layer_config} if layer_config is not None else {}),
             )
     except TypeError as exc:
         if "unexpected keyword" not in str(exc):

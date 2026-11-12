@@ -95,12 +95,20 @@ def _evidence_canonical_path(evidence) -> Path:
 
 
 def _volatility_input_path(evidence) -> Path:
-    """What Volatility reads for this evidence: MemProcFS's crash-dump copy when the image needed
-    one (Volatility found no memory layer in it), else the evidence itself."""
-    from app.services.memory.storage import volatility_view_path
+    """What Volatility reads for this evidence (kept as a seam for tests)."""
+    return _evidence_canonical_path(evidence)
 
-    view = volatility_view_path(evidence.case_id, evidence.id)
-    return view if view.is_file() else _evidence_canonical_path(evidence)
+
+def _layer_config(evidence, canonical: Path, work_dir: Path) -> Path | None:
+    """The memory layer pinned to MemProcFS's page-table base, when this evidence has one
+    (app.services.memory.volatility_layer)."""
+    from app.services.memory.volatility_layer import write_config
+
+    try:
+        return write_config(work_dir, canonical, evidence)
+    except Exception:  # noqa: BLE001
+        logger.warning("pinned Volatility layer could not be written", exc_info=True)
+        return None
 
 
 def _storage_error_for(code: str | None) -> tuple[str, str, str]:
@@ -499,6 +507,7 @@ def _run_bounded_requirement_discovery(
     """
     from app.services.memory.symbol_requirement_discovery import (
         BoundedDiscoveryError,
+        DISCOVERY_INCONCLUSIVE,
         discover_windows_symbol_requirement,
         persist_discovered_requirement,
     )
@@ -521,8 +530,20 @@ def _run_bounded_requirement_discovery(
             "WINDOWS_DISCOVERY_EVIDENCE_PATH_MISSING"
         ), None, {"platform": "windows", "error": str(exc)[:200]}
 
+    layer_config = _layer_config(evidence, canonical, work_dir)
     try:
-        discovered = discover_windows_symbol_requirement(canonical, work_dir)
+        try:
+            discovered = discover_windows_symbol_requirement(canonical, work_dir, **({"layer_config": layer_config} if layer_config is not None else {}))
+        except BoundedDiscoveryError as first:
+            # Volatility may have found no page tables: in the memory worker, MemProcFS supplies them once.
+            from app.services.memory.volatility_layer import find_and_record
+
+            if first.code != DISCOVERY_INCONCLUSIVE or layer_config is not None:
+                raise
+            layer_config = find_and_record(db, evidence, canonical, work_dir)
+            if layer_config is None:
+                raise
+            discovered = discover_windows_symbol_requirement(canonical, work_dir, layer_config=layer_config)
     except BoundedDiscoveryError as exc:
         # A bounded-process failure is a retryable probe failure
         # (``PREP_FAILED``), never ``PREP_UNSUPPORTED`` (Windows
@@ -840,6 +861,7 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
             native_result = _run_native_volatility_probe(
                 evidence=evidence,
                 canonical_path=_volatility_input_path(evidence),
+                layer_config=_layer_config(evidence, _volatility_input_path(evidence), _discovery_work_dir(evidence)),
             )
             if native_result.get("compatible"):
                 readiness.state = ReadinessState.READY
@@ -957,6 +979,7 @@ def _run_native_volatility_probe(
     *,
     evidence,
     canonical_path: Path,
+    layer_config: Path | None = None,
 ) -> dict[str, Any]:
     """Run stock Volatility with full automagic against the evidence.
 
@@ -1000,7 +1023,7 @@ def _run_native_volatility_probe(
     }
     try:
         proc = subprocess.run(
-            [*argv_prefix, "-f", str(canonical_path), "-r", "json", plugin],
+            [*argv_prefix, *(["-c", str(layer_config)] if layer_config is not None else ["-f", str(canonical_path)]), "-r", "json", plugin],
             capture_output=True,
             text=True,
             timeout=getattr(settings, "memory_native_probe_timeout_seconds", 60),

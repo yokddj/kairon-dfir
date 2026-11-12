@@ -991,8 +991,7 @@ def run_memory_output_cleanup(case_id: str, evidence_id: str | None = None) -> d
 
 
 def enqueue_volatility_view(evidence_id: str, action: str) -> str:
-    timeout = max(600, int(settings.memory_volatility_crashdump_timeout_seconds) + 300)
-    return memory_queue.enqueue("app.workers.tasks.run_volatility_view", evidence_id, action, job_timeout=timeout).id
+    return memory_queue.enqueue("app.workers.tasks.run_volatility_view", evidence_id, action, job_timeout=600).id
 
 
 def run_volatility_view(evidence_id: str, action: str) -> dict:

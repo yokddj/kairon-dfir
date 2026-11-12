@@ -177,6 +177,7 @@ class DiscoveredRequirement:
 def discover_windows_symbol_requirement(
     canonical_path: Path,
     work_dir: Path,
+    layer_config: Path | None = None,
 ) -> DiscoveredRequirement:
     """Run a bounded ``windows.info`` probe and return the identity.
 
@@ -236,7 +237,7 @@ def discover_windows_symbol_requirement(
         ) from exc
 
     try:
-        payload = probe_windows_symbol_identity(resolved_path, Path(work_dir))
+        payload = probe_windows_symbol_identity(resolved_path, Path(work_dir), **({"layer_config": layer_config} if layer_config is not None else {}))
     except (OSError,) as exc:
         raise BoundedDiscoveryError(
             DISCOVERY_BACKEND_START_FAILED,
