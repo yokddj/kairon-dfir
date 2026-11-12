@@ -4,9 +4,11 @@ import logging
 import os
 from datetime import datetime, timezone
 import shutil
+import struct
 import subprocess
 import tempfile
 import zipfile
+import zlib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -300,9 +302,206 @@ def _classify_limit_exceeded(exc: ValueError, source: Path) -> ArchiveExtraction
     )
 
 
+_LOCAL_HEADER = b"PK\x03\x04"
+_DATA_DESCRIPTOR = b"PK\x07\x08"
+_ZIP64_EXTRA = 0x0001
+_SALVAGE_CHUNK = 1024 * 1024
+TRUNCATED_STATUS = "truncated"
+
+
+class _EntryCut(Exception):
+    """The archive ends, or its data stops making sense, inside this entry."""
+
+
+def _starts_with_local_header(source: Path) -> bool:
+    try:
+        with source.open("rb") as handle:
+            return handle.read(4) == _LOCAL_HEADER
+    except OSError:
+        return False
+
+
+def _zip64_sizes(extra: bytes, csize: int, usize: int) -> tuple[int, int, bool]:
+    """Sizes from a local header's ZIP64 extra field, which holds only the ones set to 0xFFFFFFFF."""
+    pos = 0
+    while pos + 4 <= len(extra):
+        tag, length = struct.unpack_from("<HH", extra, pos)
+        body = extra[pos + 4: pos + 4 + length]
+        if tag == _ZIP64_EXTRA:
+            values = [struct.unpack_from("<Q", body, offset)[0] for offset in range(0, len(body) - 7, 8)]
+            if usize == 0xFFFFFFFF and values:
+                usize = values.pop(0)
+            if csize == 0xFFFFFFFF and values:
+                csize = values.pop(0)
+            return csize, usize, True
+        pos += 4 + length
+    return csize, usize, False
+
+
+def _salvage_entry_data(handle, target: Path, method: int, csize: int, sized: bool) -> tuple[int, int, int]:
+    """Copy one entry's data from ``handle`` (at its first data byte) into ``target``.
+
+    Returns (crc32, uncompressed size, compressed size); raises _EntryCut when the file ends first.
+    Deflate streams mark their own end, so entries whose sizes only come after the data (a data
+    descriptor, as streaming writers such as Velociraptor's emit) are still delimited."""
+    crc = 0
+    written = 0
+    consumed = 0
+    with target.open("wb") as out:
+        if method == zipfile.ZIP_STORED:
+            if not sized:
+                raise _EntryCut("stored entry without its size")
+            remaining = csize
+            while remaining:
+                chunk = handle.read(min(_SALVAGE_CHUNK, remaining))
+                if not chunk:
+                    raise _EntryCut("data ends early")
+                out.write(chunk)
+                crc = zlib.crc32(chunk, crc)
+                remaining -= len(chunk)
+            return crc, csize, csize
+        decompressor = zlib.decompressobj(-15)
+        while not decompressor.eof:
+            chunk = handle.read(_SALVAGE_CHUNK)
+            if not chunk:
+                raise _EntryCut("data ends early")
+            try:
+                data = decompressor.decompress(chunk)
+            except zlib.error as exc:
+                raise _EntryCut(f"deflate stream broken: {exc}") from exc
+            out.write(data)
+            crc = zlib.crc32(data, crc)
+            written += len(data)
+            consumed += len(chunk) - len(decompressor.unused_data)
+        handle.seek(-len(decompressor.unused_data), os.SEEK_CUR)
+    return crc, written, consumed
+
+
+def _salvage_truncated_zip(source: Path, dest_dir: Path, progress_cb: Callable[[dict], None] | None) -> list[dict]:
+    """Extract the complete entries of a ZIP whose end (the central directory) is missing.
+
+    A ZIP is read from its central directory, written last; an archive cut short -- an interrupted
+    copy or download, a collector stopped before it finished -- has none, and zipfile refuses it.
+    Every entry also starts with a local header, so the entries are walked from the start, as
+    ``zip -FF`` and 7-Zip do: each one is kept only when its data is complete and its CRC matches;
+    the walk stops at the first entry that is cut off or unreadable. The manifest ends with an entry
+    of status ``truncated`` saying where."""
+    manifest_entries: list[dict] = []
+    archive_size = source.stat().st_size
+    processed_files = 0
+    cut: dict | None = None
+    with source.open("rb") as handle:
+        while True:
+            offset = handle.tell()
+            header = handle.read(30)
+            if len(header) < 30 or header[:4] != _LOCAL_HEADER:
+                if header:
+                    cut = {"path": None, "offset": offset, "reason": "no further entry header"}
+                break
+            flags, method, mod_time, mod_date, header_crc, csize, usize, name_len, extra_len = struct.unpack_from("<HHHHIIIHH", header, 6)
+            raw_name = handle.read(name_len)
+            extra = handle.read(extra_len)
+            if len(raw_name) < name_len or len(extra) < extra_len:
+                cut = {"path": None, "offset": offset, "reason": "entry header cut off"}
+                break
+            name = raw_name.decode("utf-8" if flags & 0x800 else "cp437", errors="replace")
+            csize, usize, zip64 = _zip64_sizes(extra, csize, usize)
+            described_later = bool(flags & 0x08)
+            if flags & 0x01 or method not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                cut = {"path": name, "offset": offset, "reason": "encrypted entry or unsupported compression"}
+                break
+            info = zipfile.ZipInfo(name, date_time=((mod_date >> 9) + 1980, (mod_date >> 5) & 0xF or 1, mod_date & 0x1F or 1, mod_time >> 11, (mod_time >> 5) & 0x3F, (mod_time & 0x1F) * 2))
+            is_dir = name.endswith("/")
+            target = None if is_dir else _validate_path(dest_dir, name)
+            ignored, reason = (True, "directory") if is_dir else should_ignore_path(Path(name), size=usize if not described_later else None, is_dir=False)
+            partial = (target.with_name(target.name + ".kairon-partial") if target is not None else dest_dir / ".kairon-salvage-skip")
+            partial.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                crc, written, consumed = _salvage_entry_data(handle, partial, method, csize, not described_later or method == zipfile.ZIP_STORED and csize > 0)
+                if described_later:
+                    signature = handle.read(4)
+                    if signature != _DATA_DESCRIPTOR:
+                        handle.seek(-len(signature), os.SEEK_CUR)
+                    wide = zip64 or written >= 0xFFFFFFFF or consumed >= 0xFFFFFFFF
+                    descriptor = handle.read(20 if wide else 12)
+                    if len(descriptor) < (20 if wide else 12):
+                        raise _EntryCut("data descriptor cut off")
+                    header_crc = struct.unpack_from("<I", descriptor, 0)[0]
+                if crc != header_crc:
+                    raise _EntryCut("CRC mismatch")
+            except _EntryCut as exc:
+                partial.unlink(missing_ok=True)
+                cut = {"path": name, "offset": offset, "reason": str(exc)}
+                break
+            processed_files += 1
+            if is_dir:
+                partial.unlink(missing_ok=True)
+                continue
+            if ignored:
+                partial.unlink(missing_ok=True)
+                manifest_entries.append({"path": name, "ignored": True, "reason": reason, "size": written, "status": "ignored", "local_path": None})
+            else:
+                os.replace(partial, target)
+                restore_mtime(target, zip_member_mtime(info))
+                manifest_entries.append({"path": name, "ignored": False, "reason": None, "size": written, "status": "extracted", "local_path": str(target)})
+            if progress_cb:
+                progress_cb({"processed_files": processed_files, "total_files": processed_files, "processed_bytes": handle.tell(), "total_bytes": archive_size, "current_path": name})
+    (dest_dir / ".kairon-salvage-skip").unlink(missing_ok=True)
+    if cut is None:
+        cut = {"path": None, "offset": archive_size, "reason": "archive ends without its central directory"}
+    recovered = sum(1 for entry in manifest_entries if entry["status"] == "extracted")
+    manifest_entries.append({
+        "path": cut["path"] or "(end of archive)",
+        "ignored": True,
+        "reason": "archive_truncated",
+        "size": 0,
+        "status": TRUNCATED_STATUS,
+        "local_path": None,
+        "truncation": {"offset": cut["offset"], "archive_size": archive_size, "recovered_files": recovered, "detail": cut["reason"]},
+    })
+    _enforce_limits(manifest_entries)
+    return manifest_entries
+
+
+def archive_truncation(manifest_entries: list[dict]) -> dict | None:
+    """What a salvaged (truncated) archive lost, from its manifest; None for a complete archive."""
+    for entry in manifest_entries:
+        if entry.get("status") == TRUNCATED_STATUS:
+            path = entry.get("path")
+            return {"first_missing_path": None if path in (None, "", "(end of archive)") else path, **(entry.get("truncation") or {})}
+    return None
+
+
 def _extract_zip(source: Path, dest_dir: Path, progress_cb: Callable[[dict], None] | None) -> tuple[list[str], list[dict]]:
     try:
-        with zipfile.ZipFile(source) as archive:
+        archive_handle = zipfile.ZipFile(source)
+    except zipfile.BadZipFile as exc:
+        if not _starts_with_local_header(source):
+            _raise_classified(_classify_zip_failure(exc, source), source, exc)
+        logger.warning("ZIP without central directory, recovering complete entries source=%s detail=%s", source.name, exc)
+        try:
+            manifest_entries = _salvage_truncated_zip(source, dest_dir, progress_cb)
+        except ValueError as salvage_exc:
+            classified = _classify_limit_exceeded(salvage_exc, source) or _classify_zip_failure(salvage_exc, source)
+            _raise_classified(classified, source, salvage_exc)
+        except OSError as salvage_exc:
+            _raise_classified(_classify_zip_failure(salvage_exc, source), source, salvage_exc)
+        if not any(entry["status"] == "extracted" for entry in manifest_entries):
+            _raise_classified(
+                ArchiveExtractionError(
+                    "archive_truncated",
+                    f"{source.name} is incomplete: the file was cut off before its first file could be read. Upload a complete copy.",
+                    detail=str(exc),
+                ),
+                source,
+                exc,
+            )
+        extracted = [entry["path"] for entry in manifest_entries if entry["status"] == "extracted"]
+        return extracted, manifest_entries
+    except Exception as exc:  # noqa: BLE001
+        _raise_classified(_classify_zip_failure(exc, source), source, exc)
+    try:
+        with archive_handle as archive:
             manifest_entries = _safe_members_zip(archive, dest_dir, progress_cb=progress_cb)
             extracted = [entry["path"] for entry in manifest_entries if not entry["ignored"]]
             return extracted, manifest_entries

@@ -611,6 +611,7 @@ export default function EvidenceDetail() {
   const compareableBenchmarks = completedBenchmarks.slice(0, 2);
   const benchmarkComparison = benchmarkCompareMutation.data as { speedup_duration?: number; speedup_records_per_sec?: number; profile_recommendation?: string; reason?: string } | undefined;
   const metadata = data?.metadata_json ?? {};
+  const archiveTruncation = ((metadata.extraction_diagnostics as { archive_truncated?: { recovered_files: number; first_missing_path: string | null } } | undefined)?.archive_truncated) ?? null;
   const linuxInventory = asLinuxInventory(metadata.linux_inventory);
   const linuxCoverage = linuxInventory?.coverage ?? null;
   const linuxDetectedArtifacts = linuxInventory?.detected_artifacts ?? [];
@@ -1654,6 +1655,18 @@ function formatReportStatus(status: string | null | undefined) {
                 )}
               </div>
             </div>
+          </div>
+        ) : null}
+
+        {archiveTruncation ? (
+          <div className="mt-5 rounded-3xl border border-warning/40 bg-warning/10 p-5 text-sm" role="alert" data-testid="evidence-archive-truncated">
+            <p className="font-semibold text-warning">Incomplete archive: part of the collection is missing</p>
+            <p className="mt-1 text-ink">
+              The ZIP ends without the file index written at its end, typically an interrupted copy or download, or a collector stopped before it finished. The{" "}
+              {archiveTruncation.recovered_files.toLocaleString("en-US")} complete files before the cut were
+              recovered and analysed{archiveTruncation.first_missing_path ? <>; files from <span className="break-all font-mono text-xs">{archiveTruncation.first_missing_path}</span> on are missing</> : ""}.
+              Upload a complete copy for the full collection.
+            </p>
           </div>
         ) : null}
 

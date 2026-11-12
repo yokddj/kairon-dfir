@@ -616,6 +616,28 @@ describe("EvidenceDetail minimal processing UX", () => {
     expect(banner).toHaveTextContent("without uploading it again");
   });
 
+  it("says when an archive was cut off and what was recovered", async () => {
+    setupMinimalEvidenceDetail({
+      evidence: {
+        metadata_json: {
+          ...evidencePayload.metadata_json,
+          extraction_diagnostics: { archive_truncated: { offset: 482_055_293, archive_size: 482_062_336, recovered_files: 11970, first_missing_path: "uploads/auto/C%3A/last-file.bin" } },
+        },
+      },
+    });
+    renderPage();
+    const banner = await screen.findByTestId("evidence-archive-truncated");
+    expect(banner).toHaveTextContent("Incomplete archive");
+    expect(banner).toHaveTextContent("11,970 complete files");
+    expect(banner).toHaveTextContent("uploads/auto/C%3A/last-file.bin");
+  });
+
+  it("shows no archive warning for a complete archive", async () => {
+    renderPage();
+    expect(await screen.findByRole("heading", { name: "collection.zip" })).toBeInTheDocument();
+    expect(screen.queryByTestId("evidence-archive-truncated")).not.toBeInTheDocument();
+  });
+
   it("explains a compressed memory capture while it is extracted", async () => {
     setupMinimalEvidenceDetail({
       evidence: { ingest_status: "processing", metadata_json: { ...evidencePayload.metadata_json, register_bundled_memory: true } },
