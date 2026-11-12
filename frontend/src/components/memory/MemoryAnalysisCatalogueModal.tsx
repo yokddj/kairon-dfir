@@ -140,6 +140,45 @@ function StatusBadge({
   }
 }
 
+function EngineBadge({ item }: { item: MemoryAnalysisCatalogueItem }) {
+  if (!item.volatility_on_request) return null;
+  const memprocfs = item.engine === "memprocfs";
+  return (
+    <span
+      className={`rounded-md border px-2 py-0.5 text-[10px] ${memprocfs ? "border-accent/30 text-accent" : "border-amber-400/40 text-amber-100"}`}
+      data-testid={`catalogue-engine-${item.profile}`}
+    >
+      {memprocfs ? "MemProcFS" : "Volatility"}
+    </span>
+  );
+}
+
+// What Volatility adds when the analyst asks for it (MemProcFS is the Windows engine).
+const VOLATILITY_EXTRA_LABELS: Record<string, string> = {
+  "windows.psscan": "processes only a pool scan finds (terminated or unlinked)",
+  "windows.consoles": "Volatility's console scan",
+  "windows.cmdscan": "command history buffers",
+  "kairon.psreadline": "the PowerShell history file",
+  "kairon.findevil": "Kairon's own checks (hidden processes, suspicious command lines, injected code)",
+};
+
+function EngineNote({ item }: { item: MemoryAnalysisCatalogueItem }) {
+  if (!item.volatility_on_request) return null;
+  if (item.volatility_only) {
+    return (
+      <p className="mt-1 text-[10px] text-amber-100" data-testid={`catalogue-engine-note-${item.profile}`}>
+        Only Volatility gives this. It needs the kernel&apos;s symbols and runs only when you ask for it.
+      </p>
+    );
+  }
+  const extras = (item.volatility_extras ?? []).map((plugin) => VOLATILITY_EXTRA_LABELS[plugin] ?? plugin);
+  return extras.length ? (
+    <p className="mt-1 text-[10px] text-muted" data-testid={`catalogue-engine-note-${item.profile}`}>
+      Runs on MemProcFS. With Volatility (needs the kernel&apos;s symbols) it adds {extras.join(", ")}.
+    </p>
+  ) : null;
+}
+
 function CostLabel({ label }: { label: string }) {
   return (
     <span className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted">
@@ -187,7 +226,7 @@ function CatalogueCard({
   item: MemoryAnalysisCatalogueItem;
   canRun: boolean;
   isStarting: boolean;
-  onRun: (item: MemoryAnalysisCatalogueItem) => void;
+  onRun: (item: MemoryAnalysisCatalogueItem, engine?: "volatility") => void;
 }) {
   const disabled = !item.available || !canRun || isStarting;
   if (!item.available) {
@@ -250,10 +289,12 @@ function CatalogueCard({
               {item.profile}
             </span>
             <CostLabel label={item.cost_label} />
+            <EngineBadge item={item} />
             <StatusBadge status={item.last_status} available={item.available} gateType={item.gate_type} />
           </div>
           <p className="mt-1 text-xs text-muted">{item.description}</p>
           <PluginAvailabilityLine item={item} />
+          <EngineNote item={item} />
           <p className="mt-1 text-[10px] text-muted" data-testid={`catalogue-est-duration-${item.profile}`}>
             Estimated duration: ~{item.est_duration_seconds}s
             {item.last_run ? (
@@ -273,15 +314,41 @@ function CatalogueCard({
               View results
             </Link>
           ) : null}
-          <button
-            type="button"
-            onClick={() => onRun(item)}
-            disabled={disabled}
-            data-testid={`memory-catalogue-run-${item.profile}`}
-            className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss disabled:opacity-50"
-          >
-            {item.last_run ? "Run again" : "Run"}
-          </button>
+          {item.volatility_only ? (
+            <button
+              type="button"
+              onClick={() => onRun(item, "volatility")}
+              disabled={disabled}
+              data-testid={`memory-catalogue-run-${item.profile}`}
+              className="rounded-xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-100 disabled:opacity-50"
+            >
+              Run with Volatility
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => onRun(item)}
+                disabled={disabled}
+                data-testid={`memory-catalogue-run-${item.profile}`}
+                className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss disabled:opacity-50"
+              >
+                {item.last_run ? "Run again" : "Run"}
+              </button>
+              {item.volatility_on_request ? (
+                <button
+                  type="button"
+                  onClick={() => onRun(item, "volatility")}
+                  disabled={disabled}
+                  data-testid={`memory-catalogue-run-volatility-${item.profile}`}
+                  title="Run this analysis with Volatility instead (needs the kernel's symbols)."
+                  className="rounded-xl border border-line px-3 py-2 text-xs text-muted hover:text-ink disabled:opacity-50"
+                >
+                  With Volatility
+                </button>
+              ) : null}
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -416,7 +483,7 @@ function PartialAnalysisView({
   showAdvanced: boolean;
   itemsBySection: { section: Section; items: MemoryAnalysisCatalogueItem[] }[];
   startMutation: { isPending: boolean };
-  onRunItem: (item: MemoryAnalysisCatalogueItem) => void;
+  onRunItem: (item: MemoryAnalysisCatalogueItem, engine?: "volatility") => void;
 }) {
   const disabled = !canRun || isStarting || hasActiveProfiles || partialAvailable.length === 0;
   return (
@@ -512,7 +579,7 @@ function CompletedAnalysisView({
   onShowAdvanced: () => void;
   itemsBySection: { section: Section; items: MemoryAnalysisCatalogueItem[] }[];
   startMutation: { isPending: boolean };
-  onRunItem: (item: MemoryAnalysisCatalogueItem) => void;
+  onRunItem: (item: MemoryAnalysisCatalogueItem, engine?: "volatility") => void;
 }) {
   return (
     <div className="space-y-3" data-testid="memory-completed-analysis">
@@ -590,7 +657,7 @@ function CatalogueListing({
   itemsBySection: { section: Section; items: MemoryAnalysisCatalogueItem[] }[];
   canRun: boolean;
   isStarting: boolean;
-  onRunItem: (item: MemoryAnalysisCatalogueItem) => void;
+  onRunItem: (item: MemoryAnalysisCatalogueItem, engine?: "volatility") => void;
 }) {
   return (
     <div className="mt-4 space-y-5" data-testid="memory-catalogue-list">
@@ -645,8 +712,8 @@ export function MemoryAnalysisCatalogueModal({
   const [runAllOpen, setRunAllOpen] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const startMutation = useMutation<MemoryStartScanResponse, Error, { profile: string }>({
-    mutationFn: (vars) => api.startMemoryScan(caseId, evidenceId, vars.profile as never),
+  const startMutation = useMutation<MemoryStartScanResponse, Error, { profile: string; engine?: "volatility" }>({
+    mutationFn: (vars) => api.startMemoryScan(caseId, evidenceId, vars.profile as never, vars.engine),
     onSuccess: (result) => {
       setFeedback(result.message);
       setError(null);
@@ -683,7 +750,7 @@ export function MemoryAnalysisCatalogueModal({
     },
   });
 
-  function handleRun(item: MemoryAnalysisCatalogueItem) {
+  function handleRun(item: MemoryAnalysisCatalogueItem, engine?: "volatility") {
     if (!window.confirm(
       "I confirm that I own this memory image or am explicitly authorized to analyze it, and I understand that RAM may contain sensitive personal or authentication data.",
     )) {
@@ -691,7 +758,7 @@ export function MemoryAnalysisCatalogueModal({
     }
     setError(null);
     setFeedback(null);
-    startMutation.mutate({ profile: item.profile });
+    startMutation.mutate({ profile: item.profile, engine });
   }
 
   const sections: Section[] = ["quick", "artifacts", "unavailable"];

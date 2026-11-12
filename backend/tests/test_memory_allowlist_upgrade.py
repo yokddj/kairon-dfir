@@ -15,7 +15,8 @@ def test_an_unchanged_earlier_default_gets_find_evil() -> None:
 def test_an_operator_list_is_left_alone() -> None:
     settings = Settings(memory_allowed_profiles="metadata_only,processes_basic", memory_allowed_plugins="windows.info,windows.pslist")
     assert settings.allowed_memory_profiles == ["metadata_only", "processes_basic"]
-    assert settings.allowed_memory_plugins == ["windows.info", "windows.pslist"]
+    # MemProcFS's versions of the operator's plugins come with them (the Windows engine).
+    assert settings.allowed_memory_plugins == ["windows.info", "windows.pslist", "memprocfs.sysinfo", "memprocfs.processes"]
 
 
 def test_the_current_default_is_not_extended_twice() -> None:

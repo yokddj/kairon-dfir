@@ -3215,8 +3215,6 @@ def test_windows_info_failure_marks_one_failed_and_later_plugins_skipped(db_sess
 def test_missing_symbols_fall_back_to_memprocfs(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile, plugins, fallback, csv_text) -> None:
     """Volatility cannot run without the kernel's symbols; MemProcFS, which needs none, fills the
     profile's view instead of the run stopping."""
-    from app.services.memory.memprocfs_inventory import csv_rows
-
     _case(db_session)
     evidence_file = tmp_path / "memory.mem"
     evidence_file.write_bytes(b"synthetic")
@@ -3256,11 +3254,15 @@ def test_missing_symbols_fall_back_to_memprocfs(db_session, tmp_path: Path, monk
     monkeypatch.setattr(memory_execution, "run_plugin", no_symbols)
     asked: list[str] = []
 
-    def inventory(plugin, *_args, **_kwargs):
-        asked.append(plugin)
-        return volatility_runner.VolatilityRunResult(argv_display=["memprocfs"], stdout=json.dumps(csv_rows(csv_text)).encode(), stderr=b"", duration_ms=5)
+    inventory = tmp_path / "inventory"
+    inventory.mkdir()
+    (inventory / ("process.csv" if fallback == "memprocfs.processes" else "net.csv")).write_text(csv_text, encoding="utf-8")
 
-    monkeypatch.setattr(memory_execution, "run_memprocfs_inventory", inventory)
+    def ensure_inventory(*_args, **_kwargs):
+        asked.append(fallback)
+        return inventory
+
+    monkeypatch.setattr(memory_execution.memprocfs_engine, "ensure_inventory", ensure_inventory)
 
     memory_execution.run_memory_metadata_scan(run.id)
     db_session.refresh(run)
@@ -3398,6 +3400,68 @@ def test_volatility_reads_the_copy_once_it_exists(db_session, tmp_path: Path, mo
     assert run.status == "completed"
     assert run.metadata_json["volatility_view"]["status"] == "used"
     assert "volatility_layer_missing" not in (evidence.metadata_json or {})
+
+
+@pytest.mark.parametrize(("profile", "expected"), [
+    ("processes_extended", {"memprocfs.envars": "memory_environment_variable", "memprocfs.getsids": "memory_sid", "memprocfs.privileges": "memory_privilege"}),
+    ("kernel_basic", {"memprocfs.modules": "memory_kernel_module", "memprocfs.driverscan": "memory_driver"}),
+    ("metadata_only", {"memprocfs.sysinfo": "memory_system_info"}),
+])
+def test_a_memprocfs_run_reads_the_saved_inventory(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile, expected) -> None:
+    from tests.test_memprocfs_engine import PRIVILEGES, SID_ALL
+    from app.services.memory.memprocfs_inventory import environment, token_privileges, token_sids
+
+    inventory = tmp_path / "inventory"
+    inventory.mkdir()
+    (inventory / "process.csv").write_text("PID,PPID,Name\n7432,6120,powershell.exe\n")
+    (inventory / "modules.csv").write_text("PID,Process,Name,Size,Start,Path\n4,System,ntoskrnl.exe,0x1000,0xfffff80157e00000,\\SystemRoot\\ntoskrnl.exe\n")
+    (inventory / "drivers.csv").write_text("Name,ObjectAddress,Size,Start,ServiceKey,DriverName\nPEAUTH,0xffff1,0xce000,0xfffff80152000000,PEAUTH,\\Driver\\PEAUTH\n")
+    (inventory / "environment.json").write_text(json.dumps({"7432": environment("Path=C:\\Windows\n")}))
+    (inventory / "tokens.json").write_text(json.dumps({"7432": {"sids": token_sids(SID_ALL), "privileges": token_privileges(PRIVILEGES)}}))
+    (inventory / "system.json").write_text(json.dumps({"version-major": "10", "version-minor": "0", "version-build": "20348", "computername": "DC02", "architecture": "X64"}))
+    plugins = list(expected)
+    _case(db_session)
+    evidence_file = tmp_path / "PhysicalMemory.dd"
+    evidence_file.write_bytes(b"raw")
+    evidence = _evidence(db_session, stored_path=str(evidence_file))
+    run = MemoryScanRun(case_id=CASE_ID, evidence_id=evidence.id, backend="memprocfs", profile=profile, status="queued", requested_plugin_count=len(plugins), plugin_count=len(plugins), metadata_json={"plugins": plugins, "engine": "memprocfs"})
+    db_session.add(run)
+    db_session.commit()
+    for plugin in plugins:
+        db_session.add(MemoryPluginRun(memory_scan_run_id=run.id, case_id=CASE_ID, evidence_id=evidence.id, plugin=plugin, status="pending"))
+    db_session.commit()
+
+    class SessionContext:
+        def __enter__(self):
+            return db_session
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(memory_execution, "SessionLocal", lambda: SessionContext())
+    monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _id: SimpleNamespace(evidence=evidence, path=evidence_file, size_bytes=3))
+    monkeypatch.setattr(memory_execution, "validate_current_process_output_access", lambda: tmp_path)
+    monkeypatch.setattr(memory_execution.backend_readiness, "check_volatility3_backend", lambda: {"ready": True, "version": "Volatility 3 Framework 2.28.0"})
+    monkeypatch.setattr(memory_execution, "memory_run_dir", lambda *_args: tmp_path / "run")
+    monkeypatch.setattr(memory_execution, "relative_to_data_dir", lambda path: Path(path).name)
+    monkeypatch.setattr(memory_execution, "write_atomic_json", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(memory_execution, "run_plugin", lambda *_a, **_k: pytest.fail("no Volatility on a MemProcFS run"))
+    monkeypatch.setattr(memory_execution.memprocfs_engine, "ensure_inventory", lambda *_a, **_k: inventory)
+    monkeypatch.setattr(memory_execution, "index_memory_system_info", lambda _case, doc: indexed.append(doc) or {})
+    monkeypatch.setattr(memory_execution, "index_memory_documents", lambda _case, docs: {})
+    monkeypatch.setattr(memory_execution, "_create_memory_windows_host_facts", lambda *_a, **_k: None)
+    indexed: list[dict] = []
+    monkeypatch.setattr(memory_execution, "_index_artifact_results", lambda _case, results, _db, _run: indexed.extend(item for result in results.values() for item in result.get("items", [])) or {})
+
+    memory_execution.run_memory_metadata_scan(run.id)
+    db_session.refresh(run)
+    plugin_runs = {item.plugin: item for item in db_session.query(MemoryPluginRun).filter(MemoryPluginRun.memory_scan_run_id == run.id).all()}
+
+    assert {name: (item.status, item.error_code, item.error_message) for name, item in plugin_runs.items()} == {name: ("completed", None, None) for name in plugins}
+    assert run.status == "completed", run.error_log
+    types = {doc.get("document_type") or doc.get("memory_artifact_type") for doc in indexed}
+    assert set(expected.values()) <= types
+    assert all(doc.get("source_plugin", doc.get("plugin", "")).startswith("memprocfs.") for doc in indexed)
 
 
 HOST_ID = "dddddddd-4444-4444-8444-dddddddddddd"

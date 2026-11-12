@@ -94,6 +94,41 @@ The configured command must contain only one of:
 
 The readiness check may call a harmless help/version command with `shell=False`. No memory-image path is supplied, no plugins are run, no mounts are created, no files are written, no MemoryScanRun records are created, and no OpenSearch memory documents are written.
 
+## Engines: MemProcFS for Windows, Volatility on request
+
+Windows memory images are analysed with **MemProcFS** (`MEMORY_WINDOWS_DEFAULT_ENGINE=memprocfs`).
+It needs no kernel symbols, and it reads raw captures whose page tables Volatility cannot find.
+One forensic scan per evidence saves MemProcFS's inventory next to the evidence's memory outputs
+(`memory/memprocfs-inventory/`, a few MB; about a minute per 4 GB of memory), and every analysis
+reads it from there. Each analysis gives its rows the columns of the Volatility plugin it stands in
+for, so the views are the same:
+
+| Profile | MemProcFS | What only Volatility adds (on request) |
+|---|---|---|
+| `metadata_only` | `memprocfs.sysinfo` (version, build, computer name, times) | kernel base, DTB, symbol table |
+| `processes_basic` | `memprocfs.processes` (list, tree, command line, user) | — |
+| `processes_extended` | `memprocfs.envars`, `memprocfs.getsids`, `memprocfs.privileges` | `windows.psscan`: processes only a pool scan finds |
+| `network_basic` | `memprocfs.network` | — |
+| `modules_basic` | `memprocfs.dlllist` | `windows.ldrmodules` |
+| `handles_basic` | `memprocfs.handles` | — |
+| `kernel_basic` | `memprocfs.modules`, `memprocfs.driverscan` | — |
+| `shell_history_basic` | `memprocfs.console` | console and history scans, the PowerShell history file |
+| `find_evil` | `memprocfs.findevil` | Kairon's checks over Volatility |
+| `suspicious_memory`, `files_basic` | — | `windows.malfind`/`vadinfo`, `windows.filescan` |
+
+Compared on six Windows test images (3-10 GB) against Volatility's results with symbols:
+processes 99-100 % the same, command lines identical, DLLs, handles and kernel modules 100 % (and
+more), drivers 96-100 %, environment variables 99.5-100 %, SIDs 100 %, privileges the same set
+(Volatility also lists the ones a process does not hold), connections the same or more; MemProcFS
+misses most processes that only `psscan` finds, and its injected-code indicators are not
+`malfind`'s.
+
+**Volatility is an extra the analyst asks for**: each analysis in the list has **With Volatility**,
+and the Volatility-only ones **Run with Volatility**; it needs the kernel's symbols (see
+[Managed Windows symbols](memory_symbols.md)). **Run all** runs the MemProcFS analyses and leaves the
+Volatility-only ones out. Linux images always run on Volatility.
+`MEMORY_WINDOWS_DEFAULT_ENGINE=volatility` restores Volatility as the Windows engine.
+
 ## Profiles
 
 The memory runner is asynchronous. `POST /api/evidences/{evidence_id}/memory/scan` accepts only a named profile:

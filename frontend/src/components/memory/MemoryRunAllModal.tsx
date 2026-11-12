@@ -260,7 +260,7 @@ export function MemoryRunAllModal({
                   data-testid={`memory-run-all-skipped-${s.profile}`}
                 >
                   <span className="font-mono text-[10px]">{s.profile}</span>
-                  <span className="text-muted">{s.reason}</span>
+                  <span className="text-muted">{s.reason === "volatility_on_request" ? "Volatility only: run it from the analysis list when you need it" : s.reason}</span>
                 </li>
               ))}
             </ul>

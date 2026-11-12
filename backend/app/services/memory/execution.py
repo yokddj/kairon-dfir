@@ -58,8 +58,9 @@ from app.services.memory.pids import normalize_pid
 from app.services.memory.process_entities import renormalize_documents
 from app.services.memory.storage import memory_run_dir, relative_to_data_dir, volatility_view_path, write_atomic_bytes, write_atomic_json
 from app.services.memory.volatility_view import mark_volatility_layer_missing
+from app.services.memory import memprocfs_engine
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
-from app.services.memory.volatility_runner import VolatilityRunnerError, probe_windows_symbol_identity, run_plugin
+from app.services.memory.volatility_runner import VolatilityRunResult, VolatilityRunnerError, probe_windows_symbol_identity, run_plugin
 from app.services.memory.kairon_findevil import KAIRON_FINDEVIL_PLUGIN, run_kairon_findevil
 from app.services.memory.kairon_psreadline import KAIRON_PSREADLINE_PLUGIN, run_kairon_psreadline
 from app.services.memory.kairon_linux_findevil import KAIRON_LINUX_FINDEVIL_PLUGIN, run_kairon_linux_findevil
@@ -93,12 +94,12 @@ PROCESS_PLUGINS = {"windows.pslist", "windows.pstree", "windows.psscan", "window
 SYMBOL_FALLBACK_PLUGINS = {"processes_basic": "memprocfs.processes", "network_basic": "memprocfs.network"}
 # MemProcFS reads the image without Volatility's symbols: when windows.info cannot resolve them,
 # these still run (Find Evil, console text) and only the Volatility plugins of the profile are skipped.
-SYMBOL_FREE_PLUGINS = MEMPROCFS_PLUGINS
+SYMBOL_FREE_PLUGINS = MEMPROCFS_PLUGINS | frozenset(memprocfs_engine.INVENTORY_PLUGINS)
 # Volatility cannot read the image: the kernel's symbols are missing, or no memory layer (page
 # tables) was found. MemProcFS finds both on its own.
 VOLATILITY_BLOCKED_CODES = {"SYMBOLS_UNAVAILABLE", "INVALID_MEMORY_LAYER"}
-PROCESS_OBSERVATION_PLUGINS = {"windows.envars", "windows.getsids", "windows.privileges"}
-OPTIONAL_RUNTIME_PROBED_PLUGINS = PROCESS_OBSERVATION_PLUGINS | {"windows.netscan", "windows.netstat", "windows.vadinfo"}
+PROCESS_OBSERVATION_PLUGINS = {"windows.envars", "windows.getsids", "windows.privileges", "memprocfs.envars", "memprocfs.getsids", "memprocfs.privileges"}
+OPTIONAL_RUNTIME_PROBED_PLUGINS = {"windows.envars", "windows.getsids", "windows.privileges", "windows.netscan", "windows.netstat", "windows.vadinfo"}
 ARTIFACT_PROFILES = {
     "network_basic",
     "modules_basic",
@@ -110,6 +111,13 @@ ARTIFACT_PLUGIN_NORMALIZER = {
     "windows.netscan": "memory_network_connection",
     "windows.netstat": "memory_network_connection",
     "memprocfs.network": "memory_network_connection",
+    "memprocfs.dlllist": "memory_process_module",
+    "memprocfs.handles": "memory_handle",
+    "memprocfs.modules": "memory_kernel_module",
+    "memprocfs.driverscan": "memory_driver",
+    "memprocfs.envars": "memory_environment_variable",
+    "memprocfs.getsids": "memory_sid",
+    "memprocfs.privileges": "memory_privilege",
     "windows.dlllist": "memory_process_module",
     "windows.ldrmodules": "memory_process_module",
     "windows.handles": "memory_handle",
@@ -188,6 +196,16 @@ ARTIFACT_PLUGIN_LIMITS = {
     "kairon.psreadline": {"timeout_seconds": 600, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     # MemProcFS's forensic scan, then its process or network inventory (symbol-less fallback).
     "memprocfs.processes": {"timeout_seconds": 1800, "max_output_bytes": 64 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    # Read from the saved inventory; the first analysis of an evidence also runs the forensic scan
+    # (about a minute per 4 GB of memory). 64 MiB holds ~300k handle rows.
+    "memprocfs.sysinfo": {"timeout_seconds": 1800, "max_output_bytes": 4 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "memprocfs.dlllist": {"timeout_seconds": 1800, "max_output_bytes": 64 * 1024 * 1024, "max_records": 400000, "max_preview_bytes": 0},
+    "memprocfs.handles": {"timeout_seconds": 1800, "max_output_bytes": 64 * 1024 * 1024, "max_records": 400000, "max_preview_bytes": 0},
+    "memprocfs.modules": {"timeout_seconds": 1800, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "memprocfs.driverscan": {"timeout_seconds": 1800, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "memprocfs.envars": {"timeout_seconds": 1800, "max_output_bytes": 64 * 1024 * 1024, "max_records": 400000, "max_preview_bytes": 0},
+    "memprocfs.getsids": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "memprocfs.privileges": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "memprocfs.network": {"timeout_seconds": 1800, "max_output_bytes": 64 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "memprocfs.console": {"timeout_seconds": 900, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "kairon.findevil": {"timeout_seconds": 2400, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
@@ -465,11 +483,40 @@ def resolve_profile_plugins(profile: str, *, plan: MemoryAnalysisPlan | None = N
     return [plugin for plugin in resolved if plugin in selected]
 
 
-def create_memory_metadata_run(db: Session, evidence_id: str, profile: str = "metadata_only", *, plan: MemoryAnalysisPlan | None = None) -> MemoryScanRun:
+def resolve_run_engine(profile: str, plan: MemoryAnalysisPlan, engine: str | None) -> str:
+    """The engine a run uses: MemProcFS for Windows unless the analyst asked for Volatility, which
+    is also the only engine for Linux and for the Windows analyses MemProcFS does not cover."""
+    requested = str(engine or "").strip().lower() or None
+    if requested not in (None, memprocfs_engine.ENGINE_MEMPROCFS, memprocfs_engine.ENGINE_VOLATILITY):
+        raise MemoryExecutionValidationError("UNKNOWN_ENGINE", "Unknown memory analysis engine (memprocfs or volatility).")
+    windows = getattr(plan.detected_platform, "value", plan.detected_platform) == "windows"
+    if not windows:
+        if requested == memprocfs_engine.ENGINE_MEMPROCFS:
+            raise MemoryExecutionValidationError("ENGINE_UNAVAILABLE", "MemProcFS reads Windows memory images only; this one is analysed with Volatility.")
+        return memprocfs_engine.ENGINE_VOLATILITY
+    if requested == memprocfs_engine.ENGINE_VOLATILITY:
+        return requested
+    # Settings without the field (stand-ins in tests) keep the earlier engine.
+    default = str(getattr(backend_readiness.get_settings(), "memory_windows_default_engine", "volatility") or "").strip().lower()
+    if requested is None and default == memprocfs_engine.ENGINE_VOLATILITY:
+        return memprocfs_engine.ENGINE_VOLATILITY
+    if profile in memprocfs_engine.VOLATILITY_ONLY_PROFILES:
+        if requested == memprocfs_engine.ENGINE_MEMPROCFS:
+            raise MemoryExecutionValidationError("ENGINE_UNAVAILABLE", f"MemProcFS has no equivalent of '{profile}'; run it with Volatility.")
+        raise MemoryExecutionValidationError("VOLATILITY_REQUIRED", f"'{profile}' only runs on Volatility, which needs the kernel's symbols: request it with Volatility.")
+    # MemProcFS is installed in the memory worker, not here; a run reports it if it is missing.
+    return memprocfs_engine.ENGINE_MEMPROCFS
+
+
+def create_memory_metadata_run(db: Session, evidence_id: str, profile: str = "metadata_only", *, plan: MemoryAnalysisPlan | None = None, engine: str | None = None) -> MemoryScanRun:
     validated = validate_memory_execution_request(db, evidence_id)
     if plan is None:
         plan = build_memory_analysis_plan(validated.evidence, canonical_path=getattr(validated, "path", None))
-    plugins = resolve_profile_plugins(profile, plan=plan)
+    run_engine = resolve_run_engine(profile, plan, engine)
+    if run_engine == memprocfs_engine.ENGINE_MEMPROCFS:
+        plugins = [plugin for plugin in memprocfs_engine.windows_profile_plugins(profile) or [] if plugin in set(backend_readiness.get_settings().allowed_memory_plugins)]
+    else:
+        plugins = resolve_profile_plugins(profile, plan=plan)
     if not plugins:
         raise MemoryExecutionValidationError(
             "PROFILE_CAPABILITY_UNAVAILABLE",
@@ -479,7 +526,7 @@ def create_memory_metadata_run(db: Session, evidence_id: str, profile: str = "me
     run = MemoryScanRun(
         case_id=validated.evidence.case_id,
         evidence_id=validated.evidence.id,
-        backend="volatility3",
+        backend="memprocfs" if run_engine == memprocfs_engine.ENGINE_MEMPROCFS else "volatility3",
         profile=profile,
         status="pending",
         requested_plugin_count=len(plugins),
@@ -488,6 +535,8 @@ def create_memory_metadata_run(db: Session, evidence_id: str, profile: str = "me
         plugins_failed=0,
         metadata_json={
             "plugins": plugins,
+            "engine": run_engine,
+            "volatility_extras": memprocfs_engine.VOLATILITY_EXTRAS.get(profile, []) if run_engine == memprocfs_engine.ENGINE_MEMPROCFS else [],
             "source_layer": "memory",
             "profile": profile,
             "timeout_policy": timeout_plan,
@@ -678,13 +727,15 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                         },
                     }
                     db.commit()
-                    plugin_path = validated.path if plugin in MEMPROCFS_PLUGINS or plugin in MEMPROCFS_INVENTORY_PLUGINS else volatility_path
+                    plugin_path = validated.path if plugin in MEMPROCFS_PLUGINS or plugin in MEMPROCFS_INVENTORY_PLUGINS or plugin in memprocfs_engine.INVENTORY_PLUGINS else volatility_path
                     payload, raw_info, duration_ms, argv_display = _execute_plugin(db, run, plugin_run, plugin, plugin_path, output_dir)
                     raw_outputs[plugin] = raw_info
                     manifest_plugins.append({"plugin": plugin, "argv": argv_display, "raw_output": raw_info, "duration_ms": duration_ms})
                     try:
-                        if plugin == "windows.info":
+                        if plugin in ("windows.info", "memprocfs.sysinfo"):
                             system_info = _json_safe(normalize_windows_info(payload, case_id=run.case_id, evidence_id=run.evidence_id, memory_run_id=run.id, memory_plugin_run_id=plugin_run.id, backend_version=run.backend_version))
+                            if plugin == "memprocfs.sysinfo":
+                                system_info = {**system_info, "backend": "memprocfs", "plugin": plugin}
                             plugin_run.metadata_json = {"normalized_type": "memory_system_info", "raw_output_retained": True}
                             _create_memory_windows_host_facts(system_info, evidence=validated.evidence)
                         elif plugin in PROCESS_PLUGINS:
@@ -985,68 +1036,73 @@ def _normalize_artifact_payload(
     evidence_id: str,
     scan_run_id: str,
     plugin_run_id: str,
+    source_plugin: str | None = None,
 ) -> dict[str, Any]:
     """Dispatch a single plugin payload to its canonical normalizer.
 
     Returns the canonical normalizer result; the caller is responsible
     for indexing and linking process entities.
     """
+    # source_plugin: the analysis that produced the rows, when it stands in for ``plugin``.
+    label = source_plugin or plugin
     common = {
         "case_id": case_id,
         "evidence_id": evidence_id,
         "scan_run_id": scan_run_id,
         "plugin_run_id": plugin_run_id,
     }
+    if plugin in memprocfs_engine.STANDS_IN_FOR and plugin != MEMPROCFS_NETWORK_PLUGIN:
+        return _normalize_artifact_payload(memprocfs_engine.STANDS_IN_FOR[plugin], payload, case_id=case_id, evidence_id=evidence_id, scan_run_id=scan_run_id, plugin_run_id=plugin_run_id, source_plugin=label)
     if plugin == "windows.netscan":
-        return normalize_windows_netscan(payload, source_plugin=plugin, **common)
+        return normalize_windows_netscan(payload, source_plugin=label, **common)
     if plugin == "windows.netstat":
-        return normalize_windows_netscan(payload, source_plugin=plugin, **common)
+        return normalize_windows_netscan(payload, source_plugin=label, **common)
     if plugin == MEMPROCFS_NETWORK_PLUGIN:
-        return normalize_windows_netscan(memprocfs_net_rows(_artifact_rows(payload)), source_plugin=plugin, **common)
+        return normalize_windows_netscan(memprocfs_net_rows(_artifact_rows(payload)), source_plugin=label, **common)
     if plugin == "windows.dlllist":
-        return normalize_windows_dlllist(payload, source_plugin=plugin, **common)
+        return normalize_windows_dlllist(payload, source_plugin=label, **common)
     if plugin == "windows.ldrmodules":
-        return normalize_windows_ldrmodules(payload, source_plugin=plugin, **common)
+        return normalize_windows_ldrmodules(payload, source_plugin=label, **common)
     if plugin == "windows.handles":
-        return normalize_windows_handles(payload, source_plugin=plugin, **common)
+        return normalize_windows_handles(payload, source_plugin=label, **common)
     if plugin == "windows.modules":
-        return normalize_windows_modules(payload, source_plugin=plugin, **common)
+        return normalize_windows_modules(payload, source_plugin=label, **common)
     if plugin == "windows.driverscan":
-        return normalize_windows_driverscan(payload, source_plugin=plugin, **common)
+        return normalize_windows_driverscan(payload, source_plugin=label, **common)
     if plugin == "windows.malfind":
-        return normalize_windows_malfind(payload, source_plugin=plugin, **common)
+        return normalize_windows_malfind(payload, source_plugin=label, **common)
     if plugin == "windows.vadinfo":
-        return normalize_windows_vadinfo(payload, source_plugin=plugin, **common)
+        return normalize_windows_vadinfo(payload, source_plugin=label, **common)
     if plugin == "windows.envars":
-        return normalize_windows_envars(payload, source_plugin=plugin, **common)
+        return normalize_windows_envars(payload, source_plugin=label, **common)
     if plugin == "windows.getsids":
-        return normalize_windows_getsids(payload, source_plugin=plugin, **common)
+        return normalize_windows_getsids(payload, source_plugin=label, **common)
     if plugin == "windows.privileges":
-        return normalize_windows_privileges(payload, source_plugin=plugin, **common)
+        return normalize_windows_privileges(payload, source_plugin=label, **common)
     if plugin == "linux.bash":
-        return normalize_linux_bash(payload, source_plugin=plugin, **common)
+        return normalize_linux_bash(payload, source_plugin=label, **common)
     if plugin == "linux.sockstat":
-        return normalize_linux_sockstat(payload, source_plugin=plugin, **common)
+        return normalize_linux_sockstat(payload, source_plugin=label, **common)
     if plugin in ("windows.consoles", "windows.cmdscan"):
-        return normalize_windows_consoles(payload, source_plugin=plugin, **common)
+        return normalize_windows_consoles(payload, source_plugin=label, **common)
     if plugin == "windows.filescan":
-        return normalize_windows_filescan(payload, source_plugin=plugin, **common)
+        return normalize_windows_filescan(payload, source_plugin=label, **common)
     if plugin == KAIRON_PSREADLINE_PLUGIN:
-        return normalize_psreadline_history(payload, source_plugin=plugin, **common)
+        return normalize_psreadline_history(payload, source_plugin=label, **common)
     if plugin == MEMPROCFS_CONSOLE_PLUGIN:
-        return normalize_memprocfs_console(payload, source_plugin=plugin, **common)
+        return normalize_memprocfs_console(payload, source_plugin=label, **common)
     if plugin in ("memprocfs.findevil", KAIRON_FINDEVIL_PLUGIN):
-        return normalize_memprocfs_findevil(payload, source_plugin=plugin, **common)
+        return normalize_memprocfs_findevil(payload, source_plugin=label, **common)
     if plugin == KAIRON_LINUX_FINDEVIL_PLUGIN:
-        return normalize_memprocfs_findevil(payload, source_plugin=plugin, platform="linux", **common)
+        return normalize_memprocfs_findevil(payload, source_plugin=label, platform="linux", **common)
     if plugin == "linux.lsof":
-        return normalize_linux_lsof(payload, source_plugin=plugin, **common)
+        return normalize_linux_lsof(payload, source_plugin=label, **common)
     if plugin == "linux.pagecache.Files":
-        return normalize_linux_pagecache_files(payload, source_plugin=plugin, **common)
+        return normalize_linux_pagecache_files(payload, source_plugin=label, **common)
     if plugin == "linux.lsmod":
-        return normalize_linux_lsmod(payload, source_plugin=plugin, **common)
+        return normalize_linux_lsmod(payload, source_plugin=label, **common)
     if plugin == "linux.malware.malfind":
-        return normalize_windows_malfind(payload, source_plugin=plugin, **common)
+        return normalize_windows_malfind(payload, source_plugin=label, **common)
     return {
         "items": [],
         "warnings": [f"unsupported_artifact_plugin:{plugin}"],
@@ -1301,14 +1357,19 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
             max_output_bytes=max_output_bytes,
             cancellation_check=cancellation_requested,
         )
-    elif plugin in MEMPROCFS_INVENTORY_PLUGINS:
-        result = run_memprocfs_inventory(
-            plugin,
-            evidence_path,
-            output_dir,
-            timeout_seconds=timeout_seconds,
-            max_output_bytes=max_output_bytes,
-            cancellation_check=cancellation_requested,
+    elif plugin in memprocfs_engine.INVENTORY_PLUGINS:
+        # Read from the evidence's saved MemProcFS inventory, scanned on first use.
+        started = time.monotonic()
+        directory = memprocfs_engine.ensure_inventory(
+            run.case_id, run.evidence_id, Path(evidence_path), output_dir,
+            timeout_seconds=timeout_seconds, cancellation_check=cancellation_requested,
+        )
+        rows = memprocfs_engine.rows(plugin, directory)
+        result = VolatilityRunResult(
+            argv_display=["memprocfs", "-device", "[evidence]", "-forensic", "1", "-disable-symbolserver", plugin.split(".", 1)[1]],
+            stdout=json.dumps(rows, default=str).encode("utf-8"),
+            stderr=b"",
+            duration_ms=int((time.monotonic() - started) * 1000),
         )
     elif plugin in MEMPROCFS_PLUGINS:
         result = run_findevil(

@@ -181,6 +181,9 @@ class Settings(BaseSettings):
     # A raw capture whose page tables Volatility cannot find (no memory layer): the evidence page
     # offers a crash-dump copy written by MemProcFS (about the size of the image), made only on the
     # analyst's request and when MEMORY_UPLOAD_MIN_FREE_SPACE_BYTES stays free after it.
+    # Engine of Windows memory analysis: memprocfs (no kernel symbols needed; Volatility then runs
+    # only when the analyst asks for it) or volatility (the previous behaviour).
+    memory_windows_default_engine: str = "memprocfs"
     memory_volatility_crashdump_view_enabled: bool = True
     memory_volatility_crashdump_timeout_seconds: int = 7200
     memory_symbol_allowed_hosts: str = ""
@@ -592,7 +595,10 @@ class Settings(BaseSettings):
         else:
             plugins = [str(item).strip() for item in values if str(item).strip()]
         plugins = _with_new_defaults(plugins, _ADDED_MEMORY_PLUGINS)
-        return [plugin for plugin in plugins if plugin in allowed] or ["windows.info"]
+        plugins = [plugin for plugin in plugins if plugin in allowed] or ["windows.info"]
+        # MemProcFS's version of an analysis is allowed with the Volatility plugin it stands in for,
+        # so an allowlist written before MemProcFS became the Windows engine keeps working.
+        return plugins + [engine for engine, counterpart in _MEMPROCFS_COUNTERPARTS.items() if counterpart in plugins and engine not in plugins]
 
     @property
     def allowed_memory_profiles(self) -> list[str]:
@@ -817,6 +823,19 @@ _ADDED_MEMORY_PROFILES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
         ("find_evil",),
     ),
 )
+_MEMPROCFS_COUNTERPARTS = {
+    "memprocfs.sysinfo": "windows.info",
+    "memprocfs.processes": "windows.pslist",
+    "memprocfs.network": "windows.netscan",
+    "memprocfs.dlllist": "windows.dlllist",
+    "memprocfs.handles": "windows.handles",
+    "memprocfs.modules": "windows.modules",
+    "memprocfs.driverscan": "windows.driverscan",
+    "memprocfs.envars": "windows.envars",
+    "memprocfs.getsids": "windows.getsids",
+    "memprocfs.privileges": "windows.privileges",
+}
+
 _ADDED_MEMORY_PLUGINS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (
         ("windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "windows.envars", "windows.getsids", "windows.privileges", "windows.netscan", "windows.netstat", "windows.dlllist", "windows.ldrmodules", "windows.handles", "windows.modules", "windows.driverscan", "windows.malfind", "windows.vadinfo", "windows.consoles", "windows.filescan", "linux.pslist", "linux.pstree", "linux.sockstat", "linux.bash"),

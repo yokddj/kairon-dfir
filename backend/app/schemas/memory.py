@@ -419,6 +419,9 @@ class MemoryUploadFinalizeRequest(BaseModel):
 
 class MemoryStartScanRequest(BaseModel):
     profile: str = "metadata_only"
+    # None: MemProcFS for Windows, Volatility for Linux. "volatility" is the analyst's explicit
+    # request for Volatility on a Windows image (it needs the kernel's symbols).
+    engine: str | None = None
 
     model_config = {"extra": "forbid"}
 
