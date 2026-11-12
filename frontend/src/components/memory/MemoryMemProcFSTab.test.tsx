@@ -63,6 +63,32 @@ describe("MemoryMemProcFSTab", () => {
     expect((await screen.findByTestId("memory-memprocfs-hidden")).textContent).toContain("2 unreadable entries");
   });
 
+  it("opens a YARA match's record and rule source on click", async () => {
+    getMemoryMemProcFSTableMock.mockResolvedValue(result({
+      table: "yara",
+      columns: [{ key: "Rule", label: "Rule" }, { key: "Threat", label: "Threat" }, { key: "Strings", label: "Matched strings" }],
+      items: [{ Rule: "Windows_Trojan_Example_1a2b3c4d", Threat: "Windows.Trojan.Example", Strings: "$a1 @ 7ff6d1a01234", _details: "Match Index:  1\n[$a1]: 7ff6d1a01234", _rule_source: "rule Windows_Trojan_Example_1a2b3c4d {}" }],
+    }));
+    renderTab();
+    const row = await screen.findByText("Windows.Trojan.Example");
+    expect(row.closest("tr")?.getAttribute("title")).not.toContain("_details");
+    expect(screen.queryByTestId("memory-memprocfs-row-details")).not.toBeInTheDocument();
+    fireEvent.click(row);
+    const details = await screen.findByTestId("memory-memprocfs-row-details");
+    expect(details).toHaveTextContent("[$a1]: 7ff6d1a01234");
+    expect(details).toHaveTextContent("rule Windows_Trojan_Example_1a2b3c4d {}");
+    fireEvent.click(row);
+    expect(screen.queryByTestId("memory-memprocfs-row-details")).not.toBeInTheDocument();
+  });
+
+  it("rows without a record are not expandable", async () => {
+    renderTab();
+    const cell = await screen.findByText("Updater");
+    fireEvent.click(cell);
+    expect(screen.queryByTestId("memory-memprocfs-row-details")).not.toBeInTheDocument();
+    expect(cell.closest("tr")?.getAttribute("aria-expanded")).toBeNull();
+  });
+
   it("asks to run Find Evil again when the run has no inventories", async () => {
     getMemoryMemProcFSTableMock.mockResolvedValue(result({ available: false, items: [], total: 0 }));
     renderTab();

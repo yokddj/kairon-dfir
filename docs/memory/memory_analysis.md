@@ -248,6 +248,14 @@ With it off, Find Evil simply has no `YR_*` indicators -- the same as "no matche
 needs no rebuild and downloads nothing new: the rules are already in the image, only the runtime
 flag changes. See `docker/memory-worker/THIRD_PARTY_NOTICES.md` for the full notice.
 
+MemProcFS's `yara.csv` has no column for the rule that matched; the rule, its metadata and the
+matched bytes are in `\forensic\findevil\yara.txt`, and the source of each rule that matched in
+`yara_rules.txt`. The Find Evil run saves both next to the CSVs, and Kairon joins them to each
+match by its index. FindEvil's `YR_*` indicators also carry the rule's threat name and severity
+in their description (for example `Windows_Trojan_Example_1a2b3c4d [1] -- threat
+Windows.Trojan.Example, severity 100`). A Find Evil run from before this change has only the CSV:
+run Find Evil again for the details.
+
 #### Cobalt Strike beacon configurations
 
 After MemProcFS's scan, Kairon searches the memory regions FindEvil flags -- YARA matches first,
@@ -324,7 +332,7 @@ The **MemProcFS** tab of a memory evidence lists the inventories MemProcFS's for
 | Network | DNS cache | Names the DNS client had resolved; entries read from freed memory (unreadable names or answers) are hidden and counted |
 | Execution | Prefetch, Amcache files, Amcache applications, Amcache shortcuts | Programs that ran or were inventoried, with path, publisher, version, run count and times |
 | System | Drivers, Devices, Amcache drivers, Amcache driver packages, Amcache device containers, Amcache PnP devices | Driver and device objects in kernel memory and Amcache's driver and device inventory |
-| Detection | YARA matches | Matches of MemProcFS's built-in YARA rules in process and kernel memory |
+| Detection | YARA matches | Matches of MemProcFS's built-in YARA rules in process and kernel memory: rule, threat and severity (from the rule's metadata), where (process and PID, or the file object), memory type, every matched string with its address. Clicking a row shows MemProcFS's full record of the match (with a hexdump around each string) and the rule's source |
 
 Each table can be filtered by text; hovering a row shows all its columns. Process, thread, module, handle and network lists are not repeated here: Volatility's tabs have them.
 

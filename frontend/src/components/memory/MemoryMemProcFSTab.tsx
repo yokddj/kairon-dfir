@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { MemoryPaginationControls } from "./MemoryPaginationControls";
@@ -14,6 +14,7 @@ export function MemoryMemProcFSTab({ caseId, evidenceId }: Props) {
   const [table, setTable] = useState("tasks");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const pageSize = 50;
   const query = useQuery({
     queryKey: ["memory-memprocfs-table", caseId, evidenceId, table, search, page],
@@ -57,7 +58,7 @@ export function MemoryMemProcFSTab({ caseId, evidenceId }: Props) {
                       <button
                         key={item.key}
                         type="button"
-                        onClick={() => { setTable(item.key); setPage(1); }}
+                        onClick={() => { setTable(item.key); setPage(1); setExpanded(null); }}
                         aria-pressed={item.key === table}
                         className={`flex w-full justify-between rounded-xl border px-3 py-1.5 text-left text-xs ${item.key === table ? "border-accent/50 bg-accent/15 text-ink" : "border-line bg-abyss/60 text-muted"} ${item.count === 0 ? "opacity-50" : ""}`}
                         data-testid={`memory-memprocfs-table-${item.key}`}
@@ -105,13 +106,45 @@ export function MemoryMemProcFSTab({ caseId, evidenceId }: Props) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-line">
-                      {data.items.map((row, index) => (
-                        <tr key={`${page}-${index}`} data-testid="memory-memprocfs-row" title={Object.entries(row).filter(([, value]) => value).map(([key, value]) => `${key}: ${value}`).join("\n")}>
-                          {data.columns.map((column) => (
-                            <td key={column.key} className="break-all px-2 py-1 font-mono text-[11px] text-ink">{row[column.key] || <span className="text-muted">—</span>}</td>
-                          ))}
-                        </tr>
-                      ))}
+                      {data.items.map((row, index) => {
+                        // "_details" / "_rule_source": the full record behind a row (YARA matches), shown on click.
+                        const key = `${table}-${page}-${index}`;
+                        const hasDetails = Boolean(row._details || row._rule_source);
+                        const open = expanded === key;
+                        return (
+                          <Fragment key={key}>
+                            <tr
+                              data-testid="memory-memprocfs-row"
+                              title={Object.entries(row).filter(([name, value]) => value && !name.startsWith("_")).map(([name, value]) => `${name}: ${value}`).join("\n")}
+                              onClick={hasDetails ? () => setExpanded(open ? null : key) : undefined}
+                              aria-expanded={hasDetails ? open : undefined}
+                              className={hasDetails ? "cursor-pointer hover:bg-abyss/60" : undefined}
+                            >
+                              {data.columns.map((column) => (
+                                <td key={column.key} className="break-all px-2 py-1 font-mono text-[11px] text-ink">{row[column.key] || <span className="text-muted">—</span>}</td>
+                              ))}
+                            </tr>
+                            {open ? (
+                              <tr data-testid="memory-memprocfs-row-details">
+                                <td colSpan={data.columns.length} className="bg-abyss/70 px-3 py-2">
+                                  {row._details ? (
+                                    <>
+                                      <p className="text-[10px] uppercase tracking-[0.14em] text-muted">Match</p>
+                                      <pre className="mt-1 max-h-96 overflow-auto whitespace-pre font-mono text-[11px] text-ink">{row._details}</pre>
+                                    </>
+                                  ) : null}
+                                  {row._rule_source ? (
+                                    <>
+                                      <p className="mt-3 text-[10px] uppercase tracking-[0.14em] text-muted">Rule</p>
+                                      <pre className="mt-1 max-h-96 overflow-auto whitespace-pre font-mono text-[11px] text-ink">{row._rule_source}</pre>
+                                    </>
+                                  ) : null}
+                                </td>
+                              </tr>
+                            ) : null}
+                          </Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
