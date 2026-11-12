@@ -1972,6 +1972,7 @@ def normalize_linux_pagecache_files(
 
 # type -> (review priority, category, explanation)
 FINDEVIL_TYPES: dict[str, tuple[str, str, str]] = {
+    "CS_BEACON": ("high", "malware", "Cobalt Strike beacon configuration decoded from this process's memory (Kairon, in a region FindEvil flagged): its C2 servers and settings are in the description."),
     "AV_DETECT": ("high", "antivirus", "Antivirus detection event still in memory (Windows Defender)."),
     "PROC_NOLINK": ("high", "process", "Process missing from the kernel's active process list: hidden (unlinked), or exiting when memory was captured."),
     "PROC_PARENT": ("high", "process", "Well-known Windows process with an unexpected parent process."),

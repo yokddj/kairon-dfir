@@ -39,6 +39,8 @@ dependencies = [
   "libewf-python>=20240506",
   "dissect.esedb>=3.18",
   "dissect.evidence>=3.13",
+  # Cobalt Strike beacon configurations in memory (MIT; app.services.memory.beacon_config).
+  "dissect.cobaltstrike>=1.3",
   "pycryptodome>=3.20.0",
   "zstandard>=0.22",
   "lz4>=4.3",

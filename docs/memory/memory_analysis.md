@@ -127,6 +127,10 @@ misses most processes that only `psscan` finds, and its injected-code indicators
 and the Volatility-only ones **Run with Volatility**; it needs the kernel's symbols (see
 [Managed Windows symbols](memory_symbols.md)). **Run all** runs the MemProcFS analyses and leaves the
 Volatility-only ones out. Linux images always run on Volatility.
+On a Windows image the first **Analyze memory** does the same as **Run all**: the first MemProcFS
+analysis scans the image and the rest read what it saved, so running processes alone only put the
+rest behind a second click. On Linux it still runs the processes first, which also says quickly
+whether the kernel's symbols are there; **Complete analysis** then runs the rest.
 `MEMORY_WINDOWS_DEFAULT_ENGINE=volatility` restores Volatility as the Windows engine.
 
 ## Profiles
@@ -243,6 +247,22 @@ With it off, Find Evil simply has no `YR_*` indicators -- the same as "no matche
 "skipped" state, since the analyst never asked for this license to be accepted. Turning it on
 needs no rebuild and downloads nothing new: the rules are already in the image, only the runtime
 flag changes. See `docker/memory-worker/THIRD_PARTY_NOTICES.md` for the full notice.
+
+#### Cobalt Strike beacon configurations
+
+After MemProcFS's scan, Kairon searches the memory regions FindEvil flags -- YARA matches first,
+then writable-executable and injected code, then unbacked executable code (up to 512 regions of
+4 MiB per image, three minutes at most) -- for a Cobalt Strike beacon's configuration, which a
+running beacon keeps in its own memory XOR-encoded with one byte. Each one found is decoded with
+[dissect.cobaltstrike](https://github.com/fox-it/dissect.cobaltstrike) (Fox-IT, MIT) and added as a
+`CS_BEACON` indicator (category **malware**, high priority) whose description holds the C2 servers,
+port and URIs, sleep and jitter, user agent, named pipe, the process it spawns to inject into and
+the licence watermark -- searchable, and offered as finding suggestions like the other indicators.
+Only the bytes around an RSA public key (every configuration carries the beacon's) are decoded, so
+the search takes seconds (61 regions of a 3 GB image: about a second to read). A beacon whose
+configuration is not readable in memory -- encrypted by a sleep mask, or paged out -- is not found
+this way; FindEvil still flags its region. The memory worker's log has one line per run:
+`Beacon configuration search: N regions, M configurations`.
 
 ### Shell history on Windows
 

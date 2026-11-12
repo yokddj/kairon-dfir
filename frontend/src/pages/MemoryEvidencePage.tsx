@@ -286,18 +286,26 @@ export default function MemoryEvidencePage() {
   });
 
   const startScanMutation = useMutation({
-    mutationFn: async () =>
-      // First-analysis direct entry point (MemoryEvidenceHeader's
-      // Analyze memory button, shown when isFirstAnalysis). Must use
-      // the same profile as MemoryInitialAnalysisAction's golden path
-      // -- never the metadata-only scan, unconditionally ineligible
-      // for Linux evidence (see app.services.memory.capability_registry).
-      api.startMemoryScan(caseId, evidenceId, INITIAL_ANALYSIS_PROFILE),
+    // First-analysis direct entry point (MemoryEvidenceHeader's Analyze memory button, shown when
+    // isFirstAnalysis). Windows runs every analysis at once: on MemProcFS the first one scans the
+    // image and the rest read what it saved, so running processes alone only postponed the rest
+    // behind a second click. Elsewhere (Linux, on Volatility) processes_basic comes first, the
+    // profile of MemoryInitialAnalysisAction's golden path -- never the metadata-only scan,
+    // ineligible for Linux evidence (see app.services.memory.capability_registry) -- and says
+    // quickly whether the kernel's symbols are there.
+    mutationFn: async (): Promise<void> => {
+      if (evidencePlatform === "windows") {
+        await api.startMemoryRunAll(caseId, evidenceId, { mode: "missing_or_failed", authorization_acknowledged: true, continue_on_failure: true });
+        return;
+      }
+      await api.startMemoryScan(caseId, evidenceId, INITIAL_ANALYSIS_PROFILE);
+    },
     onSuccess: () => {
       const keys = memoryQueryKeys.invalidateAfterMutation(caseId, evidenceId);
       for (const key of keys) {
         void queryClient.invalidateQueries({ queryKey: key });
       }
+      void queryClient.invalidateQueries({ queryKey: ["memory-active-analysis-batch", caseId, evidenceId] });
     },
     onError: (_error: Error & { errorCode?: string }) => {
     },
