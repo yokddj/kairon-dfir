@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { CaseDescription } from "../components/CaseDescription";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type DfirCase, type ResumableUploadSessionRead } from "../api/client";
@@ -322,12 +323,12 @@ export default function CaseDetail() {
       ) : null}
       <section className="rounded-[28px] border border-line bg-panel/60 p-6 shadow-panel">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div>
+          <div className="min-w-0 flex-1">
             <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Case</p>
-            <h2 className="mt-2 text-3xl font-semibold">{caseQuery.data?.name}</h2>
-            <p className="mt-3 max-w-3xl text-sm text-muted">{caseQuery.data?.description}</p>
+            <h2 className="mt-2 break-words text-3xl font-semibold">{caseQuery.data?.name}</h2>
+            <CaseDescription text={caseQuery.data?.description} />
           </div>
-          <div className="grid gap-3 md:grid-cols-6">
+          <div className="grid shrink-0 gap-3 md:grid-cols-6">
             {overviewStats.map(([label, value]) => (
               <div key={String(label)} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
                 <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">{label}</p>
