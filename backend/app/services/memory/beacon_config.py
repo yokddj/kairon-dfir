@@ -107,6 +107,26 @@ def _text(value: Any) -> str:
     return " ".join(str(value or "").split())[:_MAX_TEXT]
 
 
+_REQUIRED_SETTINGS = ("SETTING_PROTOCOL", "SETTING_PORT", "SETTING_SLEEPTIME", "SETTING_PUBKEY")
+_MIN_KNOWN_SETTINGS = 8
+
+
+def plausible(config: Any) -> bool:
+    """Whether a decoded block is a beacon configuration rather than other data around an RSA key.
+
+    Memory holds many RSA keys -- every X.509 certificate a process loaded -- and the parser turns
+    the bytes around one into a few "settings" of unknown types. A beacon's configuration is
+    dozens of settings of known types, always with its protocol, port, sleep time and public key."""
+    settings = config.raw_settings
+    known = [name for name in settings if str(name).startswith("SETTING_")]
+    if len(known) < _MIN_KNOWN_SETTINGS or len(known) < 2 * (len(settings) - len(known)):
+        return False
+    if any(name not in settings for name in _REQUIRED_SETTINGS):
+        return False
+    port, sleeptime = settings.get("SETTING_PORT"), settings.get("SETTING_SLEEPTIME")
+    return isinstance(port, int) and 0 < port < 65536 and isinstance(sleeptime, int) and sleeptime >= 0
+
+
 def describe(config: Any) -> dict[str, Any]:
     """The fields an analyst acts on, from a dissect.cobaltstrike BeaconConfig."""
     settings = config.settings
@@ -179,9 +199,11 @@ def beacon_rows(
         for candidate in _candidate_slices(data):
             try:
                 config = BeaconConfig.from_bytes(candidate)
+                if not plausible(config):
+                    continue
+                text = description(describe(config))
             except Exception:  # noqa: BLE001 - not a configuration, or one too damaged to decode
                 continue
-            text = description(describe(config))
             key = (region["pid"], text)
             if key in seen:
                 continue

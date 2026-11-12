@@ -120,3 +120,37 @@ def test_a_beacon_row_is_a_high_priority_indicator():
     item = result["items"][0]
     flat = str(item)
     assert "'high'" in flat and "c2.example.test" in flat and "Cobalt Strike" in flat
+
+
+def _config_from(settings: list[bytes], xor: int = 0x2E) -> bytes:
+    return bytes(byte ^ xor for byte in (b"".join(settings) + b"\0\0").ljust(0x1000, b"\0"))
+
+
+def test_other_data_around_an_rsa_key_is_not_a_beacon():
+    """An X.509 certificate's key decodes as a handful of unknown settings: never reported."""
+    pubkey = _setting(7, 3, (_RSA_PREFIX + bytes(range(141))).ljust(256, b"\0"))
+    few = _config_from([_setting(1, 1, 8), pubkey, _setting(4144, 3, b"Redmond1" * 4)], xor=0x00)
+    no_port = _config_from([_setting(1, 1, 8), _setting(3, 2, 60000), _setting(5, 1, 25), pubkey, _setting(8, 3, b"c2.example.test,/a".ljust(256, b"\0")),
+                            _setting(9, 3, b"UA".ljust(128, b"\0")), _setting(15, 3, b"p".ljust(128, b"\0")), _setting(30, 3, b"x".ljust(64, b"\0")), _setting(37, 2, 1)])
+    for data in (few, no_port):
+        read = _memory({(100, 0x100000): os.urandom(4000) + data})
+        regions = [{"pid": 100, "process": "powershell.exe", "start": 0x100000, "end": 0x104000}]
+        assert beacon_config.beacon_rows(regions, read) == []
+
+
+def test_one_undecodable_region_does_not_stop_the_search(monkeypatch):
+    good = synthetic_config()
+    read = _memory({(1, 0x100000): good, (2, 0x100000): good})
+    regions = [{"pid": pid, "process": "a.exe", "start": 0x100000, "end": 0x102000} for pid in (1, 2)]
+    calls = {"n": 0}
+    real = beacon_config.describe
+
+    def flaky(config):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ValueError("garbage field")
+        return real(config)
+
+    monkeypatch.setattr(beacon_config, "describe", flaky)
+    rows = beacon_config.beacon_rows(regions, read)
+    assert [row["PID"] for row in rows] == ["2"]
