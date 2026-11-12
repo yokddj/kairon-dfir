@@ -53,7 +53,7 @@ from app.ingest.evidence_classifier import EvidenceCategory, get_evidence_classi
 from app.ingest.browser.normalizer import BrowserAudit, normalize_browser_event
 from app.ingest.browser.sqlite_chromium import parse_chromium_history_sqlite
 from app.ingest.browser.sqlite_firefox import parse_firefox_places_sqlite
-from app.ingest.archive import ArchiveExtractionError, copy_folder, extract_archive, inventory_folder, write_tree_metadata
+from app.ingest.archive import ArchiveExtractionError, archive_truncation, copy_folder, extract_archive, inventory_folder, write_tree_metadata
 from app.ingest.csv_json import list_generic_artifacts
 from app.ingest.bundled_evidence import MAX_DEEP_SCANS_PER_COLLECTION, bundled_evidence, bundled_kind, wants_kernel_scan
 from app.ingest.detector import EVIDENCE_TYPES_WITHOUT_INGEST_SUPPORT, detect_evidence_type
@@ -5689,6 +5689,17 @@ def ingest_evidence(evidence_id: str) -> None:
             "selected_extraction": bool(is_selected_velociraptor),
             "selected_extraction_stats": selective_stats if is_selected_velociraptor else {},
         }
+        truncation = archive_truncation(archive_entries)
+        if truncation:
+            # The archive was cut short (no central directory): only its complete files were recovered.
+            extraction_diagnostics["archive_truncated"] = truncation
+            detection_warnings.append({
+                "artifact": "archive",
+                "warning": (
+                    f"archive_truncated: the archive is incomplete (cut off at {truncation['offset']:,} of {truncation['archive_size']:,} bytes); "
+                    f"{truncation['recovered_files']} complete files were recovered, the rest of the collection is missing."
+                ),
+            })
         metadata["extraction_diagnostics"] = extraction_diagnostics
         provided_platform = str(metadata.get("provided_platform") or evidence.provided_platform or "auto")
         path_detected_platform = detect_evidence_platform(
