@@ -63,13 +63,13 @@ def test_the_child_saves_the_whole_scan(tmp_path, monkeypatch):
     monkeypatch.setattr(memprocfs_inventory, "save_inventory", fake_inventory)
     monkeypatch.setattr(memprocfs_findevil, "_save_timelines", lambda lib, handle, directory, progress=None: saved.append(directory) or Path(directory).mkdir(parents=True))
     args = SimpleNamespace(library=str(tmp_path / "vmm.so"), accept_elastic_license=True)
-    (tmp_path / "KAIRON_RESOLVED_VERSION.txt").write_text("5.19.3\n")
+    (tmp_path / "KAIRON_RESOLVED_VERSION.txt").write_text("version=5.19.3\nbuild=20261107\ntag=v5.19\n")
     watchdog = SimpleNamespace(update=lambda _label: None)
     output = tmp_path / "scan"
     assert memprocfs_findevil._save_scan(None, 0, output, [{"Type": "YR_TROJAN"}], args, watchdog) == 0
     assert saved == [str(tmp_path / "scan.partial" / "forensic")]
     info = json.loads((output / "scan.json").read_text())
-    assert info["yara_rules"] is True and info["memprocfs_version"] == "5.19.3" and info["findevil"] is True and info["findevil_rows"] == 1
+    assert info["yara_rules"] is True and info["memprocfs_version"] == "5.19.3 (build 20261107)" and info["findevil"] is True and info["findevil_rows"] == 1
     assert json.loads((output / "findevil.json").read_text()) == [{"Type": "YR_TROJAN"}]
 
 

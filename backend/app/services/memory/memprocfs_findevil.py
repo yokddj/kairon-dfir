@@ -362,10 +362,15 @@ FORENSIC_DIRNAME = "forensic"
 
 
 def _memprocfs_version(library: str) -> str | None:
+    """``version=5.19.3`` (and ``build=``) from the release notes the image build writes."""
     try:
-        return Path(library).with_name("KAIRON_RESOLVED_VERSION.txt").read_text(encoding="utf-8").strip().splitlines()[0][:64] or None
-    except (OSError, IndexError):
+        text = Path(library).with_name("KAIRON_RESOLVED_VERSION.txt").read_text(encoding="utf-8")
+    except OSError:
         return None
+    fields = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+    version = fields.get("version", "").strip()
+    build = fields.get("build", "").strip()
+    return (f"{version} (build {build})" if build else version)[:64] or None
 
 
 def _save_scan(lib: ctypes.CDLL, handle: int, output: Path, rows: list[dict[str, str]] | None, args, watchdog: "_Watchdog") -> int:
