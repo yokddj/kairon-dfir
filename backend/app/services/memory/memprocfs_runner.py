@@ -198,7 +198,10 @@ def run_findevil(
     timeout_seconds: int,
     max_output_bytes: int,
     cancellation_check: Callable[[], bool] | None = None,
+    scan_dir: Path | None = None,
 ) -> VolatilityRunResult:
+    """FindEvil on the image. With ``scan_dir`` the child saves the evidence's whole scan there
+    (inventory, FindEvil rows, timelines, tables, YARA details) instead of printing the rows."""
     library = memprocfs_library()
     if not library.is_file():
         raise VolatilityRunnerError("MEMPROCFS_UNAVAILABLE", "MemProcFS is not installed in the memory worker.")
@@ -215,8 +218,7 @@ def run_findevil(
         str(evidence_path),
         "--scan-timeout",
         str(scan_timeout),
-        "--timeline-dir",
-        str(Path(work_dir) / TIMELINE_DIRNAME),
+        *(["--scan-dir", str(scan_dir)] if scan_dir is not None else ["--timeline-dir", str(Path(work_dir) / TIMELINE_DIRNAME)]),
     ]
     if get_settings().memprocfs_yara_accept_elastic_license:
         argv.append("--accept-elastic-license")

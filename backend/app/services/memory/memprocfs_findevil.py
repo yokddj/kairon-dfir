@@ -50,6 +50,7 @@ import signal
 import sys
 import threading
 import time
+from pathlib import Path
 
 EXIT_LIBRARY_UNAVAILABLE = 3
 EXIT_IMAGE_NOT_OPENED = 4
@@ -264,7 +265,7 @@ class _Watchdog:
             os._exit(EXIT_FORENSIC_UNAVAILABLE)
 
 
-def _save_timelines(lib: ctypes.CDLL, handle: int, directory: str) -> None:
+def _save_timelines(lib: ctypes.CDLL, handle: int, directory: str, progress=None) -> None:
     """Copy the forensic scan's timeline and inventory CSVs to ``directory``. Best effort: a file
     that cannot be read is left out, and FindEvil is not affected."""
     try:
@@ -277,6 +278,8 @@ def _save_timelines(lib: ctypes.CDLL, handle: int, directory: str) -> None:
     files += [(f"\\forensic\\findevil\\{name}", _MAX_FINDEVIL_TEXT_BYTES) for name in FINDEVIL_TEXT_FILES]
     for vfs_path, limit in files:
         filename = vfs_path.rsplit("\\", 1)[-1]
+        if progress:
+            progress(f"saving {filename}")
         data = _read(lib, handle, vfs_path, limit=limit)
         if not data:
             continue
@@ -352,6 +355,44 @@ def findevil_rows(csv_text: str) -> list[dict[str, str]]:
     return rows
 
 
+FINDEVIL_MISSING_MESSAGE = "MemProcFS produced no FindEvil result for this image (FindEvil needs 64-bit Windows 10 or later)."
+SCAN_FILE = "scan.json"
+FINDEVIL_FILE = "findevil.json"
+FORENSIC_DIRNAME = "forensic"
+
+
+def _memprocfs_version(library: str) -> str | None:
+    try:
+        return Path(library).with_name("KAIRON_RESOLVED_VERSION.txt").read_text(encoding="utf-8").strip().splitlines()[0][:64] or None
+    except (OSError, IndexError):
+        return None
+
+
+def _save_scan(lib: ctypes.CDLL, handle: int, output: Path, rows: list[dict[str, str]] | None, args, watchdog: "_Watchdog") -> int:
+    from app.services.memory.memprocfs_inventory import EXIT_WRITE_FAILED, save_inventory
+
+    started = time.time()
+
+    def extra(partial: Path) -> None:
+        _save_timelines(lib, handle, str(partial / FORENSIC_DIRNAME), progress=watchdog.update)
+        if rows is not None:
+            (partial / FINDEVIL_FILE).write_text(json.dumps(rows), encoding="utf-8")
+        (partial / SCAN_FILE).write_text(json.dumps({
+            "scanned_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "memprocfs_version": _memprocfs_version(args.library),
+            "yara_rules": bool(args.accept_elastic_license),
+            "findevil": rows is not None,
+            "findevil_rows": len(rows) if rows is not None else 0,
+            "save_seconds": round(time.time() - started, 1),
+        }), encoding="utf-8")
+
+    try:
+        return save_inventory(lib, handle, output, extra=extra, progress=watchdog.update)
+    except OSError as exc:
+        print(f"Writing the MemProcFS scan failed: {exc.strerror or exc}", file=sys.stderr)
+        return EXIT_WRITE_FAILED
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--library", required=True)
@@ -359,6 +400,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scan-timeout", type=int, default=1500)
     parser.add_argument("--stall-timeout", type=int, default=_DEFAULT_STALL_SECONDS)
     parser.add_argument("--timeline-dir", default=None)
+    parser.add_argument("--scan-dir", default=None)
     # Opt-in, off by default (see Settings.memprocfs_yara_accept_elastic_license): MemProcFS
     # disables its built-in YARA rules (Elastic Security's protections-artifacts, used by
     # FindEvil's YR_* indicators) unless told the operator accepts the Elastic License 2.0 that
@@ -399,17 +441,27 @@ def main(argv: list[str] | None = None) -> int:
             watchdog.check()
             time.sleep(2)
         if args.timeline_dir:
-            _save_timelines(lib, handle, args.timeline_dir)
+            _save_timelines(lib, handle, args.timeline_dir, progress=watchdog.update)
         data = _read(lib, handle, "\\forensic\\csv\\findevil.csv", limit=_MAX_CSV_BYTES)
-        if data is None:
-            print("MemProcFS produced no FindEvil result for this image (FindEvil needs 64-bit Windows 10 or later).", file=sys.stderr)
+        rows: list[dict[str, str]] | None = None
+        if data is not None:
+            rows = findevil_rows(data.decode("utf-8", "replace"))
+            yara_text = _read(lib, handle, "\\forensic\\findevil\\yara.txt", limit=_MAX_FINDEVIL_TEXT_BYTES)
+            if yara_text:
+                rows = with_yara_threats(rows, yara_text.decode("utf-8", "replace"))
+            rows = _with_beacons(lib, handle, rows, watchdog)
+        if args.scan_dir:
+            # The evidence's one MemProcFS scan: inventory, FindEvil, timelines, tables and YARA
+            # details, saved for every later analysis (app.services.memory.memprocfs_engine). An
+            # image FindEvil does not cover (before Windows 10) still gets its inventory.
+            code = _save_scan(lib, handle, Path(args.scan_dir), rows, args, watchdog)
+            watchdog.finished(code)
+            return code
+        if rows is None:
+            print(FINDEVIL_MISSING_MESSAGE, file=sys.stderr)
             watchdog.finished(EXIT_FINDEVIL_MISSING)
             return EXIT_FINDEVIL_MISSING
-        rows = findevil_rows(data.decode("utf-8", "replace"))
-        yara_text = _read(lib, handle, "\\forensic\\findevil\\yara.txt", limit=_MAX_FINDEVIL_TEXT_BYTES)
-        if yara_text:
-            rows = with_yara_threats(rows, yara_text.decode("utf-8", "replace"))
-        json.dump(_with_beacons(lib, handle, rows, watchdog), sys.stdout)
+        json.dump(rows, sys.stdout)
         sys.stdout.flush()
         watchdog.finished(0)
         return 0

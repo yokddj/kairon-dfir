@@ -129,6 +129,14 @@ def active_find_evil_run(db: Session, case_id: str, evidence_id: str) -> tuple[d
     run = resolved.get("active_run") if isinstance(resolved, dict) else None
     if not isinstance(run, dict) or not run.get("id"):
         return None, None
+    from app.models.evidence import Evidence
+    from app.services.memory.memprocfs_scan import scan_directory
+
+    evidence = db.get(Evidence, evidence_id)
+    scan = scan_directory(evidence) if evidence is not None else None
+    if scan is not None and (scan / "forensic").is_dir():
+        # The evidence's one saved scan, which every Find Evil run now reads.
+        return run, scan / "forensic"
     model = db.get(MemoryScanRun, run["id"])
     return run, _run_directory(model.output_dir if model else None)
 

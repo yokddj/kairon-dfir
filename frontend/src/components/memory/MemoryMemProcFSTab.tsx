@@ -1,6 +1,7 @@
 import { Fragment, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
+import { MemoryMemProcFSScanPanel } from "./MemoryMemProcFSScanPanel";
 import { MemoryPaginationControls } from "./MemoryPaginationControls";
 
 type Props = {
@@ -33,6 +34,8 @@ export function MemoryMemProcFSTab({ caseId, evidenceId }: Props) {
         Inventories MemProcFS's forensic scan reads from this image, beyond what Volatility's tabs list. They come from the same scan Find Evil runs.
         Scheduled tasks and services also appear in the case's Persistence view.
       </p>
+
+      <MemoryMemProcFSScanPanel caseId={caseId} evidenceId={evidenceId} />
 
       {query.isLoading ? <p className="mt-3 text-xs text-muted">Loading…</p> : null}
       {query.error instanceof Error ? <p className="mt-3 text-xs text-rose-200">{query.error.message}</p> : null}

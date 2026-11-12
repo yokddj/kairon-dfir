@@ -7,7 +7,7 @@ import { MemoryMemProcFSTab } from "./MemoryMemProcFSTab";
 const getMemoryMemProcFSTableMock = vi.fn();
 
 vi.mock("../../api/client", () => ({
-  api: { getMemoryMemProcFSTable: (...args: unknown[]) => getMemoryMemProcFSTableMock(...args) },
+  api: { getMemoryMemProcFSTable: (...args: unknown[]) => getMemoryMemProcFSTableMock(...args), getMemProcFSScan: async () => ({ exists: false, files: [], notices: [] }) },
 }));
 
 const TABLES = [

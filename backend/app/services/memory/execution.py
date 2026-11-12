@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.database import SessionLocal, utc_now, utc_now_naive
 from app.core.config import get_settings
@@ -65,7 +66,7 @@ from app.services.memory.volatility_runner import VolatilityRunResult, Volatilit
 from app.services.memory.kairon_findevil import KAIRON_FINDEVIL_PLUGIN, run_kairon_findevil
 from app.services.memory.kairon_psreadline import KAIRON_PSREADLINE_PLUGIN, run_kairon_psreadline
 from app.services.memory.kairon_linux_findevil import KAIRON_LINUX_FINDEVIL_PLUGIN, run_kairon_linux_findevil
-from app.services.memory.memprocfs_runner import CONSOLE_PLUGIN as MEMPROCFS_CONSOLE_PLUGIN, INVENTORY_PLUGINS as MEMPROCFS_INVENTORY_PLUGINS, MEMPROCFS_PLUGINS, NETWORK_PLUGIN as MEMPROCFS_NETWORK_PLUGIN, PROCESSES_PLUGIN as MEMPROCFS_PROCESSES_PLUGIN, TIMELINE_DIRNAME as MEMPROCFS_TIMELINE_DIRNAME, memprocfs_available, run_console as run_memprocfs_console, run_findevil, run_inventory as run_memprocfs_inventory
+from app.services.memory.memprocfs_runner import CONSOLE_PLUGIN as MEMPROCFS_CONSOLE_PLUGIN, FINDEVIL_PLUGIN as MEMPROCFS_FINDEVIL_PLUGIN, INVENTORY_PLUGINS as MEMPROCFS_INVENTORY_PLUGINS, MEMPROCFS_PLUGINS, NETWORK_PLUGIN as MEMPROCFS_NETWORK_PLUGIN, PROCESSES_PLUGIN as MEMPROCFS_PROCESSES_PLUGIN, TIMELINE_DIRNAME as MEMPROCFS_TIMELINE_DIRNAME, memprocfs_available, run_console as run_memprocfs_console, run_findevil, run_inventory as run_memprocfs_inventory
 from app.services.memory.memprocfs_timeline import index_memprocfs_timeline
 from app.services.memory import volatility_runner
 from app.services.memory.symbol_control import record_symbol_requirement
@@ -940,6 +941,10 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     indexing["artifacts"] = artifact_indexing
                 if (output_dir / MEMPROCFS_TIMELINE_DIRNAME).is_dir():
                     indexing["memprocfs_timeline"] = _index_memprocfs_timeline(db, run, output_dir / MEMPROCFS_TIMELINE_DIRNAME)
+                elif any(item.plugin == MEMPROCFS_FINDEVIL_PLUGIN and item.status == "completed" for item in run.plugin_runs):
+                    scan_timeline = _index_scan_timeline(db, run)
+                    if scan_timeline is not None:
+                        indexing["memprocfs_timeline"] = scan_timeline
                 _recount_plugin_states(run)
                 skipped_count = sum(1 for item in run.plugin_runs if str(item.status or "").startswith("skipped_"))
                 run.status = "completed" if run.plugins_failed == 0 and skipped_count == 0 else "completed_with_errors"
@@ -1188,6 +1193,54 @@ def _resolve_raw_output_path(relative_path: str | None) -> Path | None:
     return candidates[0] if candidates else None
 
 
+def _take_memprocfs_rescan(db: Session, run: MemoryScanRun) -> bool:
+    """Whether this run asked for a new MemProcFS scan and has not made it yet (only once a run)."""
+    metadata = dict(run.metadata_json or {})
+    if not metadata.get("memprocfs_rescan") or metadata.get("memprocfs_rescan_done"):
+        return False
+    run.metadata_json = {**metadata, "memprocfs_rescan_done": True}
+    db.commit()
+    return True
+
+
+def _record_memprocfs_scan(db: Session, run: MemoryScanRun, directory: Path) -> None:
+    """Keep where and how the evidence's MemProcFS scan was made on the evidence (the page reads it)."""
+    info = memprocfs_engine.scan_info(directory)
+    evidence = db.get(Evidence, run.evidence_id)
+    if evidence is None:
+        return
+    metadata = dict(evidence.metadata_json or {})
+    current = dict(metadata.get("memprocfs_scan") or {})
+    recorded = {**(info or {"legacy_inventory": True}), "path": relative_to_data_dir(directory)}
+    if current.get("timeline_indexed_for") and current.get("scanned_at") == recorded.get("scanned_at"):
+        recorded["timeline_indexed_for"] = current["timeline_indexed_for"]
+    if recorded == current:
+        return
+    metadata["memprocfs_scan"] = recorded
+    evidence.metadata_json = metadata
+    flag_modified(evidence, "metadata_json")
+    db.commit()
+
+
+def _index_scan_timeline(db: Session, run: MemoryScanRun) -> dict[str, Any] | None:
+    """Index the evidence's saved MemProcFS timelines once per scan."""
+    evidence = db.get(Evidence, run.evidence_id)
+    scan = dict(((evidence.metadata_json or {}) if evidence else {}).get("memprocfs_scan") or {})
+    directory = memprocfs_engine.forensic_dir(memprocfs_engine.inventory_dir(run.case_id, run.evidence_id))
+    if not scan.get("scanned_at") or not directory.is_dir():
+        return None
+    if scan.get("timeline_indexed_for") == scan["scanned_at"]:
+        return {"indexed": 0, "skipped": "already indexed for this scan"}
+    report = _index_memprocfs_timeline(db, run, directory)
+    if not report.get("error") and evidence is not None:
+        metadata = dict(evidence.metadata_json or {})
+        metadata["memprocfs_scan"] = {**scan, "timeline_indexed_for": scan["scanned_at"]}
+        evidence.metadata_json = metadata
+        flag_modified(evidence, "metadata_json")
+        db.commit()
+    return report
+
+
 def _index_memprocfs_timeline(db: Session, run: MemoryScanRun, directory: Path) -> dict[str, Any]:
     """Index the timelines MemProcFS's forensic scan saved next to FindEvil, with their detections.
     Saved even when FindEvil itself had nothing to report; a failure here never affects the run's
@@ -1367,16 +1420,26 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
             max_output_bytes=max_output_bytes,
             cancellation_check=cancellation_requested,
         )
-    elif plugin in memprocfs_engine.INVENTORY_PLUGINS:
-        # Read from the evidence's saved MemProcFS inventory, scanned on first use.
+    elif plugin in memprocfs_engine.INVENTORY_PLUGINS or plugin == MEMPROCFS_FINDEVIL_PLUGIN:
+        # Read from the evidence's one saved MemProcFS scan, made on first use or when the
+        # analyst asked for a new one (app.services.memory.memprocfs_engine).
         started = time.monotonic()
-        directory = memprocfs_engine.ensure_inventory(
+        force = _take_memprocfs_rescan(db, run)
+        ensure = memprocfs_engine.ensure_scan if plugin == MEMPROCFS_FINDEVIL_PLUGIN else memprocfs_engine.ensure_inventory
+        directory = ensure(
             run.case_id, run.evidence_id, Path(evidence_path), output_dir,
-            timeout_seconds=timeout_seconds, cancellation_check=cancellation_requested,
+            timeout_seconds=timeout_seconds, cancellation_check=cancellation_requested, force=force,
         )
-        rows = memprocfs_engine.rows(plugin, directory)
+        _record_memprocfs_scan(db, run, directory)
+        if plugin == MEMPROCFS_FINDEVIL_PLUGIN:
+            rows = memprocfs_engine.findevil_rows(directory)
+            if rows is None:
+                raise VolatilityRunnerError("PLUGIN_UNSUPPORTED_WINDOWS_BUILD", "FindEvil does not support this Windows version (it needs 64-bit Windows 10 or later).")
+        else:
+            rows = memprocfs_engine.rows(plugin, directory)
+        info = memprocfs_engine.scan_info(directory) or {}
         result = VolatilityRunResult(
-            argv_display=["memprocfs", "-device", "[evidence]", "-forensic", "1", "-disable-symbolserver", plugin.split(".", 1)[1]],
+            argv_display=["memprocfs", "-device", "[evidence]", "-forensic", "1", "-disable-symbolserver", plugin.split(".", 1)[1], f"(scan of {info.get('scanned_at') or 'an earlier run'})"],
             stdout=json.dumps(rows, default=str).encode("utf-8"),
             stderr=b"",
             duration_ms=int((time.monotonic() - started) * 1000),
