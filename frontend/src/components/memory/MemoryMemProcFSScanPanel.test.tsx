@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemProcFSScanStatus } from "../../api/client";
-import { MemoryMemProcFSScanPanel } from "./MemoryMemProcFSScanPanel";
+import { MEMPROCFS_RESCAN_EVENT, MemoryMemProcFSScanPanel } from "./MemoryMemProcFSScanPanel";
 
 const getScan = vi.fn();
 const rescan = vi.fn();
@@ -72,14 +72,18 @@ describe("MemoryMemProcFSScanPanel", () => {
     expect(container.querySelector("[data-testid='memory-memprocfs-scan']")).toBeNull();
   });
 
-  it("warns when the YARA rules were enabled after the scan, and only rescans on request", async () => {
+  it("warns when the YARA rules were enabled after the scan and opens the catalogue to rescan", async () => {
     getScan.mockResolvedValue({ ...scan, notices: ["yara_rules_missing"] });
+    const heard: unknown[] = [];
+    const listener = (event: Event) => heard.push((event as CustomEvent).detail);
+    window.addEventListener(MEMPROCFS_RESCAN_EVENT, listener);
     renderPanel();
-    expect(await screen.findByTestId("memory-memprocfs-scan-notice")).toHaveTextContent("run a new MemProcFS scan");
+    expect(await screen.findByTestId("memory-memprocfs-scan-notice")).toHaveTextContent("made without MemProcFS's YARA rules");
+    expect(screen.queryByTestId("memory-memprocfs-rescan")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("memory-memprocfs-rescan-link"));
+    window.removeEventListener(MEMPROCFS_RESCAN_EVENT, listener);
+    expect(heard).toEqual([{ evidenceId: "ev-1" }]);
     expect(rescan).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("memory-memprocfs-rescan"));
-    await waitFor(() => expect(rescan).toHaveBeenCalledWith("case-1", "ev-1"));
-    expect(await screen.findByText("New scan queued")).toBeInTheDocument();
   });
 
   it("lists the files, downloads them and opens a CSV as a full table", async () => {

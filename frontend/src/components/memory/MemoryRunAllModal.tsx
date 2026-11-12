@@ -20,6 +20,8 @@ type Props = {
   canRun: boolean;
   onClose: () => void;
   onCompleted: () => void;
+  /** The batch's first MemProcFS analysis scans the image again (the catalogue's option). */
+  memprocfsRescan?: boolean;
 };
 
 const MODE_MISSING = "missing_or_failed" as const;
@@ -56,6 +58,7 @@ export function MemoryRunAllModal({
   canRun,
   onClose,
   onCompleted,
+  memprocfsRescan = false,
 }: Props) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<MemoryRunAllMode>(MODE_MISSING);
@@ -78,6 +81,7 @@ export function MemoryRunAllModal({
         mode,
         authorization_acknowledged: true,
         continue_on_failure: true,
+        ...(memprocfsRescan ? { memprocfs_rescan: true } : {}),
       }),
     onSuccess: (batch) => {
       setStarted(true);

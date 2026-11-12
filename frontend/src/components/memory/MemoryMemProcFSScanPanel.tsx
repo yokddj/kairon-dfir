@@ -2,7 +2,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api/client";
-import { memoryQueryKeys } from "../../lib/memoryQueryKeys";
+
+/** The memory evidence page opens its analysis catalogue with "Scan the image again" ticked. */
+export const MEMPROCFS_RESCAN_EVENT = "kairon:memprocfs-rescan";
+
+export function requestMemProcFSRescan(evidenceId: string) {
+  window.dispatchEvent(new CustomEvent(MEMPROCFS_RESCAN_EVENT, { detail: { evidenceId } }));
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -24,27 +30,18 @@ function saveBlob(blob: Blob, filename: string) {
 
 /**
  * The evidence's one saved MemProcFS scan: when and how it was made, its files (download each or
- * all, open a CSV as a full Source Table) and a new scan on request. Every Windows analysis reads
- * this scan instead of scanning the image again.
+ * all, open a CSV as a full Source Table). Every Windows analysis reads this scan instead of
+ * scanning the image again; a new one is asked for from the analysis catalogue ("Re-run analysis").
  */
 export function MemoryMemProcFSScanPanel({ caseId, evidenceId }: { caseId: string; evidenceId: string }) {
   const queryClient = useQueryClient();
   const [showFiles, setShowFiles] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [queued, setQueued] = useState(false);
   const scanQuery = useQuery({ queryKey: ["memprocfs-scan", caseId, evidenceId], queryFn: () => api.getMemProcFSScan(caseId, evidenceId), refetchOnWindowFocus: false });
   const tablesQuery = useQuery({ queryKey: ["source-tables", caseId, evidenceId], queryFn: () => api.listSourceTables(caseId, evidenceId), enabled: showFiles });
   const requestTable = useMutation({
     mutationFn: (sourcePath: string) => api.requestSourceTables(caseId, evidenceId, [sourcePath]),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["source-tables", caseId] }),
-    onError: (err: Error) => setError(err.message),
-  });
-  const rescan = useMutation({
-    mutationFn: () => api.rescanMemProcFS(caseId, evidenceId),
-    onSuccess: () => {
-      setQueued(true);
-      for (const key of memoryQueryKeys.invalidateAfterMutation(caseId, evidenceId)) void queryClient.invalidateQueries({ queryKey: key });
-    },
     onError: (err: Error) => setError(err.message),
   });
   const scan = scanQuery.data;
@@ -76,17 +73,17 @@ export function MemoryMemProcFSScanPanel({ caseId, evidenceId }: { caseId: strin
           <button type="button" onClick={() => void download(null)} className="rounded-xl border border-line px-3 py-1 text-muted hover:text-ink" data-testid="memory-memprocfs-scan-download-all">
             Download all (ZIP)
           </button>
-          <button type="button" disabled={rescan.isPending || queued} onClick={() => rescan.mutate()} className="rounded-xl border border-line px-3 py-1 text-muted hover:text-ink disabled:opacity-50" data-testid="memory-memprocfs-rescan">
-            {queued ? "New scan queued" : "New MemProcFS scan"}
-          </button>
         </div>
       </div>
       {scan.notices.includes("yara_rules_missing") ? (
         <p className="mt-2 text-amber" role="status" data-testid="memory-memprocfs-scan-notice">
-          This scan was made without MemProcFS's YARA rules, which are now enabled: run a new MemProcFS scan to include their matches.
+          This scan was made without MemProcFS's YARA rules, which are now enabled.{" "}
+          <button type="button" onClick={() => requestMemProcFSRescan(evidenceId)} className="underline hover:text-ink" data-testid="memory-memprocfs-rescan-link">
+            Re-run the analyses with a new scan
+          </button>{" "}
+          to include their matches.
         </p>
       ) : null}
-      {queued ? <p className="mt-2 text-muted">Find Evil runs with a new scan; the other analyses read it when they run again.</p> : null}
       {error ? <p className="mt-2 text-rose-200" role="alert">{error}</p> : null}
       {showFiles ? (
         <ul className="mt-3 max-h-96 divide-y divide-line overflow-auto rounded-xl border border-line" data-testid="memory-memprocfs-scan-files">

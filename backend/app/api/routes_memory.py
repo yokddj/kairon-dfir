@@ -1200,6 +1200,7 @@ def post_run_all_batch(
             authorization_acknowledged=True,
             continue_on_failure=continue_on_failure,
             enqueue_fn=enqueue_memory_metadata_scan,
+            memprocfs_rescan=bool(payload.get("memprocfs_rescan", False)),
         )
     except MemoryBatchError as exc:
         _detail: dict[str, object] = {"error_code": exc.code, "message": exc.message}

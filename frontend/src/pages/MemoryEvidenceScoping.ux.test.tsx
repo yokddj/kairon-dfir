@@ -609,7 +609,7 @@ describe("Memory evidence scoping v1", () => {
       window.confirm = vi.fn().mockReturnValue(true);
       fireEvent.click(runBtn);
       await waitFor(() => {
-        expect(startMemoryScanMock).toHaveBeenCalledWith("case-1", "ev-A", "suspicious_memory", undefined);
+        expect(startMemoryScanMock).toHaveBeenCalledWith("case-1", "ev-A", "suspicious_memory", undefined, false);
       });
     } else {
       // The default view (first analysis) intentionally hides

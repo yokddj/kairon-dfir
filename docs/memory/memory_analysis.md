@@ -134,8 +134,11 @@ YARA details), the timelines, the tables of the MemProcFS tab and the event logs
 later analysis of that image -- Find Evil included -- reads the saved scan instead of scanning
 again. The MemProcFS tab says when and how it was made (MemProcFS version, whether the YARA rules
 were on), lists its files to download one by one or all as a ZIP, opens any of its CSVs as a full
-**Source table**, and offers **New MemProcFS scan** when a fresh one is wanted. If the YARA rules
-were enabled after the scan, the tab says so; the scan is never repeated on its own. An inventory
+**Source table**. A fresh scan is asked for in the analysis catalogue (**Re-run analysis**): its
+option *Scan the image again with MemProcFS* (unticked by default) makes the first MemProcFS
+analysis started there scan the image again, and the ones after it read the new scan. If the YARA
+rules were enabled after the scan, the MemProcFS tab says so and opens that catalogue with the
+option ticked; the scan is never repeated on its own. An inventory
 saved by an older version still serves the analyses that read it; Find Evil makes the full scan
 once.
 

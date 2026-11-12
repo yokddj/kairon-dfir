@@ -166,3 +166,27 @@ def test_the_timeline_is_indexed_once_per_scan(tmp_path, monkeypatch):
     evidence.metadata_json["memprocfs_scan"]["scanned_at"] = "T2"
     assert execution._index_scan_timeline(_Db(), run) == {"indexed": 3}
     assert indexed == [scan / "forensic", scan / "forensic"]
+
+
+def test_a_rescan_batch_asks_only_its_first_memprocfs_run_for_a_new_scan(monkeypatch):
+    from app.services.memory import batch as batch_mod
+
+    created = []
+
+    def create(_db, _evidence_id, profile):
+        run = SimpleNamespace(id=f"run-{profile}", profile=profile, backend="volatility3" if profile == "files_basic" else "memprocfs", metadata_json={})
+        created.append(run)
+        return run
+
+    monkeypatch.setattr(batch_mod, "create_memory_metadata_run", create)
+    monkeypatch.setattr(batch_mod, "mark_run_queued", lambda _db, _run_id, _task: None)
+    db = SimpleNamespace(flush=lambda: None)
+    batch = SimpleNamespace(id="b", evidence_id="e", requested_profiles=["files_basic", "metadata_only", "find_evil"], audit_metadata_json={"memprocfs_rescan": True})
+    for position, profile in enumerate(batch.requested_profiles, start=1):
+        batch_mod._enqueue_profile(db, batch=batch, profile=profile, position=position, enqueue_fn=lambda _run_id: "task")
+    assert [run.metadata_json.get("memprocfs_rescan") for run in created] == [None, True, None]
+    assert batch.audit_metadata_json["memprocfs_rescan_assigned"] == "run-metadata_only"
+
+    plain = SimpleNamespace(id="b2", evidence_id="e", requested_profiles=["metadata_only"], audit_metadata_json={})
+    batch_mod._enqueue_profile(db, batch=plain, profile="metadata_only", position=1, enqueue_fn=lambda _run_id: "task")
+    assert created[-1].metadata_json == {}
