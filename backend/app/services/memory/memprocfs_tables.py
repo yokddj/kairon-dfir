@@ -61,7 +61,8 @@ TABLES: tuple[Table, ...] = (
     Table("amcache_devices_pnp", "amcache_devices_pnp.csv", "Amcache PnP devices", "System", "Plug and Play devices with their driver.",
           (("Description", "Device"), ("Class", "Class"), ("Manufacturer", "Manufacturer"), ("DriverName", "Driver"), ("Service", "Service"), ("Enumerator", "Bus"), ("KeyLastWrite", "Key written"))),
     Table("yara", "yara.csv", "YARA matches", "Detection", "Matches of MemProcFS's built-in YARA rules in process and kernel memory.",
-          (("Description", "Rule"), ("ProcessName", "Process"), ("PID", "PID"), ("MemoryTag", "Memory"), ("String0", "Match"), ("CommandLine", "Command line"))),
+          # Rule, Threat, Severity, Location and Strings come from yara.txt (app.services.memory.memprocfs_yara).
+          (("Rule", "Rule"), ("Threat", "Threat"), ("Severity", "Severity"), ("Location", "Where"), ("MemoryType", "Memory"), ("Strings", "Matched strings"), ("CommandLine", "Command line"))),
 )
 TABLES_BY_KEY = {table.key: table for table in TABLES}
 PAGE_SIZE_MAX = 200
@@ -96,6 +97,10 @@ def table_rows(directory: Path, table: Table) -> tuple[list[dict[str, str]], int
     if table.key == "netdns":
         kept = [row for row in rows if readable_dns_row(row)]
         return kept, len(rows) - len(kept)
+    if table.key == "yara":
+        from app.services.memory.memprocfs_yara import enrich
+
+        return enrich(list(rows), directory), 0
     return list(rows), 0
 
 
@@ -129,7 +134,7 @@ def active_find_evil_run(db: Session, case_id: str, evidence_id: str) -> tuple[d
 
 
 def _matches(row: dict[str, str], query: str) -> bool:
-    return not query or any(query in value.lower() for value in row.values())
+    return not query or any(query in str(value).lower() for value in row.values())
 
 
 def memprocfs_table(db: Session, *, case_id: str, evidence_id: str, table: str, q: str | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:

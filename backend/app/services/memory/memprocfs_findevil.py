@@ -45,6 +45,7 @@ import ctypes
 import io
 import json
 import os
+import re
 import signal
 import sys
 import threading
@@ -76,6 +77,11 @@ TABLE_FILES = (
     "amcache_driver_packages", "amcache_device_containers", "amcache_devices_pnp",
 )
 _MAX_TABLE_BYTES = 64 * 1024 * 1024
+# The details of each built-in YARA match (rule name, metadata, matched strings with a hexdump),
+# which yara.csv lacks, and the source of every rule that matched
+# (app.services.memory.memprocfs_yara joins them to yara.csv's rows).
+FINDEVIL_TEXT_FILES = ("yara.txt", "yara_rules.txt")
+_MAX_FINDEVIL_TEXT_BYTES = 32 * 1024 * 1024
 # The event logs MemProcFS rebuilt from the memory-mapped .evtx files it found (MemProcFS 5.18+).
 EVTX_VFS_DIR = "\\sys\\eventlog\\eventlog_repaired"
 EVTX_SUBDIR = "evtx"
@@ -266,9 +272,12 @@ def _save_timelines(lib: ctypes.CDLL, handle: int, directory: str) -> None:
     except OSError as exc:
         print(f"MemProcFS timelines not saved: {exc}", file=sys.stderr)
         return
-    files = [(f"timeline_{name}.csv", _MAX_TIMELINE_BYTES) for name in TIMELINE_FILES] + [(f"{name}.csv", _MAX_TABLE_BYTES) for name in TABLE_FILES]
-    for filename, limit in files:
-        data = _read(lib, handle, f"\\forensic\\csv\\{filename}", limit=limit)
+    files = [(f"\\forensic\\csv\\timeline_{name}.csv", _MAX_TIMELINE_BYTES) for name in TIMELINE_FILES]
+    files += [(f"\\forensic\\csv\\{name}.csv", _MAX_TABLE_BYTES) for name in TABLE_FILES]
+    files += [(f"\\forensic\\findevil\\{name}", _MAX_FINDEVIL_TEXT_BYTES) for name in FINDEVIL_TEXT_FILES]
+    for vfs_path, limit in files:
+        filename = vfs_path.rsplit("\\", 1)[-1]
+        data = _read(lib, handle, vfs_path, limit=limit)
         if not data:
             continue
         try:
@@ -291,6 +300,27 @@ def _process_reader(lib: ctypes.CDLL, handle: int):
             return None
         return buffer.raw
     return read
+
+
+_YARA_INDEX = re.compile(r"\[(\d+)\]\s*$")
+
+
+def with_yara_threats(rows: list[dict[str, str]], yara_text: str) -> list[dict[str, str]]:
+    """FindEvil's YR_* rows say only "<rule> [<match index>]": add the threat and severity the
+    rule's metadata names (from \\forensic\\findevil\\yara.txt, app.services.memory.memprocfs_yara)."""
+    from app.services.memory.memprocfs_yara import parse_records
+
+    records = parse_records(yara_text)
+    if not records:
+        return rows
+    out = []
+    for row in rows:
+        match = _YARA_INDEX.search(row.get("Description") or "") if (row.get("Type") or "").startswith("YR_") else None
+        meta = (records.get(match.group(1)) or {}).get("meta", {}) if match else {}
+        extra = [f"threat {meta['threat_name']}"] if meta.get("threat_name") else []
+        extra += [f"severity {meta['severity']}"] if meta.get("severity") else []
+        out.append({**row, "Description": f"{row['Description']} -- {', '.join(extra)}"} if extra else row)
+    return out
 
 
 def _with_beacons(lib: ctypes.CDLL, handle: int, rows: list[dict[str, str]], watchdog: "_Watchdog") -> list[dict[str, str]]:
@@ -375,7 +405,11 @@ def main(argv: list[str] | None = None) -> int:
             print("MemProcFS produced no FindEvil result for this image (FindEvil needs 64-bit Windows 10 or later).", file=sys.stderr)
             watchdog.finished(EXIT_FINDEVIL_MISSING)
             return EXIT_FINDEVIL_MISSING
-        json.dump(_with_beacons(lib, handle, findevil_rows(data.decode("utf-8", "replace")), watchdog), sys.stdout)
+        rows = findevil_rows(data.decode("utf-8", "replace"))
+        yara_text = _read(lib, handle, "\\forensic\\findevil\\yara.txt", limit=_MAX_FINDEVIL_TEXT_BYTES)
+        if yara_text:
+            rows = with_yara_threats(rows, yara_text.decode("utf-8", "replace"))
+        json.dump(_with_beacons(lib, handle, rows, watchdog), sys.stdout)
         sys.stdout.flush()
         watchdog.finished(0)
         return 0
