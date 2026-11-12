@@ -34,6 +34,8 @@ const getMemoryActiveResultMock = vi.fn();
 const getMemoryAnalysisCatalogueMock = vi.fn();
 const previewMemoryRunAllMock = vi.fn();
 const startMemoryRunAllMock = vi.fn();
+// Not mocked by most tests (the page then knows no platform), as before this mock existed.
+const getMemoryEvidencePreparationMock = vi.fn(() => Promise.reject(new Error("not mocked")));
 const getActiveMemoryAnalysisBatchMock = vi.fn();
 const getMemoryAnalysisBatchMock = vi.fn();
 const cancelMemoryAnalysisBatchMock = vi.fn();
@@ -142,6 +144,7 @@ vi.mock("../api/client", () => ({
     getMemoryAnalysisCatalogue: (...args: unknown[]) => getMemoryAnalysisCatalogueMock(...args),
     previewMemoryRunAll: (...args: unknown[]) => previewMemoryRunAllMock(...args),
     startMemoryRunAll: (...args: unknown[]) => startMemoryRunAllMock(...args),
+    getMemoryEvidencePreparation: () => getMemoryEvidencePreparationMock(),
     getActiveMemoryAnalysisBatch: (...args: unknown[]) => getActiveMemoryAnalysisBatchMock(...args),
     getMemoryAnalysisBatch: (...args: unknown[]) => getMemoryAnalysisBatchMock(...args),
     cancelMemoryAnalysisBatch: (...args: unknown[]) => cancelMemoryAnalysisBatchMock(...args),
@@ -545,6 +548,33 @@ describe("Memory overview, profile catalogue and run-all", () => {
       });
     } finally {
       window.confirm = originalConfirm;
+    }
+  });
+
+  it("first analysis on a Windows image runs every analysis at once", async () => {
+    const originalConfirm = window.confirm;
+    window.confirm = vi.fn(() => true);
+    getMemoryEvidencePreparationMock.mockImplementation(() => Promise.resolve({ platform: "windows" }) as never);
+    try {
+      getMemoryAnalysisCatalogueMock.mockImplementation(async () => ({
+        case_id: "case-1",
+        evidence_id: "ev-A",
+        items: [
+          { profile: "processes_basic", family: "processes", title: "Standard process analysis", description: "", cost_label: "Medium", est_duration_seconds: 90, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+          { profile: "network_basic", family: "network", title: "Network connections", description: "", cost_label: "Medium", est_duration_seconds: 90, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        ],
+      }));
+      renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
+      const btn = await screen.findByTestId("memory-analyze-direct");
+      await waitFor(() => expect(getMemoryEvidencePreparationMock).toHaveBeenCalled());
+      fireEvent.click(btn);
+      await waitFor(() => {
+        expect(startMemoryRunAllMock).toHaveBeenCalledWith("case-1", "ev-A", { mode: "missing_or_failed", authorization_acknowledged: true, continue_on_failure: true });
+      });
+      expect(startMemoryScanMock).not.toHaveBeenCalled();
+    } finally {
+      window.confirm = originalConfirm;
+      getMemoryEvidencePreparationMock.mockImplementation(() => Promise.reject(new Error("not mocked")));
     }
   });
 

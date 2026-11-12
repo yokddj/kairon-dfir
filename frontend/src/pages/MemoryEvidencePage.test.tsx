@@ -45,7 +45,10 @@ describe("MemoryEvidencePage first-analysis profile", () => {
     const source = pageSource();
     const mutationStart = source.indexOf("const startScanMutation = useMutation(");
     expect(mutationStart, "startScanMutation not found -- has it been renamed?").toBeGreaterThan(-1);
-    const mutationBlock = source.slice(mutationStart, mutationStart + 600);
+    const mutationBlock = source.slice(mutationStart, mutationStart + 1500);
     expect(mutationBlock.includes("api.startMemoryScan(caseId, evidenceId, INITIAL_ANALYSIS_PROFILE)")).toBe(true);
+    // Windows runs every analysis at once instead.
+    expect(mutationBlock.includes('evidencePlatform === "windows"')).toBe(true);
+    expect(mutationBlock.includes("api.startMemoryRunAll(caseId, evidenceId,")).toBe(true);
   });
 });
