@@ -8,6 +8,7 @@ exit codes to the error codes the memory pipeline already reports.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -396,49 +397,49 @@ def run_inventory(
     )
 
 
-CRASHDUMP_STEP = "memprocfs.crashdump"
-_CRASHDUMP_EXIT_CODES = {
+DTB_STEP = "memprocfs.dtb"
+_DTB_EXIT_CODES = {
     3: ("MEMPROCFS_UNAVAILABLE", "MemProcFS is not installed in the memory worker."),
     4: ("UNSUPPORTED_MEMORY_IMAGE", "MemProcFS could not open this memory image either."),
-    5: ("MEMPROCFS_NO_CRASH_DUMP", "MemProcFS has no crash-dump view of this image."),
-    7: ("MEMORY_OUTPUT_WRITE_FAILED", "The crash-dump copy could not be written (disk full or not writable)."),
+    5: ("MEMPROCFS_NO_CRASH_DUMP", "MemProcFS found no kernel page tables in this image either."),
 }
 
 
-def run_crashdump(
+def run_dtb(
     evidence_path: Path,
-    output_path: Path,
     work_dir: Path,
     *,
     timeout_seconds: int,
     cancellation_check: Callable[[], bool] | None = None,
-) -> int:
-    """Write MemProcFS's crash-dump view of the image (app.services.memory.memprocfs_crashdump);
-    returns its size in bytes."""
+) -> dict[str, object]:
+    """The kernel page-table base MemProcFS found in the image (app.services.memory.memprocfs_dtb):
+    ``{"page_map_offset", "architecture", "pae"}``."""
     library = memprocfs_library()
     if not library.is_file():
         raise VolatilityRunnerError("MEMPROCFS_UNAVAILABLE", "MemProcFS is not installed in the memory worker.")
-    argv = [sys.executable, "-m", "app.services.memory.memprocfs_crashdump", "--library", str(library), "--evidence", str(evidence_path), "--output", str(output_path)]
+    argv = [sys.executable, "-m", "app.services.memory.memprocfs_dtb", "--library", str(library), "--evidence", str(evidence_path)]
     stdout, stderr, returncode, _duration_ms = run_isolated_process(
         argv,
         work_dir=work_dir,
         env=_child_environment(),
         timeout=int(timeout_seconds),
         max_bytes=64 * 1024,
-        label="MemProcFS crash dump",
-        timeout_label=CRASHDUMP_STEP,
+        label="MemProcFS page-table base",
+        timeout_label=DTB_STEP,
         cancellation_check=cancellation_check,
     )
     if returncode != 0:
         if returncode < 0:
-            code, message = "PLUGIN_CRASHED", f"MemProcFS was killed by {_signal_name(returncode)} while writing the crash-dump copy."
+            code, message = "PLUGIN_CRASHED", f"MemProcFS was killed by {_signal_name(returncode)} while looking for the page-table base."
         else:
-            code, message = _CRASHDUMP_EXIT_CODES.get(returncode, ("PLUGIN_FAILED", "MemProcFS could not write the crash-dump copy."))
+            code, message = _DTB_EXIT_CODES.get(returncode, ("PLUGIN_FAILED", "MemProcFS could not look for the page-table base."))
         raise VolatilityRunnerError(code, message, stdout=stdout, stderr=stderr, return_code=returncode, stdout_length=len(stdout), stderr_length=len(stderr))
     try:
-        return int(stdout.decode().strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        return output_path.stat().st_size if output_path.exists() else 0
+        found = json.loads(stdout.decode().strip().splitlines()[-1])
+        int(found["page_map_offset"])
+    except (ValueError, IndexError, KeyError, TypeError) as exc:
+        raise VolatilityRunnerError("PLUGIN_FAILED", "MemProcFS gave no page-table base.") from exc
+    return found
 
 
 INVENTORY_STEP = "memprocfs.inventory"

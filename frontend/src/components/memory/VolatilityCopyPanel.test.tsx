@@ -7,10 +7,10 @@ import { VolatilityCopyPanel } from "./VolatilityCopyPanel";
 
 vi.mock("../../api/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api/client")>();
-  return { ...actual, api: { ...actual.api, getVolatilityView: vi.fn(), createVolatilityView: vi.fn(), removeVolatilityView: vi.fn() } };
+  return { ...actual, api: { ...actual.api, getVolatilityView: vi.fn(), removeVolatilityView: vi.fn() } };
 });
 
-const base: VolatilityViewStatus = { evidence_id: "e1", needed: true, enabled: true, status: "none", estimated_bytes: 40 * 2 ** 30, bytes: null, message: null, updated_at: null };
+const base: VolatilityViewStatus = { evidence_id: "e1", needed: false, layer: null, status: "none", bytes: null, message: null, updated_at: null };
 
 function renderPanel() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -24,29 +24,30 @@ function renderPanel() {
 describe("VolatilityCopyPanel", () => {
   beforeEach(() => {
     vi.mocked(api.getVolatilityView).mockReset();
-    vi.mocked(api.createVolatilityView).mockReset();
+    vi.mocked(api.removeVolatilityView).mockReset();
   });
 
-  it("shows nothing when Volatility reads the image", async () => {
-    vi.mocked(api.getVolatilityView).mockResolvedValue({ ...base, needed: false });
+  it("shows nothing when Volatility reads the image, pinned layer or not", async () => {
+    vi.mocked(api.getVolatilityView).mockResolvedValue({ ...base, layer: { page_map_offset: "0x1ae000", source: "MemProcFS" } });
     renderPanel();
     await waitFor(() => expect(api.getVolatilityView).toHaveBeenCalled());
     expect(screen.queryByTestId("volatility-copy-panel")).not.toBeInTheDocument();
   });
 
-  it("offers the copy with its size and writes it only on request", async () => {
-    vi.mocked(api.getVolatilityView).mockResolvedValue(base);
-    vi.mocked(api.createVolatilityView).mockResolvedValue({ ...base, status: "queued" });
+  it("says when Volatility cannot read the image, without offering a copy", async () => {
+    vi.mocked(api.getVolatilityView).mockResolvedValue({ ...base, needed: true });
     renderPanel();
-    const button = await screen.findByRole("button", { name: /Create the copy for Volatility \(about 40 GiB\)/ });
-    expect(api.createVolatilityView).not.toHaveBeenCalled();
-    await userEvent.click(button);
-    await waitFor(() => expect(api.createVolatilityView).toHaveBeenCalledWith("c1", "e1"));
+    expect(await screen.findByText("Volatility cannot read this image")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("says why the copy could not be made", async () => {
-    vi.mocked(api.getVolatilityView).mockResolvedValue({ ...base, status: "skipped_disk_space", message: "Not enough free space: about 45 GiB needed, 20 GiB available." });
+  it("offers to remove an old copy", async () => {
+    vi.mocked(api.getVolatilityView).mockResolvedValue({ ...base, status: "created", bytes: 34 * 2 ** 30, layer: { page_map_offset: "0x1ae000", source: "MemProcFS" } });
+    vi.mocked(api.removeVolatilityView).mockResolvedValue({ ...base, status: "removing" });
     renderPanel();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Not enough free space");
+    expect(await screen.findByText(/no longer needed/)).toBeInTheDocument();
+    expect(screen.getByText(/0x1ae000/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Remove the copy" }));
+    await waitFor(() => expect(api.removeVolatilityView).toHaveBeenCalledWith("c1", "e1"));
   });
 });

@@ -178,14 +178,9 @@ class Settings(BaseSettings):
     # server. A plain alternative to the egress-gateway managed mode, for servers allowed to reach
     # msdl.microsoft.com (and its *.blob.core.windows.net redirects).
     memory_symbol_direct_download_enabled: bool = False
-    # A raw capture whose page tables Volatility cannot find (no memory layer): the evidence page
-    # offers a crash-dump copy written by MemProcFS (about the size of the image), made only on the
-    # analyst's request and when MEMORY_UPLOAD_MIN_FREE_SPACE_BYTES stays free after it.
     # Engine of Windows memory analysis: memprocfs (no kernel symbols needed; Volatility then runs
     # only when the analyst asks for it) or volatility (the previous behaviour).
     memory_windows_default_engine: str = "memprocfs"
-    memory_volatility_crashdump_view_enabled: bool = True
-    memory_volatility_crashdump_timeout_seconds: int = 7200
     memory_symbol_allowed_hosts: str = ""
     memory_symbol_download_timeout_seconds: int = 180
     memory_symbol_connect_timeout_seconds: int = 15

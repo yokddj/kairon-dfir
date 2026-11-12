@@ -13,6 +13,7 @@ def main() -> int:
     parser.add_argument("--evidence", required=True)
     parser.add_argument("--cache", required=True)
     parser.add_argument("--symbols", required=True)
+    parser.add_argument("--layer-config")
     args = parser.parse_args()
 
     from volatility3.cli import CommandLine
@@ -37,8 +38,7 @@ def main() -> int:
         "--symbol-dirs",
         args.symbols,
         "-q",
-        "-f",
-        args.evidence,
+        *(["-c", args.layer_config] if args.layer_config else ["-f", args.evidence]),
         "-r",
         "json",
         "windows.info",

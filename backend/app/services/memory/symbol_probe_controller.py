@@ -135,12 +135,16 @@ def _extract_layer_from_stderr(stderr: bytes) -> str | None:
     return None
 
 
-def _volatility_input(evidence: Evidence, evidence_path: Path) -> Path:
-    """MemProcFS's crash-dump copy of the image when Volatility needed one, else the image."""
-    from app.services.memory.storage import volatility_view_path
+def _layer_kwargs(evidence: Evidence, evidence_path: Path, work_dir: Path) -> dict[str, Path]:
+    """``layer_config=`` for Volatility when this evidence has a memory layer pinned to MemProcFS's
+    page-table base (app.services.memory.volatility_layer)."""
+    from app.services.memory.volatility_layer import write_config
 
-    view = volatility_view_path(evidence.case_id, evidence.id)
-    return view if view.is_file() else Path(evidence_path)
+    try:
+        config = write_config(work_dir, Path(evidence_path), evidence)
+    except OSError:
+        config = None
+    return {"layer_config": config} if config is not None else {}
 
 
 def probe_evidence_symbol_requirement(
@@ -195,7 +199,7 @@ def probe_evidence_symbol_requirement(
 
     payload: dict[str, object] | None = None
     try:
-        payload = probe_windows_symbol_identity(_volatility_input(evidence, access.path), work_dir)
+        payload = probe_windows_symbol_identity(access.path, work_dir, **_layer_kwargs(evidence, access.path, work_dir))
     except subprocess.TimeoutExpired:
         return ProbeResult(
             evidence_id=evidence.id,
@@ -378,10 +382,11 @@ def _probe_without_payload(
     try:
         result = run_plugin(
             "windows.info",
-            _volatility_input(evidence, access.path),
+            access.path,
             work_dir,
             timeout_seconds=timeout,
             max_output_bytes=64 * 1024,
+            **_layer_kwargs(evidence, access.path, work_dir),
         )
     except VolatilityRunnerError as exc:
         status, error_code, message = _classify_stderr(exc.stderr or b"")

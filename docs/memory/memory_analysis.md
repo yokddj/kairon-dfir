@@ -179,25 +179,28 @@ symbols either. To get every Volatility view, add the symbols: let the memory wo
 (`MEMORY_SYMBOL_DIRECT_DOWNLOAD_ENABLED`, see [Managed Windows symbols](memory_symbols.md)) or
 import them.
 
-### When Volatility finds no memory layer: MemProcFS's crash dump
+### When Volatility finds no memory layer: MemProcFS's page tables
 
-Some raw captures defeat Volatility before symbols even matter: its page-map scan finds no page
-tables (DTB), so it builds no memory layer (`INVALID_MEMORY_LAYER`, "Volatility could not find
-this image's page tables"). MemProcFS finds them its own way: processes, network, Find Evil and the
-console text come from it regardless (see above). For the Volatility analyses as well, MemProcFS
-can present the memory it reconstructed as a Windows full crash dump, whose header carries the DTB,
-and Volatility reads that file.
+Volatility finds the kernel's page-table base (DTB) by scanning a few physical ranges for a
+self-referencing page table. On some captures nothing matches, so it builds no memory layer
+(`INVALID_MEMORY_LAYER`, "Volatility could not find this image's page tables") and every Volatility
+plugin fails, though the image is fine. MemProcFS finds the DTB its own way; processes, network,
+Find Evil and the console text come from it regardless (see above).
 
-The copy is about the size of the image (a 4 GB test image gave 6 GB, written in 13 s), so it is
-never written on its own. A run that hits the error marks the evidence, and the memory evidence
-page then shows **Volatility cannot read this image** with **Create the copy for Volatility (about
-N GiB)**. On request the memory worker writes it (`memory/volatility-view/memory.dmp` in its output
-directory) when the disk keeps `MEMORY_UPLOAD_MIN_FREE_SPACE_BYTES` free after it, or says how much
-space is missing. From then on every Volatility analysis, the symbol probe and the preparation read
-the copy; MemProcFS's own analyses keep reading the original image. **Remove the copy** frees the
-space again; deleting the evidence or its case removes it too.
-`MEMORY_VOLATILITY_CRASHDUMP_VIEW_ENABLED=false` turns the offer off. The kernel's symbols are still
-needed afterwards, as for any image (see above).
+When a Volatility analysis hits that error, the memory worker asks MemProcFS for the DTB (it reads
+only the first page of MemProcFS's crash-dump view, well under a second, nothing written), keeps it
+on the evidence and retries with a Volatility configuration (`vol -c`) that pins the kernel layer:
+the Intel paging layer at that DTB over the original image (a raw file, or Volatility's own
+crash-dump layer when the evidence is a crash dump). Every later Volatility analysis, the symbol
+probe and the preparation use it. The run records it (`volatility_layer` in its metadata, e.g.
+`0x1ae000`). VMware snapshots with their `.vmss`/`.vmsn`, LiME, ELF cores and hibernation files are
+left to Volatility's own layers. If MemProcFS finds no DTB either, the memory evidence page says
+**Volatility cannot read this image**. The kernel's symbols are still needed, as for any image.
+
+Earlier versions instead had MemProcFS write the whole memory as a crash dump for Volatility. That
+did not help: Volatility does not use the DTB a crash-dump header records and scans again. No copy
+is made any more; one left by an earlier version shows on the memory evidence page with
+**Remove the copy**, and goes with the evidence or its case.
 
 ### Find Evil
 

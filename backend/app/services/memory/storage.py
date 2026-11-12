@@ -54,8 +54,8 @@ def memory_evidence_output_root(case_id: str, evidence_id: str | None = None) ->
 
 
 def volatility_view_path(case_id: str, evidence_id: str) -> Path:
-    """Where the crash-dump copy of a memory image Volatility cannot read is kept
-    (app.services.memory.memprocfs_crashdump)."""
+    """Where earlier versions kept a crash-dump copy of a memory image for Volatility
+    (app.services.memory.volatility_view; removed with the evidence or from its page)."""
     root = memory_evidence_output_root(case_id, evidence_id) or build_evidence_root(case_id, evidence_id)
     return root / "memory" / "volatility-view" / "memory.dmp"
 
