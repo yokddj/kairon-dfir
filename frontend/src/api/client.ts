@@ -1144,6 +1144,20 @@ export type MemoryPowerShellLogItem = {
 
 export type MemoryPowerShellLog = { items: MemoryPowerShellLogItem[]; total: number; page: number; page_size: number };
 
+// The evidence's one saved MemProcFS scan (every Windows analysis reads it).
+export type MemProcFSScanStatus = {
+  evidence_id: string;
+  exists: boolean;
+  scanned_at: string | null;
+  memprocfs_version: string | null;
+  yara_rules: boolean;
+  findevil: boolean | null;
+  /** yara_rules_missing: YARA rules now enabled, not in this scan. legacy_inventory: made by an older version. */
+  notices: string[];
+  files: { path: string; size: number; tabular: boolean; source_path: string }[];
+  total_bytes: number;
+};
+
 export type MemoryMemProcFSTable = {
   table: string;
   tables: { key: string; label: string; group: string; description: string; count: number }[];
@@ -7087,6 +7101,19 @@ export const api = {
     request<MemoryFileExtraction>(`/cases/${caseId}/memory/evidences/${evidenceId}/files/extract/${extractionId}`),
   listMemoryFileExtractions: (caseId: string, evidenceId: string) =>
     request<{ items: MemoryFileExtraction[] }>(`/cases/${caseId}/memory/evidences/${evidenceId}/files`),
+  getMemProcFSScan: (caseId: string, evidenceId: string) => request<MemProcFSScanStatus>(`/cases/${caseId}/memory/evidences/${evidenceId}/memprocfs-scan`),
+  rescanMemProcFS: (caseId: string, evidenceId: string) =>
+    request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan?case_id=${encodeURIComponent(caseId)}`, { method: "POST", body: JSON.stringify({ profile: "find_evil", rescan: true }) }),
+  downloadMemProcFSScan: async (caseId: string, evidenceId: string, path: string | null) => {
+    const suffix = path === null ? "archive" : `files/${path.split("/").map(encodeURIComponent).join("/")}`;
+    const response = await apiFetch(`/cases/${caseId}/memory/evidences/${evidenceId}/memprocfs-scan/${suffix}`);
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(body || `HTTP ${response.status}`);
+    }
+    const fallback = path === null ? "memprocfs-scan.zip" : path.split("/").pop() || "file";
+    return { blob: await response.blob(), filename: extractDownloadFilename(response.headers.get("content-disposition"), fallback) };
+  },
   downloadMemoryFileExtractionResult: async (caseId: string, evidenceId: string, extractionId: string, resultIndex: number, fallbackFilename: string) => {
     const response = await apiFetch(`/cases/${caseId}/memory/evidences/${evidenceId}/files/extract/${extractionId}/download/${resultIndex}`);
     if (!response.ok) {

@@ -1675,6 +1675,44 @@ def _volatility_view_user(request: Request) -> str | None:
     return getattr(user, "username", None) or getattr(user, "id", None)
 
 
+@router.get("/cases/{case_id}/memory/evidences/{evidence_id}/memprocfs-scan", response_model=None)
+def get_memprocfs_scan(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> dict:
+    """The evidence's saved MemProcFS scan: when and how it was made, and its files."""
+    from app.services.memory.memprocfs_scan import status as scan_status
+
+    _require_case(db, case_id)
+    return scan_status(_require_evidence_for_case(db, case_id, evidence_id))
+
+
+@router.get("/cases/{case_id}/memory/evidences/{evidence_id}/memprocfs-scan/archive", response_model=None)
+def download_memprocfs_scan(case_id: str, evidence_id: str, db: Session = Depends(get_db)):
+    """Every file of the saved scan as one ZIP."""
+    from starlette.background import BackgroundTask
+    from fastapi.responses import FileResponse
+
+    from app.services.memory.memprocfs_scan import build_archive
+
+    _require_case(db, case_id)
+    archive = build_archive(_require_evidence_for_case(db, case_id, evidence_id))
+    if archive is None:
+        raise HTTPException(status_code=404, detail="This evidence has no saved MemProcFS scan.")
+    return FileResponse(archive, media_type="application/zip", filename=f"memprocfs-scan-{evidence_id[:8]}.zip", background=BackgroundTask(archive.unlink, missing_ok=True))
+
+
+@router.get("/cases/{case_id}/memory/evidences/{evidence_id}/memprocfs-scan/files/{path:path}", response_model=None)
+def download_memprocfs_scan_file(case_id: str, evidence_id: str, path: str, db: Session = Depends(get_db)):
+    """One file of the saved scan."""
+    from fastapi.responses import FileResponse
+
+    from app.services.memory.memprocfs_scan import resolve_file
+
+    _require_case(db, case_id)
+    target = resolve_file(_require_evidence_for_case(db, case_id, evidence_id), path)
+    if target is None:
+        raise HTTPException(status_code=404, detail="No such file in this evidence's MemProcFS scan.")
+    return FileResponse(target, media_type="application/octet-stream", filename=target.name)
+
+
 @router.get("/cases/{case_id}/memory/evidences/{evidence_id}/volatility-view", response_model=None)
 def get_volatility_view(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> dict:
     """Whether Volatility could not read this image, the page-table base it reads it with, and any
@@ -2736,6 +2774,7 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
     run.metadata_json = {
         **(run.metadata_json or {}),
         "timeout_policy": timeout_plan,
+        **({"memprocfs_rescan": True} if payload and payload.rescan and run_engine == memprocfs_engine.ENGINE_MEMPROCFS else {}),
     }
     db.commit()
     try:

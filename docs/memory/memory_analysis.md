@@ -127,6 +127,18 @@ misses most processes that only `psscan` finds, and its injected-code indicators
 and the Volatility-only ones **Run with Volatility**; it needs the kernel's symbols (see
 [Managed Windows symbols](memory_symbols.md)). **Run all** runs the MemProcFS analyses and leaves the
 Volatility-only ones out. Linux images always run on Volatility.
+**One MemProcFS scan per image.** The first Windows analysis scans the image once with MemProcFS's
+forensic mode and saves everything it gives: the inventory (processes, network, DLLs, handles,
+drivers, tokens, environment), FindEvil's indicators (with the Cobalt Strike beacon search and the
+YARA details), the timelines, the tables of the MemProcFS tab and the event logs it rebuilt. Every
+later analysis of that image -- Find Evil included -- reads the saved scan instead of scanning
+again. The MemProcFS tab says when and how it was made (MemProcFS version, whether the YARA rules
+were on), lists its files to download one by one or all as a ZIP, opens any of its CSVs as a full
+**Source table**, and offers **New MemProcFS scan** when a fresh one is wanted. If the YARA rules
+were enabled after the scan, the tab says so; the scan is never repeated on its own. An inventory
+saved by an older version still serves the analyses that read it; Find Evil makes the full scan
+once.
+
 On a Windows image the first **Analyze memory** does the same as **Run all**: the first MemProcFS
 analysis scans the image and the rest read what it saved, so running processes alone only put the
 rest behind a second click. On Linux it still runs the processes first, which also says quickly

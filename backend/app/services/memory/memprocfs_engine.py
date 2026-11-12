@@ -98,6 +98,52 @@ def _lock(directory: Path) -> Iterator[None]:
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+SCAN_FILE = "scan.json"
+FINDEVIL_FILE = "findevil.json"
+FORENSIC_DIRNAME = "forensic"
+
+
+def scan_complete(directory: Path) -> bool:
+    """The evidence's whole MemProcFS scan is saved (not only an inventory saved by an older version)."""
+    return inventory_ready(directory) and (directory / SCAN_FILE).is_file()
+
+
+def scan_info(directory: Path) -> dict[str, Any] | None:
+    try:
+        return json.loads((directory / SCAN_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def ensure_scan(
+    case_id: str,
+    evidence_id: str,
+    evidence_path: Path,
+    work_dir: Path,
+    *,
+    timeout_seconds: int,
+    cancellation_check: Callable[[], bool] | None = None,
+    force: bool = False,
+) -> Path:
+    """The evidence's one MemProcFS scan -- inventory, FindEvil, timelines, tables, YARA details --
+    made now if it is not saved yet or ``force`` asks for a new one (one scan at a time per
+    evidence). Every Windows analysis reads it, so the image is scanned once."""
+    from app.services.memory.memprocfs_runner import run_findevil
+    from app.services.memory.volatility_runner import VolatilityRunnerError
+
+    directory = inventory_dir(case_id, evidence_id)
+    if scan_complete(directory) and not force:
+        return directory
+    with _lock(directory):
+        if force or not scan_complete(directory):
+            before = scan_info(directory) if force else None
+            run_findevil(evidence_path, work_dir, timeout_seconds=timeout_seconds, max_output_bytes=1024 * 1024, cancellation_check=cancellation_check, scan_dir=directory)
+            after = scan_info(directory)
+            if not scan_complete(directory) or (force and after == before):
+                raise VolatilityRunnerError("PLUGIN_FAILED", "MemProcFS's scan of this image did not complete.")
+    return directory
+
+
 def ensure_inventory(
     case_id: str,
     evidence_id: str,
@@ -106,17 +152,26 @@ def ensure_inventory(
     *,
     timeout_seconds: int,
     cancellation_check: Callable[[], bool] | None = None,
+    force: bool = False,
 ) -> Path:
-    """The evidence's saved MemProcFS inventory, made now if it is not there yet (one at a time)."""
-    from app.services.memory.memprocfs_runner import run_inventory_scan
-
+    """The evidence's saved MemProcFS inventory: from its scan, made now if there is none. An
+    inventory saved before the scan kept everything is still used."""
     directory = inventory_dir(case_id, evidence_id)
-    if inventory_ready(directory):
+    if inventory_ready(directory) and not force:
         return directory
-    with _lock(directory):
-        if not inventory_ready(directory):
-            run_inventory_scan(evidence_path, directory, work_dir, timeout_seconds=timeout_seconds, cancellation_check=cancellation_check)
-    return directory
+    return ensure_scan(case_id, evidence_id, evidence_path, work_dir, timeout_seconds=timeout_seconds, cancellation_check=cancellation_check, force=force)
+
+
+def findevil_rows(directory: Path) -> list[dict[str, str]] | None:
+    """FindEvil's rows from the saved scan; None when FindEvil does not cover the image."""
+    path = directory / FINDEVIL_FILE
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def forensic_dir(directory: Path) -> Path:
+    return directory / FORENSIC_DIRNAME
 
 
 def _csv(directory: Path, name: str) -> list[dict[str, str]]:

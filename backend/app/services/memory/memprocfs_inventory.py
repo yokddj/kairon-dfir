@@ -103,7 +103,10 @@ def _text(lib: ctypes.CDLL, handle: int, path: str) -> str:
     return (_read(lib, handle, path, limit=_MAX_TEXT_BYTES) or b"").decode("utf-8", "replace")
 
 
-def save_inventory(lib: ctypes.CDLL, handle: int, output: Path) -> int:
+def save_inventory(lib: ctypes.CDLL, handle: int, output: Path, *, extra=None, progress=None) -> int:
+    """Write the inventory to ``<output>.partial`` and rename it to ``output`` when complete.
+    ``extra(partial)`` adds more files before the rename (the full scan: memprocfs_findevil);
+    ``progress(label)`` keeps the scan watchdog from taking the writing for a stall."""
     partial = output.with_name(output.name + ".partial")
     shutil.rmtree(partial, ignore_errors=True)
     partial.mkdir(parents=True, mode=0o750)
@@ -120,7 +123,9 @@ def save_inventory(lib: ctypes.CDLL, handle: int, output: Path) -> int:
             pids = sorted({int(row["PID"]) for row in csv_rows(data.decode("utf-8", "replace")) if str(row.get("PID") or "").isdigit()})
     envs: dict[str, dict[str, str]] = {}
     tokens: dict[str, dict[str, object]] = {}
-    for pid in pids:
+    for position, pid in enumerate(pids):
+        if progress and position % 25 == 0:
+            progress(f"inventory {position}/{len(pids)}")
         env = environment(_text(lib, handle, f"\\pid\\{pid}\\win-environment.txt"))
         if env:
             envs[str(pid)] = env
@@ -137,6 +142,8 @@ def save_inventory(lib: ctypes.CDLL, handle: int, output: Path) -> int:
     system = {name: _text(lib, handle, f"\\sys\\{name}.txt").strip() for name in SYSTEM_FILES}
     for name, value in (("environment.json", envs), ("tokens.json", tokens), ("system.json", system)):
         (partial / name).write_text(json.dumps(value), encoding="utf-8")
+    if extra is not None:
+        extra(partial)
     shutil.rmtree(output, ignore_errors=True)
     os.replace(partial, output)
     return 0

@@ -187,6 +187,11 @@ def _expand_all_sources_request(db: Session, evidence: Evidence) -> None:
 
 
 def resolve_source_file(evidence: Evidence, source_path: str) -> Path | None:
+    from app.services.memory.memprocfs_scan import SOURCE_PREFIX, resolve_source
+
+    if str(source_path or "").startswith(SOURCE_PREFIX):
+        # A CSV of a memory evidence's saved MemProcFS scan.
+        return resolve_source(evidence, source_path)
     try:
         relative = sanitize_relative_path(source_path)
     except ValueError:

@@ -325,16 +325,14 @@ def test_execution_sends_findevil_to_memprocfs_not_volatility(tmp_path, monkeypa
 
     from app.services.memory import execution
 
-    used = {}
+    from tests.memprocfs_scan_fakes import install_fake_scan
 
-    def fake_findevil(evidence_path, work_dir, **kwargs):
-        used["memprocfs"] = True
-        return memprocfs_runner.VolatilityRunResult(argv_display=["memprocfs"], stdout=json.dumps(findevil_rows(CSV)).encode(), stderr=b"", duration_ms=5)
+    scans: list[str] = []
+    install_fake_scan(monkeypatch, tmp_path, findevil_rows(CSV), calls=scans)
 
     def fake_volatility(*args, **kwargs):
         raise AssertionError("FindEvil must not go to Volatility")
 
-    monkeypatch.setattr(execution, "run_findevil", fake_findevil)
     monkeypatch.setattr(execution, "run_plugin", fake_volatility)
 
     class _Db:
@@ -344,11 +342,17 @@ def test_execution_sends_findevil_to_memprocfs_not_volatility(tmp_path, monkeypa
         def refresh(self, obj):
             pass
 
-    run = SimpleNamespace(cancellation_requested=False)
+        def get(self, _model, _id):
+            return None
+
+    run = SimpleNamespace(cancellation_requested=False, case_id="c", evidence_id="e", metadata_json={})
     plugin_run = SimpleNamespace(status=None, started_at=None, metadata_json={})
     payload, raw_info, duration_ms, argv = execution._execute_plugin(_Db(), run, plugin_run, "memprocfs.findevil", tmp_path / "image.dmp", tmp_path)
-    assert used == {"memprocfs": True}
-    assert len(payload) == 6 and duration_ms == 5 and argv == ["memprocfs"]
+    assert scans == ["image.dmp"]
+    assert len(payload) == 6 and argv[0] == "memprocfs" and argv[-1] == "(scan of 2026-11-12T10:00:01Z)"
+    # A second FindEvil reads the saved scan: the image is not scanned again.
+    execution._execute_plugin(_Db(), run, plugin_run, "memprocfs.findevil", tmp_path / "image.dmp", tmp_path)
+    assert scans == ["image.dmp"]
     # The raw output is kept like any plugin's, under the run's output directory.
     assert raw_info["size"] == len(json.dumps(findevil_rows(CSV)).encode())
 

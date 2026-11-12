@@ -422,6 +422,8 @@ class MemoryStartScanRequest(BaseModel):
     # None: MemProcFS for Windows, Volatility for Linux. "volatility" is the analyst's explicit
     # request for Volatility on a Windows image (it needs the kernel's symbols).
     engine: str | None = None
+    # A new MemProcFS scan of the image instead of the saved one (Windows, MemProcFS engine).
+    rescan: bool = False
 
     model_config = {"extra": "forbid"}
 

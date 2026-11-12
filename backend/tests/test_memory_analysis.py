@@ -3316,13 +3316,16 @@ def test_find_evil_without_symbols_still_runs_memprocfs(db_session, tmp_path: Pa
     ran: list[str] = []
     monkeypatch.setattr(memory_execution, "run_plugin", no_symbols)
     monkeypatch.setattr(memory_execution, "run_kairon_findevil", lambda *_a, **_k: pytest.fail("kairon.findevil needs Volatility's symbols"))
-    monkeypatch.setattr(memory_execution, "run_findevil", lambda *_a, **_k: ran.append("memprocfs.findevil") or volatility_runner.VolatilityRunResult(argv_display=["memprocfs"], stdout=b"[]", stderr=b"", duration_ms=5))
+    from tests.memprocfs_scan_fakes import install_fake_scan
+
+    scans: list[str] = []
+    install_fake_scan(monkeypatch, tmp_path, [], calls=scans)
 
     memory_execution.run_memory_metadata_scan(run.id)
     db_session.refresh(run)
     plugin_runs = {item.plugin: item for item in db_session.query(MemoryPluginRun).filter(MemoryPluginRun.memory_scan_run_id == run.id).all()}
 
-    assert ran == ["memprocfs.findevil"]
+    assert ran == [] and scans == ["memory.mem"]
     assert run.status == "completed_with_errors"
     assert plugin_runs["windows.info"].status == "failed"
     assert plugin_runs["kairon.findevil"].status == "skipped_dependency"
@@ -3386,7 +3389,18 @@ def _layerless_run(db_session, tmp_path, monkeypatch, *, dtb=None, recorded=None
         return volatility_runner.VolatilityRunResult(argv_display=["vol"], stdout=json.dumps(payload).encode(), stderr=b"", duration_ms=5)
 
     monkeypatch.setattr(memory_execution, "run_plugin", volatility)
-    monkeypatch.setattr(memory_execution, "run_findevil", lambda path, *_a, **_k: reads.append(("memprocfs.findevil", Path(path).name, None)) or volatility_runner.VolatilityRunResult(argv_display=["memprocfs"], stdout=b"[]", stderr=b"", duration_ms=5))
+    from tests.memprocfs_scan_fakes import install_fake_scan
+
+    scans: list[str] = []
+    install_fake_scan(monkeypatch, tmp_path, [], calls=scans)
+    original_execute = memory_execution._execute_plugin
+
+    def execute(db, run, plugin_run, plugin, path, *args, **kwargs):
+        if plugin == "memprocfs.findevil":
+            reads.append(("memprocfs.findevil", Path(path).name, None))
+        return original_execute(db, run, plugin_run, plugin, path, *args, **kwargs)
+
+    monkeypatch.setattr(memory_execution, "_execute_plugin", execute)
     memory_execution.run_memory_metadata_scan(run.id)
     db_session.refresh(run)
     db_session.refresh(evidence)
