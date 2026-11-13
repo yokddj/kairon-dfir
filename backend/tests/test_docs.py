@@ -20,7 +20,9 @@ def test_docs_index_exists() -> None:
 
 def test_every_doc_linked_from_the_index_resolves() -> None:
     index = (DOCS_DIR / "index.md").read_text(encoding="utf-8")
-    links = re.findall(r"\]\(([^)#]+\.md)[^)]*\)", index)
+    # Absolute URLs (repo-root files such as CONTRIBUTING.md, linked on GitHub
+    # so they also work on the published MkDocs site) are not local paths.
+    links = re.findall(r"\]\((?!https?://)([^)#]+\.md)[^)]*\)", index)
     assert links, "docs/index.md links to no documents"
     missing = sorted({link for link in links if not (DOCS_DIR / link).exists()})
     assert not missing, f"docs/index.md links to missing files: {missing}"
