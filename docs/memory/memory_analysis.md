@@ -10,6 +10,8 @@ Case -> Memory Analysis -> Add memory image
 
 This dedicated flow shows upload readiness, storage capacity, privacy warnings, and progress before the evidence appears in Memory Analysis. The generic Evidence Upload form remains compatible, but it is no longer the recommended memory workflow.
 
+![Memory Analysis of a Windows image: one row per real process, with the plugins that observed it.](../assets/screenshots/memory-processes.png)
+
 ## Current status
 
 This version includes isolated Volatility 3 profiles:
@@ -222,6 +224,8 @@ is made any more; one left by an earlier version shows on the memory evidence pa
 **Remove the copy**, and goes with the evidence or its case.
 
 ### Find Evil
+
+![Find Evil groups indicators by process and severity so the most suspicious processes come first.](../assets/screenshots/memory-find-evil.png)
 
 The **Find Evil** tab lists indicators from two sources; the **Source** column says which (both, when the two tools report the same indicator: same process and type, and for memory and module indicators the same address).
 

@@ -1,5 +1,7 @@
 # Search Timeline, Incident Timeline and Reports
 
+![Investigation Timeline filtered to high-risk events on one host.](../assets/screenshots/timeline.png)
+
 ## Search Timeline
 
 Search Timeline is a view inside Search for exploring matching events over time. It is not the curated incident story.
