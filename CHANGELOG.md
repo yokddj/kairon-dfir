@@ -58,6 +58,7 @@
 
 ### Fixed
 
+- **The case name no longer stacks one letter per line on the case Evidence page**: on wide screens the statistics cards took the whole row and left the case name and description a column 0 px wide. The name now keeps its own column and the cards wrap in the space left.
 - **No more "Latest analysis attempt failed" after a successful extended process analysis on Windows**: on MemProcFS, `processes_extended` adds environment variables, SIDs and privileges but lists no processes, so the processes view took every such run for a failed process listing. A run whose plugins only add process details no longer counts as the processes view's result or latest attempt.
 - **"New MemProcFS scan" moved to the analysis catalogue**: a new scan changes what every analysis reads, so it is now an option of **Re-run analysis** (*Scan the image again with MemProcFS*, unticked), applied to the first MemProcFS analysis started there; the MemProcFS tab keeps the scan's details and files.
 - **Long case descriptions no longer run under the case's figures**: a description with long URLs overflowed its column and overlapped the evidence, host and detection cards. It now wraps inside its column, keeps its line breaks, turns URLs into links that open in a new tab, and folds to three lines with **Show more**.

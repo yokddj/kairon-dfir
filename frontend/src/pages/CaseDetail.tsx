@@ -322,13 +322,15 @@ export default function CaseDetail() {
         <div className="rounded-2xl border border-line bg-panel/60 p-4 text-sm text-muted">This case is closed. Reopen it to continue active investigation.</div>
       ) : null}
       <section className="rounded-[28px] border border-line bg-panel/60 p-6 shadow-panel">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div className="min-w-0 flex-1">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+          {/* The title keeps a fixed column; the stats fill what is left and wrap.
+              A shrink-0 stats grid took the whole row and squeezed the title to 0 px. */}
+          <div className="min-w-0 lg:w-80 lg:shrink-0" data-testid="case-header-title">
             <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Case</p>
             <h2 className="mt-2 break-words text-3xl font-semibold">{caseQuery.data?.name}</h2>
             <CaseDescription text={caseQuery.data?.description} />
           </div>
-          <div className="grid shrink-0 gap-3 md:grid-cols-6">
+          <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(9rem,1fr))]" data-testid="case-header-stats">
             {overviewStats.map(([label, value]) => (
               <div key={String(label)} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
                 <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">{label}</p>
