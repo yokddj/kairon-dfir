@@ -1,5 +1,7 @@
 # Memory Process Graph & Indented Tree
 
+![Indented process tree rebuilt from memory, with command lines and the sources that saw each process.](../assets/screenshots/memory-process-tree.png)
+
 ## Architecture
 
 Memory analysis uses two complementary process exploration views:

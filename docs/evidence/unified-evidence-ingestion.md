@@ -1,5 +1,7 @@
 # Unified Evidence Ingestion
 
+![The Add Evidence wizard: drop files or a folder and Kairon inspects each item before processing.](../assets/screenshots/add-evidence.png)
+
 ## What this is
 
 A single guided wizard for adding evidence to a case, replacing the need to

@@ -20,6 +20,14 @@
   <img alt="Python and TypeScript" src="https://img.shields.io/badge/stack-python%20%2B%20typescript-111827" />
 </p>
 
+<p align="center">
+  <a href="https://yokddj.github.io/kairon-dfir/"><strong>📖 Documentation</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://yokddj.github.io/kairon-dfir/getting-started/quickstart/">Quick start</a>
+  &nbsp;·&nbsp;
+  <a href="https://yokddj.github.io/kairon-dfir/getting-started/user_guide/">User guide</a>
+</p>
+
 ## What Kairon DFIR Is
 
 Kairon DFIR is a self-hosted, case-centric digital forensics and incident response platform. It ingests Windows, Linux, disk-image, and memory evidence into a single investigation workspace, normalizes it into a common searchable model, and supports the analyst through Search, Timeline, Artifact Views, detections, findings, and reporting — without replacing analyst judgment.
@@ -101,7 +109,7 @@ Kairon DFIR assists the analyst; final interpretation remains the analyst's resp
 
 ## Documentation
 
-Start at the [documentation index](docs/index.md) for the full, organized set of guides — getting started, architecture, evidence intake, per-artifact parser reference, Linux support, Memory Analysis, search and investigation, rules, deployment, and operations.
+Read it at **https://yokddj.github.io/kairon-dfir/** (searchable, with screenshots), or start at the [documentation index](docs/index.md) in the repository, for the full, organized set of guides — getting started, architecture, evidence intake, per-artifact parser reference, Linux support, Memory Analysis, search and investigation, rules, deployment, and operations.
 
 ## License
 
