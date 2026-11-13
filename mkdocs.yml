@@ -1,0 +1,200 @@
+site_name: Kairon DFIR
+site_description: Self-hosted DFIR platform — evidence ingestion, parsing, search, timeline, detections and memory analysis.
+site_url: https://yokddj.github.io/kairon-dfir/
+repo_url: https://github.com/yokddj/kairon-dfir
+repo_name: yokddj/kairon-dfir
+edit_uri: edit/main/docs/
+copyright: Kairon DFIR — AGPL-3.0
+
+# docs/SECURITY.md only redirects old links to the root SECURITY.md on GitHub.
+exclude_docs: |
+  SECURITY.md
+  .DS_Store
+  requirements.txt
+
+# A page added to docs/ but forgotten in the nav below fails the strict build.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+theme:
+  name: material
+  logo: assets/brand/kairon-dfir-mark-transparent.svg
+  favicon: assets/brand/favicon.svg
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+
+extra_css:
+  - assets/stylesheets/kairon.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - getting-started/quickstart.md
+      - getting-started/first-run.md
+      - getting-started/roles-and-permissions.md
+      - getting-started/user_guide.md
+      - getting-started/windows-wsl.md
+      - getting-started/evaluation-guide.md
+      - getting-started/demo_mvp.md
+  - Evidence:
+      - evidence/unified-evidence-ingestion.md
+      - evidence/s3-import.md
+      - evidence/azure-blob-import.md
+      - evidence/preflight-inspection.md
+      - evidence/disk-image-ingestion.md
+      - evidence/evidence-platforms.md
+      - evidence/evidence-integrity.md
+      - evidence/host-information.md
+      - evidence/large_evidence.md
+      - evidence/processing-queue.md
+      - evidence/ingestion.md
+      - evidence/velociraptor_ingest.md
+  - Artifacts:
+      - artifacts/parser-coverage.md
+      - Windows artifacts:
+          - artifacts/evtx.md
+          - artifacts/filesystem_mft_usn.md
+          - artifacts/defender.md
+          - artifacts/powershell_artifacts.md
+          - artifacts/prefetch.md
+          - artifacts/lnk.md
+          - artifacts/jumplists.md
+          - artifacts/registry.md
+          - artifacts/srum.md
+          - artifacts/shellbags.md
+          - artifacts/browser.md
+          - artifacts/scheduled_tasks.md
+          - artifacts/usb.md
+          - artifacts/recycle_bin.md
+          - artifacts/autoruns.md
+          - artifacts/bits.md
+          - artifacts/cloud_sync.md
+          - artifacts/network.md
+          - artifacts/wmi.md
+          - artifacts/execution_artifacts.md
+          - artifacts/windows_notifications.md
+      - Linux:
+          - linux/linux-support.md
+  - Memory:
+      - memory/memory_analysis.md
+      - memory/memory_operations.md
+      - memory/memory_upload.md
+      - memory/memory_process_model.md
+      - memory/memory_process_graph.md
+      - memory/memory_symbols.md
+      - memory/linux_symbols.md
+      - memory/memory_symbol_operator_approval.md
+      - memory/memory_runner_security.md
+      - memory/symbol_egress_gateway.md
+      - memory/symbol_fetcher_security.md
+  - Investigation:
+      - search-and-investigation/search.md
+      - search-and-investigation/timeline_reports.md
+      - search-and-investigation/source-tables.md
+      - search-and-investigation/process_graph.md
+      - search-and-investigation/findings-notes.md
+      - search-and-investigation/findings_correlation.md
+      - search-and-investigation/case-management.md
+      - search-and-investigation/app_sections.md
+      - search-and-investigation/semi_automatic_analysis.md
+      - search-and-investigation/investigation-workflow.md
+      - Rules:
+          - rules/rules_sigma_yara.md
+          - rules/rule_authoring.md
+          - rules/builtin_rules.md
+  - Deployment:
+      - deployment/deployment.md
+      - deployment/deployment-modes.md
+      - deployment/deployment-remote.md
+      - deployment/backup-restore.md
+      - deployment/update-rollback.md
+      - deployment/troubleshooting.md
+      - Operations:
+          - operations/troubleshooting.md
+          - operations/ai-assistant.md
+          - operations/mcp-server.md
+          - operations/performance.md
+          - operations/opensearch.md
+          - operations/api_summary.md
+  - Project:
+      - roadmap.md
+      - project_status.md
+      - feature_map.md
+      - KNOWN_LIMITATIONS.md
+      - Releases:
+          - releases/1.2.0.md
+          - releases/1.1.0.md
+          - releases/1.0.0.md
+          - releases/0.9.0-beta.md
+      - Architecture:
+          - architecture/overview.md
+          - architecture/platform-architecture.md
+          - architecture/codebase-map.md
+          - architecture/information-architecture.md
+          - architecture/capability-registry.md
+          - architecture/optional-capability-boundary.md
+          - architecture/navigation-implementation-rfc.md
+          - architecture/routing.md
+      - Development:
+          - operations/testing.md
+          - operations/demo_checklist.md
+          - maintenance/documentation-maintenance.md
+          - maintenance/branch-protection.md
+          - maintenance/frontend-deployment.md
+          - maintenance/task-inventory.md

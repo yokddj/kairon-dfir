@@ -50,7 +50,7 @@ The structured source of truth is [`docs/data/parser-coverage.json`](../data/par
 
 ## Backend Modules and Common Source Filenames
 
-Quick reference for locating the parser code and recognizing typical input filenames for each family. Forensic interpretation (what each family contributes to an investigation, and how it correlates with others) lives in each family's own document under [`docs/artifacts/`](.).
+Quick reference for locating the parser code and recognizing typical input filenames for each family. Forensic interpretation (what each family contributes to an investigation, and how it correlates with others) lives in each family's own document under `docs/artifacts/`.
 
 | Family | Common source filenames | Backend module |
 | --- | --- | --- |

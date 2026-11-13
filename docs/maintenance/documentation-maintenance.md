@@ -4,6 +4,20 @@
 
 Documentation must change alongside the code. If the tool evolves and the documentation doesn't, it ends up worse than having no docs at all.
 
+## Documentation Website
+
+`docs/` is published with MkDocs Material to https://yokddj.github.io/kairon-dfir/ by the `Docs site` workflow on every push to `main`; pull requests only build it. The build runs in strict mode:
+
+- a new page must be added to `nav` in `mkdocs.yml` (and to `docs/index.md`), or the build fails;
+- links must point to files inside `docs/`. Link files at the repository root (`CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`…) with their full GitHub URL.
+
+Preview locally:
+
+```bash
+python3 -m venv .venv-docs && .venv-docs/bin/pip install -r docs/requirements.txt
+.venv-docs/bin/mkdocs serve   # http://127.0.0.1:8000
+```
+
 ## When to Update Docs
 
 Any time you add or change:

@@ -1,6 +1,6 @@
 # Deployment Guide
 
-This guide describes a controlled, self-hosted deployment of Kairon DFIR. It is not a guide for exposing the stack directly to the public Internet — see [`/SECURITY.md`](../../SECURITY.md) for the deployment security boundary.
+This guide describes a controlled, self-hosted deployment of Kairon DFIR. It is not a guide for exposing the stack directly to the public Internet — see [`/SECURITY.md`](https://github.com/yokddj/kairon-dfir/blob/main/SECURITY.md) for the deployment security boundary.
 
 ## Scope
 

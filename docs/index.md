@@ -67,6 +67,7 @@ This documentation describes the real state of the platform. Partial capabilitie
 - [artifacts/network.md](artifacts/network.md)
 - [artifacts/wmi.md](artifacts/wmi.md)
 - [artifacts/execution_artifacts.md](artifacts/execution_artifacts.md)
+- [artifacts/windows_notifications.md](artifacts/windows_notifications.md)
 
 ## Linux
 
@@ -134,7 +135,7 @@ This documentation describes the real state of the platform. Partial capabilitie
 
 ## Community
 
-- [../CONTRIBUTING.md](../CONTRIBUTING.md): how to build, test, and propose changes.
-- [../CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md): community standards.
-- [../SECURITY.md](../SECURITY.md): security policy, self-hosted deployment boundary, and vulnerability reporting.
-- [../LICENSE](../LICENSE) / [../NOTICE](../NOTICE): AGPL-3.0 license and third-party notices.
+- [../CONTRIBUTING.md](https://github.com/yokddj/kairon-dfir/blob/main/CONTRIBUTING.md): how to build, test, and propose changes.
+- [../CODE_OF_CONDUCT.md](https://github.com/yokddj/kairon-dfir/blob/main/CODE_OF_CONDUCT.md): community standards.
+- [../SECURITY.md](https://github.com/yokddj/kairon-dfir/blob/main/SECURITY.md): security policy, self-hosted deployment boundary, and vulnerability reporting.
+- [../LICENSE](https://github.com/yokddj/kairon-dfir/blob/main/LICENSE) / [../NOTICE](https://github.com/yokddj/kairon-dfir/blob/main/NOTICE): AGPL-3.0 license and third-party notices.

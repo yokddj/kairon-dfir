@@ -112,3 +112,7 @@ CLAUDE.md
 
 # Vite cache created when the frontend is run from the repository root
 .vite/
+
+# MkDocs build output
+/site/
+/.venv-docs/
