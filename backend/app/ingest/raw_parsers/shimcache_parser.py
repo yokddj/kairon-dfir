@@ -243,29 +243,52 @@ def _parse_win8_entries(bin_data: bytes, magic: bytes) -> list[dict]:
     return entry_list
 
 
-def _parse_win10_entries(bin_data: bytes, *, creators_update: bool = False) -> list[dict]:
+def _parse_win10_entries(bin_data: bytes, *, creators_update: bool = False, partial: bool = False) -> list[dict]:
+    """``partial``: the value was read from memory, where pages that were not resident come back
+    as zeros; skip to the next entry header instead of failing on the first gap."""
     entry_list: list[dict] = []
     start = WIN10_STATS_SIZE + 4 if creators_update else WIN10_STATS_SIZE
-    data = io.BytesIO(bin_data[start:])
-    while data.tell() < len(bin_data) - start:
+    body = bin_data[start:]
+    data = io.BytesIO(body)
+    while data.tell() < len(body):
         header = data.read(12)
         if len(header) < 12:
             break
         entry_magic, _crc32_hash, entry_len = struct.unpack("<4sLL", header)
         if entry_magic != WIN10_MAGIC:
-            raise ValueError(f"Invalid version magic tag found: {entry_magic!r}")
+            if not partial:
+                raise ValueError(f"Invalid version magic tag found: {entry_magic!r}")
+            following = body.find(WIN10_MAGIC, data.tell() - 11)
+            if following < 0:
+                break
+            data.seek(following)
+            continue
+        entry_start = data.tell()
         entry_data = io.BytesIO(data.read(entry_len))
-        path_len = struct.unpack("<H", entry_data.read(2))[0]
-        original_path = _decode_windows_path(entry_data.read(path_len).decode("utf-16le", "replace")) if path_len else None
+        try:
+            path_len = struct.unpack("<H", entry_data.read(2))[0]
+            original_path = _decode_windows_path(entry_data.read(path_len).decode("utf-16le", "replace")) if path_len else None
+            low_datetime, high_datetime = struct.unpack("<LL", entry_data.read(8))
+        except struct.error:
+            if not partial:
+                raise
+            # A damaged entry: resume at the next entry header after this one's start.
+            following = body.find(WIN10_MAGIC, entry_start)
+            if following < 0:
+                break
+            data.seek(following)
+            continue
         path = _normalize_windows_path(original_path) if original_path else None
-        low_datetime, high_datetime = struct.unpack("<LL", entry_data.read(8))
-        if (low_datetime + high_datetime) == 0:
+        if partial and original_path and "\x00" in original_path:
+            original_path = original_path.split("\x00", 1)[0] or None
+            path = _normalize_windows_path(original_path) if original_path else None
+        if (low_datetime + high_datetime) == 0 and not (partial and path):
             continue
         entry_list.append(
             {
                 "path": path,
                 "original_path": original_path or path,
-                "last_modified_time": _iso_from_datetime(_filetime_to_datetime(low_datetime, high_datetime)),
+                "last_modified_time": _iso_from_datetime(_filetime_to_datetime(low_datetime, high_datetime)) if (low_datetime + high_datetime) else None,
                 "executed": None,
                 "cache_format": "win10_creators" if creators_update else "win10",
             }
@@ -303,7 +326,7 @@ def _parse_winxp_entries(bin_data: bytes) -> list[dict]:
     return entry_list
 
 
-def _get_shimcache_entries(cachebin: bytes) -> list[dict]:
+def _get_shimcache_entries(cachebin: bytes, *, partial: bool = False) -> list[dict]:
     if len(cachebin) < 16:
         return []
     magic = struct.unpack("<L", cachebin[0:4])[0]
@@ -318,9 +341,9 @@ def _get_shimcache_entries(cachebin: bytes) -> list[dict]:
     if len(cachebin) > WIN8_STATS_SIZE and cachebin[WIN8_STATS_SIZE:WIN8_STATS_SIZE + 4] == WIN81_MAGIC:
         return _parse_win8_entries(cachebin, WIN81_MAGIC)
     if len(cachebin) > WIN10_STATS_SIZE and cachebin[WIN10_STATS_SIZE:WIN10_STATS_SIZE + 4] == WIN10_MAGIC:
-        return _parse_win10_entries(cachebin)
+        return _parse_win10_entries(cachebin, partial=partial)
     if len(cachebin) > WIN10_STATS_SIZE and cachebin[WIN10_STATS_SIZE + 4:WIN10_STATS_SIZE + 8] == WIN10_MAGIC:
-        return _parse_win10_entries(cachebin, creators_update=True)
+        return _parse_win10_entries(cachebin, creators_update=True, partial=partial)
     raise ValueError(f"unrecognized_shimcache_magic:0x{magic:x}")
 
 

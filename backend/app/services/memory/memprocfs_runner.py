@@ -484,3 +484,38 @@ def run_inventory_scan(
         else:
             code, message = _EXIT_CODES.get(returncode, ("PLUGIN_FAILED", "MemProcFS could not scan this image."))
         raise VolatilityRunnerError(code, message, stdout=stdout, stderr=stderr, return_code=returncode, stdout_length=len(stdout), stderr_length=len(stderr))
+
+
+def run_registry(
+    evidence_path: Path,
+    work_dir: Path,
+    destination: Path,
+    *,
+    timeout_seconds: int,
+    cancellation_check: Callable[[], bool] | None = None,
+) -> None:
+    """Read the image's forensic registry keys into ``destination`` (no forensic scan): for an
+    evidence whose saved MemProcFS scan predates registry values (app.services.memory.memprocfs_registry)."""
+    library = memprocfs_library()
+    if not library.is_file():
+        raise VolatilityRunnerError("MEMPROCFS_UNAVAILABLE", "MemProcFS is not installed in the memory worker.")
+    argv = [
+        sys.executable, "-m", "app.services.memory.memprocfs_findevil",
+        "--library", str(library), "--evidence", str(evidence_path), "--registry-out", str(destination),
+    ]
+    stdout, stderr, returncode, _duration_ms = run_isolated_process(
+        argv,
+        work_dir=work_dir,
+        env=_child_environment(),
+        timeout=int(timeout_seconds),
+        max_bytes=1024 * 1024,
+        label="MemProcFS registry",
+        timeout_label="memprocfs.registry",
+        cancellation_check=cancellation_check,
+    )
+    if returncode != 0:
+        code, message = _EXIT_CODES.get(returncode, ("PLUGIN_FAILED", "MemProcFS could not read the registry of this image."))
+        detail = (stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        if detail:
+            message = detail[-1][:300]
+        raise VolatilityRunnerError(code, message, stdout=stdout, stderr=stderr, return_code=returncode, stdout_length=len(stdout), stderr_length=len(stderr))

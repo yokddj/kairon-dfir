@@ -47,7 +47,15 @@ MEMORY_TIMESTAMP_MATRIX: dict[str, dict[str, Any]] = {
     "memory_driver": {"source_plugin": "windows.driverscan", "fields": {}, "timezone": "unknown", "precision": "unknown", "nullable": True, "occurrence": False, "historical": "undated unless source adds a real timestamp"},
     "memory_kernel_module": {"source_plugin": "windows.modules", "fields": {}, "timezone": "unknown", "precision": "unknown", "nullable": True, "occurrence": False, "historical": "undated unless source adds a real timestamp"},
     "memory_system_info": {"source_plugin": "windows.info", "fields": {"memory.system_time": "system_clock_observation"}, "timezone": "UTC/source", "precision": "second", "nullable": True, "occurrence": False, "historical": "operational context; not process occurrence timeline"},
+    "memory_registry_value": {"source_plugin": "memprocfs.registry", "fields": {"timestamp": "registry_execution_artifact"}, "timezone": "UTC", "precision": "sub-second", "nullable": True, "occurrence": True, "historical": "BAM last execution, UserAssist last run and ShimCache file modification times decoded from the hives loaded in memory; other registry values are configuration, not timeline events"},
     "memory_shell_history": {"source_plugin": "linux.bash", "fields": {"command_time": "command_executed"}, "timezone": "source/UTC-normalized when parseable", "precision": "second", "nullable": True, "occurrence": True, "historical": "linux.bash recovers resident bash history entries from process heap memory; CommandTime reflects the shell's own recorded time and is absent for entries without a resident timestamp -- never fabricated"},
+}
+
+# Registry values read from memory that date an execution (or, for ShimCache, a file).
+REGISTRY_TIMELINE_CATEGORIES: dict[str, tuple[str, str]] = {
+    "bam": ("program_execution", "BAM: last execution of the program by this user"),
+    "userassist": ("program_execution", "UserAssist: last run of the program from Explorer by this user"),
+    "shimcache": ("shimcache_entry", "ShimCache: last modification time of the file, not when it ran"),
 }
 
 DISK_TIMESTAMP_MATRIX: dict[str, dict[str, Any]] = {
@@ -183,6 +191,9 @@ def _fetch_memory_docs(case_id: str, evidence_id: str, *, run_id: str | None, pr
     docs: list[dict[str, Any]] = []
     for doc_type in MEMORY_TIMESTAMP_MATRIX:
         filters = [*base_filters, _any_term(["document_type"], doc_type)]
+        if doc_type == "memory_registry_value":
+            categories = list(REGISTRY_TIMELINE_CATEGORIES)
+            filters.append({"bool": {"should": [{"terms": {"category": categories}}, {"terms": {"category.keyword": categories}}], "minimum_should_match": 1}})
         body = {"query": {"bool": {"filter": filters}}, "size": 10000, "track_total_hits": True, "sort": [{"scan_run_id.keyword": {"order": "desc", "unmapped_type": "keyword"}}, {"document_id": {"order": "asc"}}]}
         response = client.search(index=get_memory_index(case_id), body=body, params={"ignore_unavailable": "true"})
         docs.extend(_prepare_artifact_document_for_response(h.get("_source", {}) | {"document_id": h.get("_id")}) for h in response.get("hits", {}).get("hits", []))
@@ -226,8 +237,16 @@ def _fetch_disk_docs(case_id: str, *, source_parser: str | None = None) -> list[
 def _memory_events(case_id: str, evidence_id: str, run_id: str | None, docs: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     events: list[dict[str, Any]] = []
     undated: list[dict[str, Any]] = []
+    seen_registry: set[tuple[Any, ...]] = set()
     for doc in docs:
         doc_type = doc.get("document_type") or doc.get("memory_artifact_type")
+        if doc_type == "memory_registry_value":
+            # The same image analysed again reads the same values: one event per value.
+            decoded = doc.get("decoded") if isinstance(doc.get("decoded"), dict) else {}
+            identity = (doc.get("key_path"), doc.get("value_name"), decoded.get("position"), decoded.get("path"))
+            if identity in seen_registry:
+                continue
+            seen_registry.add(identity)
         if doc_type == "memory_process_entity":
             process = doc.get("process") if isinstance(doc.get("process"), dict) else {}
             for field, kind, semantics in (("create_time", "process_start", "process creation time reported by memory plugin"), ("exit_time", "process_exit", "process exit time reported by memory plugin")):
@@ -247,6 +266,16 @@ def _memory_events(case_id: str, evidence_id: str, run_id: str | None, docs: lis
             event = _base_memory_event(case_id, evidence_id, run_id, doc, artifact_family="network", event_kind="network_connection", timestamp=doc.get("create_time"), timestamp_source="create_time", timestamp_semantics="network connection creation time reported by plugin")
         elif doc_type == "memory_suspicious_region":
             event = _base_memory_event(case_id, evidence_id, run_id, doc, artifact_family="suspicious", event_kind="suspicious_memory", timestamp=doc.get("create_time"), timestamp_source="create_time", timestamp_semantics="suspicious memory observation timestamp when reported by source")
+        elif doc_type == "memory_registry_value":
+            category = doc.get("category")
+            decoded = doc.get("decoded") if isinstance(doc.get("decoded"), dict) else {}
+            if category not in REGISTRY_TIMELINE_CATEGORIES or not decoded:
+                continue
+            kind, semantics = REGISTRY_TIMELINE_CATEGORIES[category]
+            timestamp = doc.get("timestamp") if doc.get("timestamp_source") in ("decoded", "file_last_modified") else None
+            event = _base_memory_event(case_id, evidence_id, run_id, doc, artifact_family="registry", event_kind=kind, timestamp=timestamp, timestamp_source="decoded" if timestamp else None, timestamp_semantics=semantics)
+            event["executable_path"] = event.get("executable_path") or decoded.get("program") or decoded.get("path")
+            event["title"] = doc.get("summary") or event.get("title")
         elif doc_type == "memory_shell_history":
             command_time = doc.get("command_time")
             event = _base_memory_event(case_id, evidence_id, run_id, doc, artifact_family="shell_history", event_kind="shell_command" if command_time else "undated_shell_command", timestamp=command_time, timestamp_source="command_time" if command_time else None, timestamp_semantics="shell history command execution time recovered from process memory" if command_time else "shell history command recovered without a resident timestamp")
@@ -682,7 +711,7 @@ def _clip(value: Any, limit: int = 512) -> str | None:
 
 
 def _nav_tab(family: str) -> str:
-    return {"processes": "processes", "raw_observations": "raw", "network": "artifacts", "modules": "artifacts", "handles": "artifacts", "suspicious": "artifacts", "vads": "artifacts", "drivers": "artifacts", "kernel": "artifacts", "system": "system", "shell_history": "artifacts"}.get(family, "artifacts")
+    return {"processes": "processes", "raw_observations": "raw", "network": "artifacts", "modules": "artifacts", "handles": "artifacts", "suspicious": "artifacts", "vads": "artifacts", "drivers": "artifacts", "kernel": "artifacts", "system": "system", "shell_history": "artifacts", "registry": "system"}.get(family, "artifacts")
 
 
 def _norm_name(value: Any) -> str | None:

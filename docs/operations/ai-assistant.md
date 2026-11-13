@@ -24,6 +24,10 @@ tools** against the same data the analyst can already open in Kairon.
 | `list_lateral_movement` | Remote logons between hosts (the Lateral Movement view), routine accounts hidden unless asked. |
 | `get_memory_triage` | Per memory image: antivirus detections still in memory and the processes the analyst marked. |
 | `get_host_coverage` | Per host: telemetry present and missing, when process records begin, event log clears. |
+| `list_executions` | Programs that ran, from memory processes and execution artifacts (disk or memory), each with its source. |
+| `get_memory_registry` | Registry values read from the hives in a memory image, decoded where known (BAM, UserAssist, ShimCache). |
+| `list_memory_files`, `list_memory_file_extractions`, `read_memory_extracted_file` | File objects in memory, files recovered from memory, and their content as text, hex or strings. |
+| `list_find_evil` | Find Evil records of a memory image (YARA, injected code, AV detections, beacons). |
 | `list_findings`, `list_detections` | Findings and detection hits. |
 
 The tools cannot write: the assistant cannot create findings, edit notes, change

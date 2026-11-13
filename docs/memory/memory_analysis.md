@@ -317,6 +317,23 @@ There is no time for these commands. On Windows builds that Volatility's console
 
 Every command in the case, from disk and memory, is also in **Command History**, in the sidebar.
 
+### Registry values from memory
+
+The **System information** analysis (MemProcFS) also reads the registry hives Windows had loaded, through MemProcFS's registry API, so a memory-only case has the values a disk case gets from its hive files:
+
+| Category | Read from |
+| --- | --- |
+| `computer_name`, `time_zone` | `HKLM\SYSTEM\<current control set>\Control\ComputerName`, `TimeZoneInformation`, `Tcpip\Parameters` |
+| `network_interface` | `Tcpip\Parameters\Interfaces\*` (addresses, DHCP, gateway, DNS) |
+| `os_version`, `profile`, `winlogon` | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`, `ProfileList`, `Winlogon` |
+| `autorun`, `service` | `Run`/`RunOnce` (machine, WOW6432Node and each user), `Services\*` |
+| `bam` | `Services\bam\State\UserSettings\<SID>`: program and last execution |
+| `userassist` | each user's `UserAssist\*\Count`: program (ROT13 decoded), run count, focus time, last run |
+| `shimcache` | `AppCompatCache` as loaded at boot: path and file modification time (not execution time); entries in pages that were not captured are skipped |
+| `run_mru`, `typed_paths` | each user's `RunMRU` and `TypedPaths` |
+
+Per-user keys are shown under the user's SID (`HKU\<SID>\...`), matched through ProfileList. The computer name and time zone become Host Facts (ranked just below the SYSTEM hive file), ProfileList entries become the host's users, and the interface addresses appear in the host's network addresses. BAM, UserAssist and ShimCache entries with a time are in the memory Timeline. A hive that cannot be read from the image is recorded as unknown, not as absent. An image analysed before this reads its registry on the next System information run, in seconds, without a new forensic scan.
+
 ### MemProcFS timeline in the case Timeline
 
 The forensic scan Find Evil runs also builds MemProcFS's timelines. The ones Volatility has no equivalent for are added to the case **Timeline** as events of the memory evidence (`artifact.parser: memprocfs`):

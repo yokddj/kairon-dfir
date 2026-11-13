@@ -110,6 +110,7 @@ ARTIFACT_PROFILES = {
     "suspicious_memory",
 }
 ARTIFACT_PLUGIN_NORMALIZER = {
+    "memprocfs.registry": "memory_registry_value",
     "windows.netscan": "memory_network_connection",
     "windows.netstat": "memory_network_connection",
     "memprocfs.network": "memory_network_connection",
@@ -201,6 +202,7 @@ ARTIFACT_PLUGIN_LIMITS = {
     # Read from the saved inventory; the first analysis of an evidence also runs the forensic scan
     # (about a minute per 4 GB of memory). 64 MiB holds ~300k handle rows.
     "memprocfs.sysinfo": {"timeout_seconds": 1800, "max_output_bytes": 4 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "memprocfs.registry": {"timeout_seconds": 1800, "max_output_bytes": 64 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "memprocfs.dlllist": {"timeout_seconds": 1800, "max_output_bytes": 64 * 1024 * 1024, "max_records": 400000, "max_preview_bytes": 0},
     "memprocfs.handles": {"timeout_seconds": 1800, "max_output_bytes": 64 * 1024 * 1024, "max_records": 400000, "max_preview_bytes": 0},
     "memprocfs.modules": {"timeout_seconds": 1800, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
@@ -430,6 +432,31 @@ def _create_memory_windows_host_facts(system_info: dict, *, evidence: Evidence) 
             "memory windows.info host facts creation failed",
             extra={"case_id": evidence.case_id, "evidence_id": evidence.id, "error": _sanitize_message(exc)},
         )
+    finally:
+        isolated_db.close()
+
+
+def _create_memory_registry_host_facts(documents: list[dict], *, evidence: Evidence, run_id: str, plugin_run_id: str) -> None:
+    """Hostname, timezone and user profiles the registry in memory records, as Host Facts and
+    Host User Facts -- the same records a SYSTEM/SOFTWARE hive on disk produces. Best effort,
+    like _create_memory_windows_host_facts."""
+    from app.services.host_users import create_host_user_fact_observations
+    from app.services.memory.memprocfs_registry import host_fact_inputs, host_user_documents
+
+    if not evidence.host_id:
+        logger.info("memory registry host facts skipped: evidence has no assigned host", extra={"case_id": evidence.case_id, "evidence_id": evidence.id})
+        return
+    isolated_db: Session = SessionLocal()
+    try:
+        fact_documents = extract_host_fact_documents(host_fact_inputs(documents, run_id=run_id, plugin_run_id=plugin_run_id))
+        if fact_documents:
+            create_host_fact_observations(isolated_db, case_id=evidence.case_id, evidence_id=evidence.id, artifact_id=None, host_id=evidence.host_id, observed_at=utc_now(), documents=fact_documents)
+        user_documents = host_user_documents(documents)
+        if user_documents:
+            create_host_user_fact_observations(isolated_db, case_id=evidence.case_id, evidence_id=evidence.id, artifact_id=None, host_id=evidence.host_id, observed_at=utc_now(), documents=user_documents)
+    except Exception as exc:  # noqa: BLE001
+        isolated_db.rollback()
+        logger.warning("memory registry host facts creation failed", extra={"case_id": evidence.case_id, "evidence_id": evidence.id, "error": _sanitize_message(exc)})
     finally:
         isolated_db.close()
 
@@ -790,6 +817,8 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                                 scan_run_id=run.id,
                                 plugin_run_id=plugin_run.id,
                             )
+                            if plugin == "memprocfs.registry":
+                                _create_memory_registry_host_facts(artifact_results[plugin].get("items") or [], evidence=validated.evidence, run_id=run.id, plugin_run_id=plugin_run.id)
                             plugin_run.metadata_json = {
                                 "normalized_type": ARTIFACT_PLUGIN_NORMALIZER[plugin],
                                 "raw_output_retained": True,
@@ -1066,6 +1095,10 @@ def _normalize_artifact_payload(
         "scan_run_id": scan_run_id,
         "plugin_run_id": plugin_run_id,
     }
+    if plugin == "memprocfs.registry":
+        from app.services.memory.memprocfs_registry import normalize_memprocfs_registry
+
+        return normalize_memprocfs_registry(payload, source_plugin=label, **common)
     if plugin in memprocfs_engine.STANDS_IN_FOR and plugin != MEMPROCFS_NETWORK_PLUGIN:
         return _normalize_artifact_payload(memprocfs_engine.STANDS_IN_FOR[plugin], payload, case_id=case_id, evidence_id=evidence_id, scan_run_id=scan_run_id, plugin_run_id=plugin_run_id, source_plugin=label)
     if plugin == "windows.netscan":
@@ -1431,6 +1464,8 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
             timeout_seconds=timeout_seconds, cancellation_check=cancellation_requested, force=force,
         )
         _record_memprocfs_scan(db, run, directory)
+        if plugin == "memprocfs.registry":
+            memprocfs_engine.ensure_registry(directory, Path(evidence_path), output_dir, timeout_seconds=timeout_seconds, cancellation_check=cancellation_requested)
         if plugin == MEMPROCFS_FINDEVIL_PLUGIN:
             rows = memprocfs_engine.findevil_rows(directory)
             if rows is None:

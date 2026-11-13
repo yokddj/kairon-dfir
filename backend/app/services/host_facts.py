@@ -119,6 +119,11 @@ _SOURCE_PRIORITY: dict[tuple[str, str], int] = {
     # app.ingest.raw_parsers.system_hive_identity_parser,
     # app.ingest.windows.memory_host_facts.
     (FACT_HOSTNAME, "system_hive_computername"): 90,
+    # The same SYSTEM-hive values read from the hive loaded in memory
+    # (app.services.memory.memprocfs_registry): the machine's own record,
+    # just below the hive file and above the EVTX echo and windows.info.
+    (FACT_HOSTNAME, "memory_registry_computername"): 85,
+    (FACT_TYPE_TIMEZONE, "memory_registry_timezone_key_name"): 75,
     (FACT_TYPE_TIMEZONE, "system_hive_timezone_key_name"): 80,
     (FACT_DISTRIBUTION, "system_hive_buildlab"): 90,
     (FACT_DISTRIBUTION, "memory_windows_info"): 70,

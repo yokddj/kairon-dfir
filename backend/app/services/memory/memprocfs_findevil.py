@@ -359,6 +359,7 @@ FINDEVIL_MISSING_MESSAGE = "MemProcFS produced no FindEvil result for this image
 SCAN_FILE = "scan.json"
 FINDEVIL_FILE = "findevil.json"
 FORENSIC_DIRNAME = "forensic"
+REGISTRY_FILE = "registry.json"
 
 
 def _memprocfs_version(library: str) -> str | None:
@@ -373,6 +374,20 @@ def _memprocfs_version(library: str) -> str | None:
     return (f"{version} (build {build})" if build else version)[:64] or None
 
 
+def _save_registry(lib: ctypes.CDLL, handle: int, destination: Path) -> bool:
+    """The forensic registry keys of the loaded hives (app.services.memory.memprocfs_registry).
+    Best effort: the rest of the scan does not depend on it."""
+    from app.services.memory.memprocfs_registry import read_registry
+
+    try:
+        snapshot = read_registry(lib, handle)
+        destination.write_text(json.dumps(snapshot), encoding="utf-8")
+        return True
+    except Exception as exc:  # noqa: BLE001 - native data; never lose the scan over it
+        print(f"MemProcFS registry values not saved: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return False
+
+
 def _save_scan(lib: ctypes.CDLL, handle: int, output: Path, rows: list[dict[str, str]] | None, args, watchdog: "_Watchdog") -> int:
     from app.services.memory.memprocfs_inventory import EXIT_WRITE_FAILED, save_inventory
 
@@ -380,6 +395,8 @@ def _save_scan(lib: ctypes.CDLL, handle: int, output: Path, rows: list[dict[str,
 
     def extra(partial: Path) -> None:
         _save_timelines(lib, handle, str(partial / FORENSIC_DIRNAME), progress=watchdog.update)
+        watchdog.update("saving registry values")
+        _save_registry(lib, handle, partial / REGISTRY_FILE)
         if rows is not None:
             (partial / FINDEVIL_FILE).write_text(json.dumps(rows), encoding="utf-8")
         (partial / SCAN_FILE).write_text(json.dumps({
@@ -412,8 +429,13 @@ def main(argv: list[str] | None = None) -> int:
     # covers them. Kairon never passes this on its own; the runner only adds it when the operator
     # has explicitly turned the setting on.
     parser.add_argument("--accept-elastic-license", action="store_true")
+    # Only read the registry values into this file (no forensic scan): for a scan saved before
+    # registry values were part of it.
+    parser.add_argument("--registry-out", default=None)
     args = parser.parse_args(argv)
     _die_with_parent()
+    if args.registry_out:
+        return _registry_only(args)
     watchdog = _Watchdog(scan_timeout=args.scan_timeout, stall_timeout=args.stall_timeout)
     watchdog.start()
 
@@ -470,6 +492,23 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.flush()
         watchdog.finished(0)
         return 0
+    finally:
+        lib.VMMDLL_Close(handle)
+
+
+def _registry_only(args) -> int:
+    try:
+        lib = _load(args.library)
+    except OSError as exc:
+        print(f"MemProcFS library could not be loaded: {exc}", file=sys.stderr)
+        return EXIT_LIBRARY_UNAVAILABLE
+    options = ["", "-device", args.evidence, "-disable-symbolserver", "-disable-python"]
+    handle = lib.VMMDLL_Initialize(len(options), (ctypes.c_char_p * len(options))(*[item.encode("utf-8") for item in options]))
+    if not handle:
+        print("MemProcFS could not open this memory image (not a supported Windows image, or damaged).", file=sys.stderr)
+        return EXIT_IMAGE_NOT_OPENED
+    try:
+        return 0 if _save_registry(lib, handle, Path(args.registry_out)) else EXIT_FORENSIC_UNAVAILABLE
     finally:
         lib.VMMDLL_Close(handle)
 

@@ -59,11 +59,13 @@ logger = logging.getLogger(__name__)
 SOURCE_SYSMON_NETWORK_CONNECTION = "sysmon_network_connection"
 SOURCE_LINUX_DHCLIENT = "linux_dhclient_bound"
 SOURCE_MEMORY_NETSCAN = "memory_windows_netscan"
+SOURCE_MEMORY_REGISTRY_TCPIP = "memory_registry_tcpip_interface"
 
 SOURCE_LABELS: dict[str, str] = {
     SOURCE_SYSMON_NETWORK_CONNECTION: "Sysmon network connection (Event ID 3)",
     SOURCE_LINUX_DHCLIENT: "Linux dhclient DHCP lease log",
     SOURCE_MEMORY_NETSCAN: "Memory analysis (Volatility3 windows.netscan)",
+    SOURCE_MEMORY_REGISTRY_TCPIP: "Memory analysis (Tcpip interface configuration in the registry)",
 }
 
 # Sysmon Event ID 3's own schema: "Source" always identifies the endpoint
@@ -377,6 +379,62 @@ def _query_memory_netscan(client: OpenSearch, memory_index: str, *, evidence_map
     return observations
 
 
+# Interface values that hold this machine's own addresses (not its gateway or DNS servers).
+_TCPIP_ADDRESS_VALUES = ("dhcpipaddress", "ipaddress")
+
+
+def _query_memory_registry_interfaces(client: OpenSearch, memory_index: str, *, evidence_map: dict[str, Evidence]) -> list[dict]:
+    """Addresses the Tcpip interface keys of the SYSTEM hive in memory assign to this host
+    (app.services.memory.memprocfs_registry). Scoped by evidence_id like the netscan source."""
+    if not evidence_map or not index_exists(client, memory_index) or not is_index_queryable(client, memory_index):
+        return []
+    body = {
+        "size": 500,
+        "_source": ["evidence_id", "value_name", "value_data", "key_path", "key_last_write"],
+        "query": {"bool": {"filter": [
+            {"bool": {"should": [{"term": {"document_type": "memory_registry_value"}}, {"term": {"document_type.keyword": "memory_registry_value"}}], "minimum_should_match": 1}},
+            {"bool": {"should": [{"term": {"category": "network_interface"}}, {"term": {"category.keyword": "network_interface"}}], "minimum_should_match": 1}},
+            {"terms": {"evidence_id": list(evidence_map.keys())}},
+        ]}},
+    }
+    try:
+        response = client.search(index=memory_index, body=body)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Memory registry interface query failed on %s: %s", memory_index, exc)
+        return []
+    grouped: dict[tuple[str, str], dict] = {}
+    seen_values: set[tuple[str, str, str]] = set()
+    for hit in response.get("hits", {}).get("hits", []):
+        source = hit.get("_source") or {}
+        if str(source.get("value_name") or "").lower() not in _TCPIP_ADDRESS_VALUES:
+            continue
+        # An image analysed again holds the same value twice.
+        identity = (str(source.get("evidence_id")), str(source.get("key_path")), str(source.get("value_name")))
+        if identity in seen_values:
+            continue
+        seen_values.add(identity)
+        # REG_MULTI_SZ values are stored joined with " | ".
+        for raw_address in str(source.get("value_data") or "").split("|"):
+            classified = classify_ip(raw_address.strip())
+            if not classified or raw_address.strip() in _MEMORY_WILDCARDS:
+                continue
+            seen = _iso(source.get("key_last_write"))
+            key = (classified["ip"], str(source.get("evidence_id")))
+            entry = grouped.setdefault(key, {
+                "raw_value": classified["ip"],
+                "source_kind": SOURCE_MEMORY_REGISTRY_TCPIP,
+                "observation_count": 0,
+                "first_seen": seen,
+                "last_seen": seen,
+                "evidence_id": source.get("evidence_id"),
+                "artifact_id": None,
+            })
+            entry["observation_count"] += 1
+            entry["first_seen"] = _min_ts(entry["first_seen"], seen)
+            entry["last_seen"] = _max_ts(entry["last_seen"], seen)
+    return list(grouped.values())
+
+
 def _min_ts(a: str | None, b: str | None) -> str | None:
     if a is None:
         return b
@@ -419,6 +477,7 @@ def get_host_network_observations(db: Session, *, case_id: str, host_id: str) ->
     raw_observations.extend(_query_sysmon_network(client, events_index, case_id=case_id, host_filter=host_filter))
     raw_observations.extend(_query_linux_dhclient(client, events_index, case_id=case_id, host_filter=host_filter))
     raw_observations.extend(_query_memory_netscan(client, memory_index, evidence_map=evidence_map))
+    raw_observations.extend(_query_memory_registry_interfaces(client, memory_index, evidence_map=evidence_map))
 
     merged: dict[str, dict] = {}
     for observation in raw_observations:
