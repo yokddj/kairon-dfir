@@ -33,7 +33,7 @@ ENGINE_VOLATILITY = "volatility"
 
 # What each Windows profile runs on MemProcFS.
 PROFILE_PLUGINS: dict[str, list[str]] = {
-    "metadata_only": ["memprocfs.sysinfo"],
+    "metadata_only": ["memprocfs.sysinfo", "memprocfs.registry"],
     "processes_basic": ["memprocfs.processes"],
     "processes_extended": ["memprocfs.envars", "memprocfs.getsids", "memprocfs.privileges"],
     "network_basic": ["memprocfs.network"],
@@ -54,7 +54,7 @@ VOLATILITY_EXTRAS: dict[str, list[str]] = {
 
 # The analyses read from the saved inventory (the console and FindEvil open the image themselves).
 INVENTORY_PLUGINS = {
-    "memprocfs.sysinfo", "memprocfs.processes", "memprocfs.network", "memprocfs.dlllist", "memprocfs.handles",
+    "memprocfs.sysinfo", "memprocfs.registry", "memprocfs.processes", "memprocfs.network", "memprocfs.dlllist", "memprocfs.handles",
     "memprocfs.modules", "memprocfs.driverscan", "memprocfs.envars", "memprocfs.getsids", "memprocfs.privileges",
 }
 # Which Volatility plugin's normalizer each one goes through.
@@ -99,6 +99,7 @@ def _lock(directory: Path) -> Iterator[None]:
 
 
 SCAN_FILE = "scan.json"
+REGISTRY_FILE = "registry.json"
 FINDEVIL_FILE = "findevil.json"
 FORENSIC_DIRNAME = "forensic"
 
@@ -286,4 +287,26 @@ def rows(plugin: str, directory: Path) -> list[dict[str, Any]]:
                     attributes = [label for flag, label in (("present", "Present"), ("enabled", "Enabled"), ("default", "Default")) if item.get(flag)]
                     out.append({"PID": int(pid), "Process": process, "Value": item.get("value"), "Privilege": item.get("name"), "Attributes": ",".join(attributes), "Description": None})
         return out
+    if plugin == "memprocfs.registry":
+        snapshot = _json(directory, "registry")
+        return [snapshot] if snapshot else []
     raise ValueError(f"not a MemProcFS inventory analysis: {plugin}")
+
+
+def ensure_registry(
+    directory: Path,
+    evidence_path: Path,
+    work_dir: Path,
+    *,
+    timeout_seconds: int,
+    cancellation_check: Callable[[], bool] | None = None,
+) -> None:
+    """The registry values of a scan saved before they were part of it: read them now (seconds,
+    no forensic scan) next to the rest of the scan."""
+    from app.services.memory.memprocfs_runner import run_registry
+
+    if (directory / REGISTRY_FILE).is_file():
+        return
+    with _lock(directory):
+        if not (directory / REGISTRY_FILE).is_file():
+            run_registry(evidence_path, work_dir, directory / REGISTRY_FILE, timeout_seconds=timeout_seconds, cancellation_check=cancellation_check)

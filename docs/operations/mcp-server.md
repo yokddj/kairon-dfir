@@ -199,21 +199,30 @@ each tool in detail.
 | --- | --- |
 | `list_cases` | The cases, with id, name, status and evidence/host counts; filters by text, status, archived. |
 | `describe_case` | Which artifact types, parsers, event types and hosts actually exist in the case, with counts. |
-| `list_hosts` | The hosts with their event and evidence counts. |
+| `list_hosts` | The hosts with their event and evidence counts, and what the evidence says about each (hostname, OS, time zone). |
 | `get_host_coverage` | Per host: which telemetry families it has or lacks compared with the others, and from when. |
 | `search_events` | The case's parsed events, by text and filters. |
-| `get_event_detail` | One event in full, by its id. |
+| `get_event_detail` | One event in full, by its id; also memory artifacts (ids starting with `memory:`). |
 | `get_timeline` | A window of the case timeline in chronological order. |
 | `search_command_history` | Commands actually executed: PowerShell, cmd, scheduled tasks, Prefetch, Linux shell history, memory. |
 | `get_process_tree` | One process's parent and children. |
 | `list_persistence` | Startup and persistence: run keys, services, scheduled tasks, startup folders... |
-| `list_downloads` | Files downloaded from the internet. |
+| `list_downloads` | Files downloaded from the internet: Mark of the Web, browser history (also MemProcFS's, from memory) and Defender detections that name the download URL (in its logs or still in memory). |
 | `list_email_artifacts` | Webmail activity and local mail stores (OST/PST, .eml/.msg, attachment caches). |
 | `list_lateral_movement` | Remote logons between machines (Windows network/RDP, Linux SSH). |
 | `list_findings` | Findings recorded by the analyst or by detection rules. |
 | `list_detections` | Rule-engine detections (Sigma, YARA, built-in). |
-| `search_memory_artifacts` | Processes, connections, modules, command lines and suspicious findings recovered from memory images. |
+| `search_memory_artifacts` | Processes, connections (with their PID and process), modules, command lines, registry values and suspicious findings recovered from memory images. |
 | `get_memory_triage` | Per memory image: Defender detections still in memory and processes worth a look. |
+| `list_executions` | Programs that ran, each row with its source: memory processes (exited ones too, when a pool scan ran), Prefetch, Amcache, ShimCache, UserAssist and BAM from disk or from memory. |
+| `get_memory_registry` | Registry values read from the hives in a memory image: computer name, addresses, users, OS, autoruns, services, and decoded BAM, UserAssist, ShimCache, RunMRU, TypedPaths. |
+| `list_memory_files` | File objects still in a memory image (windows.filescan, Linux page cache), by path. |
+| `list_memory_file_extractions` | Files recovered from memory images and what each extraction produced. |
+| `read_memory_extracted_file` | The content of a recovered file, as text, hex or strings. |
+| `list_find_evil` | Find Evil records: YARA matches, injected code, antivirus detections, beacons. |
+
+The tools only read. Recovering a file from memory starts a job, so it is
+done in the app (**Memory > Files**); the result is then readable here.
 
 ## Remote clients
 

@@ -45,6 +45,7 @@ FAMILY_SPECS: dict[str, FamilySpec] = {
     "suspicious": FamilySpec("suspicious", "memory_suspicious_region", "suspicious_regions", ("process_name", "protection"), ("disassembly_preview_bounded", "hexdump_preview_bounded"), ("process_name.text", "protection", "tag", "disassembly_preview_bounded", "hexdump_preview_bounded"), ("protection", "tag", "review_status", "source_plugin", "process_entity_id"), ("pid",), ("create_time",)),
     "vads": FamilySpec("vads", "memory_vad", "suspicious_regions", ("process_name", "protection"), ("file_object", "tag"), ("process_name.text", "protection", "tag", "file_object"), ("protection", "tag", "source_plugin", "process_entity_id"), ("pid",)),
     "system": FamilySpec("system", "memory_system_info", "system_info", ("kernel_base",), ("os", "build"), ("os", "build", "kernel"), ("source_plugin",), (), ()),
+    "registry": FamilySpec("registry", "memory_registry_value", "system_info", ("value_name", "category"), ("value_data", "key_path"), ("key_path", "value_name", "value_data", "summary"), ("category", "hive", "user_sid", "status", "source_plugin"), (), ("timestamp",)),
     "shell_history": FamilySpec("shell_history", "memory_shell_history", "shell_history", ("process_name",), ("command",), ("command", "process_name.text"), ("pid", "source_plugin", "process_entity_id"), ("pid",), ("command_time",)),
 }
 
@@ -332,7 +333,7 @@ def _result_from_hit(hit: dict[str, Any], *, evidence_name: str, families: list[
     ppid = process.get("ppid", observed.get("ppid"))
     process_name = src.get("process_name") or process.get("name") or observed.get("name")
     entity_id = src.get("process_entity_id")
-    timestamp = src.get("create_time") or process.get("create_time") or observed.get("create_time") or src.get("command_time")
+    timestamp = src.get("create_time") or process.get("create_time") or observed.get("create_time") or src.get("command_time") or (src.get("timestamp") if doc_type == "memory_registry_value" else None)
     title = _title(family, src, process, observed)
     summary = _summary(family, src, process, observed)
     matched_fields = list((hit.get("highlight") or {}).keys())
@@ -372,6 +373,8 @@ def _title(family: str, src: dict[str, Any], process: dict[str, Any], observed: 
         return f"Command line: {process.get('name') or observed.get('name') or src.get('process_name') or 'process'}"
     if family == "shell_history":
         return str(src.get("command") or "Shell command")[:160]
+    if family == "registry":
+        return str(src.get("summary") or src.get("key_path") or "Registry value")[:160]
     for key in ("module_name", "object_name", "driver_name", "privilege", "sid", "variable", "process_name"):
         if src.get(key):
             return str(src[key])[:160]
@@ -407,6 +410,7 @@ def _navigation(family: str, src: dict[str, Any], entity_id: str | None, pid: in
         "privileges": "processes",
         "system": "system",
         "shell_history": "artifacts",
+        "registry": "system",
     }.get(family, "artifacts")
     return {"tab": tab, "target_tab": tab, "artifact_family": family, "artifact_type": src.get("document_type"), "artifact_id": src.get("document_id"), "run_id": src.get("scan_run_id"), "evidence_id": src.get("evidence_id"), "process_entity_id": entity_id, "pid": pid}
 

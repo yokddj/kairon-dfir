@@ -21,6 +21,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.case_host import CaseHost
+from app.services.ai import memory_tools
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,8 @@ def _event_pivot_url(case_id: str, event_id: Any) -> str | None:
     always well-formed and always points at the event actually looked up.
     """
     if not event_id:
+        return None
+    if memory_tools.is_memory_id(str(event_id)):
         return None
     from urllib.parse import quote
 
@@ -432,7 +435,7 @@ def tool_search_memory_artifacts(db: Session, case_id: str, args: dict) -> dict:
     return {
         "total_matches": result.get("total", 0),
         "facets": result.get("facets") or {},
-        "items": _rows(result.get("results") or [], MEMORY_ARTIFACT_KEYS, limit),
+        "items": [memory_tools.memory_row(item, MEMORY_ARTIFACT_KEYS) for item in (result.get("results") or [])[:limit]],
         "warnings": warnings,
     }
 
@@ -456,10 +459,31 @@ def tool_list_hosts(db: Session, case_id: str, args: dict) -> dict:
                 "evidence_items": h.evidence_count,
                 "first_seen": h.first_seen,
                 "last_seen": h.last_seen,
+                **({"observed": observed} if (observed := _observed_host_facts(db, case_id, h.id)) else {}),
             }
             for h in hosts
         ],
     }
+
+
+def _observed_host_facts(db: Session, case_id: str, host_id: str) -> dict:
+    """What the evidence itself says about a host (hostname, OS, time zone): the case's host
+    name is whatever it was given at upload, which can be a placeholder."""
+    try:
+        from app.services.host_facts import resolve_host_facts
+
+        facts = resolve_host_facts(db, case_id=case_id, host_id=host_id)
+    except Exception:  # noqa: BLE001 - a nicety on top of the host list
+        _recover_session(db)
+        return {}
+    observed = {}
+    for fact in facts:
+        if fact.get("preferred_value"):
+            key = str(fact.get("fact_type") or "").removeprefix("host.")
+            observed[key] = fact["preferred_value"]
+            if fact.get("status") == "conflicting":
+                observed[f"{key}_conflict"] = sorted({row.get("normalized_value") for row in fact.get("conflicting") or [] if row.get("normalized_value")})
+    return observed
 
 
 TIMELINE_KEYS = (
@@ -483,7 +507,10 @@ def tool_get_timeline(db: Session, case_id: str, args: dict) -> dict:
         "page_size": limit,
     }
     result = build_lightweight_timeline_response(db, case_id, params)
-    items = result.get("items") or result.get("events") or []
+    items = [
+        {**item, "id": memory_tools.detail_id(item)}
+        for item in (result.get("items") or result.get("events") or [])
+    ]
     return {
         "total": result.get("total"),
         "entries": _with_pivots(case_id, _rows(items, TIMELINE_KEYS, limit)),
@@ -766,24 +793,30 @@ def tool_list_downloads(db: Session, case_id: str, args: dict) -> dict:
     # the other, so both are asked and the answer says which source it came
     # from -- otherwise "no downloads" would really mean "no MFT was collected".
     browser = _browser_downloads(db, case_id, host, limit)
+    # Defender records the URL of a file it detects on download (its "webfile"
+    # resource), in its logs and in the detection records still in memory --
+    # often the only download record a memory-only case has.
+    defender = memory_tools.defender_downloads(db, case_id, host, limit)
 
-    total = motw_total + browser["total"]
+    total = motw_total + browser["total"] + defender["total"]
     return {
         "total_downloads": total,
         "by_source": {
             "mark_of_the_web": motw_total,
             "browser_history": browser["total"],
+            "defender_detections": defender["total"],
         },
         "summary": result.get("summary") or {},
         # motw_rows carry no event id today (list_motw_items does not surface
         # one), so only the browser-history rows get a pivot link.
-        "downloads": (motw_rows + _with_pivots(case_id, browser["rows"]))[:limit],
-        "warnings": (result.get("warnings") or []) + browser["warnings"],
+        "downloads": (motw_rows + _with_pivots(case_id, browser["rows"]) + defender["rows"])[:limit],
+        "warnings": (result.get("warnings") or []) + browser["warnings"] + defender["warnings"],
         "note": (
-            "No download evidence was recovered from Mark of the Web or browser history. "
-            "Check describe_case: if neither a filesystem artifact (mft/ntfs), Sysmon nor "
-            "browser history was ingested, the evidence needed to answer was never "
-            "collected -- which is not the same as nothing having been downloaded."
+            "No download evidence was recovered from Mark of the Web, browser history or "
+            "Defender detections. Check describe_case: if neither a filesystem artifact "
+            "(mft/ntfs), Sysmon, browser history nor Defender records were ingested, the "
+            "evidence needed to answer was never collected -- which is not the same as "
+            "nothing having been downloaded."
         ) if total == 0 else None,
     }
 
@@ -830,6 +863,12 @@ def tool_list_lateral_movement(db: Session, case_id: str, args: dict) -> dict:
             "(4624/4625) or Linux authentication logs; check describe_case before concluding none happened."
         ) if not edges else None,
     }
+
+
+def tool_list_executions(db: Session, case_id: str, args: dict) -> dict:
+    """Programs that ran, from memory processes and execution artifacts."""
+    host = _resolve_host(db, case_id, args.get("host") or args.get("host_id"))
+    return memory_tools.tool_list_executions(db, case_id, {**args, "_host": host})
 
 
 def tool_get_memory_triage(db: Session, case_id: str, args: dict) -> dict:
@@ -900,7 +939,8 @@ def _browser_downloads(db: Session, case_id: str, host, limit: int) -> dict:
     from app.services.search_service import build_search_v2_params, search_events_v2
 
     params = build_search_v2_params(
-        q="event.type:file_downloaded",
+        q="",
+        event_type=["file_downloaded", "browser_download"],
         host_id=host.id if host else None,
         page_size=limit,
         page=1,
@@ -973,6 +1013,21 @@ def tool_get_event_detail(db: Session, case_id: str, args: dict) -> dict:
     event_id = str(args.get("event_id") or args.get("source_event_id") or "").strip()
     if not event_id:
         raise ToolError("event_id is required.")
+
+    # Memory artifacts live in their own index, under the ids search_memory_artifacts,
+    # get_timeline and the memory tools hand out.
+    if memory_tools.is_memory_id(event_id):
+        detail = memory_tools.memory_event_detail(db, case_id, event_id)
+        if detail is None:
+            return {
+                "found": False,
+                "event_id": event_id,
+                "note": "No memory artifact with this id in this case. Re-run the search that produced it; "
+                "a memory image analysed again gets new ids.",
+            }
+        if detail.get("found"):
+            return detail
+        event_id = str(detail["event_id"])
 
     raw = fetch_event_by_id(case_id, event_id, event_index=None, opensearch_id=event_id) or fetch_event_by_id(
         case_id, event_id, event_index=None, opensearch_id=None
@@ -1088,7 +1143,9 @@ TOOL_SPECS: list[dict] = [
             "whether an analyst has already recorded a finding or detection against it. Call "
             "this before quoting a specific field value -- a path, a URL, a hash, a command "
             "line -- that only appeared in a summarised row from search_events or "
-            "list_downloads; those rows are for finding the event, not for citing from."
+            "list_downloads; those rows are for finding the event, not for citing from. "
+            "Ids that start with memory: (from search_memory_artifacts, get_timeline and the "
+            "memory tools) are read from the memory index and work here too."
         ),
         "input_schema": {
             "type": "object",
@@ -1268,7 +1325,9 @@ TOOL_SPECS: list[dict] = [
             "loaded modules, command lines and suspicious findings from memory-forensics analysis. "
             "Memory artifacts live in a separate index from every other tool here, so describe_case "
             "does not cover them. If this case has no memory evidence at all, the result says so "
-            "explicitly in its warnings -- read that before treating a zero as 'nothing suspicious'."
+            "explicitly in its warnings -- read that before treating a zero as 'nothing suspicious'. "
+            "Rows carry the owning pid and process_name (network connections included) and an id "
+            "that get_event_detail reads in full."
         ),
         "input_schema": {
             "type": "object",
@@ -1353,6 +1412,125 @@ TOOL_SPECS: list[dict] = [
             "required": [],
         },
     },
+    {
+        "name": "list_executions",
+        "description": (
+            "Programs that ran, from every source at once, each row saying where it came from: "
+            "processes in a memory image (including ones that had already exited or were unlinked, "
+            "when a pool scan ran -- marked terminated / scan_only), and execution artifacts "
+            "(Prefetch and Amcache from disk or read from memory by MemProcFS, Prefetch files created "
+            "in an MFT still in memory, ShimCache, UserAssist, BAM). by_source counts each source, so "
+            "a zero can be told apart from a source that was never collected."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "process_name": {"type": "string", "description": "Program name or part of it, e.g. powershell."},
+                "host": {"type": "string", "description": "Restrict to one host. A name or a host_id both work."},
+                "limit": {"type": "integer", "description": f"Max rows per source, 1-{MAX_ROWS_HARD}."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "list_memory_files",
+        "description": (
+            "Files whose file objects were still in a memory image (windows.filescan, Linux page cache): "
+            "what was open or cached at capture time, by full path. It says which images had no file scan, "
+            "so an empty answer is not read as 'the file was not there'. Bytes are not read here: a file "
+            "recovered in the app is read with list_memory_file_extractions and read_memory_extracted_file."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Part of the path or file name, case-insensitive, e.g. Downloads or .ps1."},
+                "evidence_id": {"type": "string", "description": "Restrict to one memory evidence item."},
+                "limit": {"type": "integer", "description": f"Max files, 1-{MAX_ROWS_HARD}."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "list_memory_file_extractions",
+        "description": (
+            "Files recovered from memory images (windows.dumpfiles / Linux page cache), with their status "
+            "and the files each one produced (index, size, SHA-256). Use the extraction_id and result_index "
+            "with read_memory_extracted_file to read the content."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Part of the requested path."},
+                "evidence_id": {"type": "string", "description": "Restrict to one memory evidence item."},
+                "limit": {"type": "integer", "description": f"Max extractions, 1-{MAX_ROWS_HARD}."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "read_memory_extracted_file",
+        "description": (
+            "Read a file recovered from memory: mode=text decodes a window of it (UTF-8 or UTF-16), "
+            "mode=hex shows a hex dump, mode=strings lists the ASCII and UTF-16 strings in the whole file "
+            "with their offsets (optionally filtered by query). Pages recovered from memory can be "
+            "partial: zero-filled gaps are pages that were not resident, not file content."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "extraction_id": {"type": "string", "description": "From list_memory_file_extractions."},
+                "result_index": {"type": "integer", "description": "Which recovered file of that extraction, default 0."},
+                "mode": {"type": "string", "description": "text, hex or strings. Default text."},
+                "offset": {"type": "integer", "description": "Byte offset to start reading at (text and hex)."},
+                "length": {"type": "integer", "description": "Bytes to read (text and hex), at most 4096."},
+                "query": {"type": "string", "description": "strings mode: only strings containing this text."},
+                "min_length": {"type": "integer", "description": "strings mode: minimum string length, default 4."},
+            },
+            "required": ["extraction_id"],
+        },
+    },
+    {
+        "name": "get_memory_registry",
+        "description": (
+            "Registry values read from the hives a Windows memory image had loaded (no disk needed): "
+            "computer name, time zone, network interfaces and their addresses, OS version, user profiles "
+            "(ProfileList), Winlogon, Run/RunOnce autoruns, services, and decoded execution artifacts -- "
+            "BAM (last execution per user), UserAssist (run count and last run), ShimCache (as loaded at "
+            "boot), RunMRU and TypedPaths. Each image gets a host summary (computer name, addresses, users). "
+            "Paths show the hive (HKLM\\SYSTEM\\..., HKU\\<SID>\\...). Says which images had their registry not read."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "One of: computer_name, time_zone, network_interface, os_version, profile, winlogon, autorun, service, bam, userassist, shimcache, run_mru, typed_paths."},
+                "query": {"type": "string", "description": "Text in the key path, value name, value data or decoded program."},
+                "user_sid": {"type": "string", "description": "Only values of this user (BAM, UserAssist, per-user Run keys)."},
+                "evidence_id": {"type": "string", "description": "Restrict to one memory evidence item."},
+                "limit": {"type": "integer", "description": f"Max values, 1-{MAX_ROWS_HARD}."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "list_find_evil",
+        "description": (
+            "The records Find Evil produced for each memory image: YARA rule matches (YR_*), injected or "
+            "unbacked code (PE_INJECT, PRIVATE_RWX...), antivirus detections still in memory (AV_DETECT), "
+            "beacons and more, with the process each one is in. by_indicator_type counts them. Says which "
+            "images Find Evil has not run on. get_memory_triage gives the grouped AV view."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "indicator_type": {"type": "string", "description": "Prefix of the indicator type, e.g. YR_ for YARA matches or AV_DETECT."},
+                "process_name": {"type": "string", "description": "Only records in this process (part of the name)."},
+                "query": {"type": "string", "description": "Text in the description or explanation."},
+                "evidence_id": {"type": "string", "description": "Restrict to one memory evidence item."},
+                "limit": {"type": "integer", "description": f"Max records, 1-{MAX_ROWS_HARD}."},
+            },
+            "required": [],
+        },
+    },
 ]
 
 HANDLERS: dict[str, Callable[[Session, str, dict], dict]] = {
@@ -1372,6 +1550,12 @@ HANDLERS: dict[str, Callable[[Session, str, dict], dict]] = {
     "list_lateral_movement": tool_list_lateral_movement,
     "get_memory_triage": tool_get_memory_triage,
     "get_host_coverage": tool_get_host_coverage,
+    "list_memory_files": memory_tools.tool_list_memory_files,
+    "list_memory_file_extractions": memory_tools.tool_list_memory_file_extractions,
+    "read_memory_extracted_file": memory_tools.tool_read_memory_extracted_file,
+    "list_find_evil": memory_tools.tool_list_find_evil,
+    "get_memory_registry": memory_tools.tool_get_memory_registry,
+    "list_executions": tool_list_executions,
 }
 
 
@@ -1388,7 +1572,7 @@ def run_tool(db: Session, case_id: str, name: str, args: dict) -> dict:
         return {"error": f"Unknown tool '{name}'. Available: {', '.join(sorted(HANDLERS))}."}
     try:
         result = handler(db, case_id, args if isinstance(args, dict) else {})
-    except ToolError as exc:
+    except (ToolError, memory_tools.MemoryToolError) as exc:
         _recover_session(db)
         return {"error": str(exc)}
     except Exception as exc:  # noqa: BLE001 - surfaced to the model, not swallowed
@@ -1419,7 +1603,10 @@ def _enforce_size(result: dict) -> dict:
     encoded = json.dumps(result, default=str)
     if len(encoded) <= MAX_RESULT_CHARS:
         return result
-    for key in ("events", "items", "findings", "entries", "hosts"):
+    for key in (
+        "events", "items", "findings", "entries", "hosts", "downloads", "files", "records",
+        "memory_processes", "execution_artifacts", "extractions", "strings", "values", "registry_in_memory",
+    ):
         rows = result.get(key)
         if isinstance(rows, list) and len(rows) > 3:
             result[key] = rows[: max(3, len(rows) // 2)]

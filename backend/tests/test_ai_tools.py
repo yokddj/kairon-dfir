@@ -23,6 +23,17 @@ from app.services.ai.tools import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_defender_source(monkeypatch):
+    """list_downloads also asks Defender (memory and logs); those lookups are
+    tested in test_ai_memory_tools.py, so here they report nothing."""
+    monkeypatch.setattr(
+        tools_module.memory_tools,
+        "defender_downloads",
+        lambda db, case_id, host, limit: {"total": 0, "rows": [], "warnings": []},
+    )
+
+
 def test_every_advertised_tool_has_a_handler():
     """A tool the model can see but not call would be a silent dead end."""
     advertised = {spec["name"] for spec in TOOL_SPECS}
@@ -532,9 +543,10 @@ def test_browser_downloads_are_found_without_a_filesystem_artifact(monkeypatch):
     result = tools_module.tool_list_downloads(session, "case-1", {"host": "WS01"})
 
     assert result["total_downloads"] == 3
-    assert result["by_source"] == {"mark_of_the_web": 0, "browser_history": 3}
+    assert result["by_source"] == {"mark_of_the_web": 0, "browser_history": 3, "defender_detections": 0}
     assert result["downloads"][0]["event_type"] == "file_downloaded"
-    assert captured["q"] == "event.type:file_downloaded"
+    # Browser history parsers and MemProcFS's web timeline (read from memory) both count.
+    assert captured["event_type"] == ["file_downloaded", "browser_download"]
     assert result["note"] is None, "downloads were found, so there is nothing to caveat"
 
 

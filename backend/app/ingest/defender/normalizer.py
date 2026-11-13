@@ -12,6 +12,7 @@ from app.ingest.defender.helpers import (
     normalize_threat_name,
     normalize_windows_path,
     parse_defender_timestamp,
+    parse_defender_webfile,
 )
 
 
@@ -186,6 +187,14 @@ def normalize_defender_row(document: dict, row: dict, artifact_meta: dict) -> di
             "error_code": error_code,
         }
     )
+
+    # A file detected on download names the URL it came from ("webfile:" resource).
+    web_origin = next(iter(parse_defender_webfile(resource)), None)
+    if web_origin:
+        from urllib.parse import urlsplit
+
+        document.setdefault("url", {}).update({"full": web_origin["url"], "domain": urlsplit(web_origin["url"]).hostname})
+        document["defender"]["download_url"] = web_origin["url"]
 
     if effective_path:
         file_data["path"] = effective_path

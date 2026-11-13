@@ -3,6 +3,7 @@ from pathlib import Path, PureWindowsPath
 import json
 import re
 import csv
+from typing import Any
 
 from dateutil import parser as date_parser
 
@@ -207,6 +208,39 @@ def extract_paths_from_defender_resource(value: str | None) -> tuple[str | None,
     container_file = normalize_windows_path(container_match.group(1)) if container_match else None
     file_path = _extract_first_windows_path(text)
     return file_path, container_file
+
+
+_WEBFILE = re.compile(r"webfile:_?(?P<value>[^;\]\r\n]+)", re.IGNORECASE)
+_URL = re.compile(r"^(?:https?|ftp)://", re.IGNORECASE)
+
+
+def parse_defender_webfile(text: str | None) -> list[dict[str, Any]]:
+    """Defender's ``webfile:`` resources: ``<path>|<url>|pid:<n>,ProcessStart:<t>``.
+
+    Defender records the URL a file came from when it detects a download, so a
+    detection can be the only record of where a tool was fetched from. Only
+    what the resource says is returned; nothing is inferred.
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for match in _WEBFILE.finditer(str(text or "")):
+        parts = [part.strip() for part in match.group("value").split("|")]
+        path = parts[0] if parts else ""
+        url = next((part for part in parts[1:] if _URL.match(part)), None)
+        if not url:
+            continue
+        pid = None
+        for part in parts[1:]:
+            found = re.search(r"\bpid:(\d+)", part, re.IGNORECASE)
+            if found:
+                pid = int(found.group(1))
+                break
+        key = (path.lower(), url)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"file_path": path or None, "url": url, "downloading_pid": pid})
+    return out
 
 
 def extract_hashes_from_defender_text(value: str | None) -> dict[str, str | None]:

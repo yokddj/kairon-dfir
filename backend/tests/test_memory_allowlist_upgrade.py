@@ -16,7 +16,8 @@ def test_an_operator_list_is_left_alone() -> None:
     settings = Settings(memory_allowed_profiles="metadata_only,processes_basic", memory_allowed_plugins="windows.info,windows.pslist")
     assert settings.allowed_memory_profiles == ["metadata_only", "processes_basic"]
     # MemProcFS's versions of the operator's plugins come with them (the Windows engine).
-    assert settings.allowed_memory_plugins == ["windows.info", "windows.pslist", "memprocfs.sysinfo", "memprocfs.processes"]
+    # (memprocfs.registry reads the registry in memory as part of the system information.)
+    assert settings.allowed_memory_plugins == ["windows.info", "windows.pslist", "memprocfs.sysinfo", "memprocfs.registry", "memprocfs.processes"]
 
 
 def test_the_current_default_is_not_extended_twice() -> None:

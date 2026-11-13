@@ -820,6 +820,7 @@ _ADDED_MEMORY_PROFILES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
 )
 _MEMPROCFS_COUNTERPARTS = {
     "memprocfs.sysinfo": "windows.info",
+    "memprocfs.registry": "windows.info",
     "memprocfs.processes": "windows.pslist",
     "memprocfs.network": "windows.netscan",
     "memprocfs.dlllist": "windows.dlllist",
