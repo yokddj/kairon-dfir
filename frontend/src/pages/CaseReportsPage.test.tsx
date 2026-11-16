@@ -189,6 +189,22 @@ describe("CaseReportsPage", () => {
     await waitFor(() => expect(updateCaseReportMock).toHaveBeenCalledWith("case-1", "report-1", { language: "es" }));
   });
 
+  it("keeps unsaved notes when a report setting is saved", async () => {
+    // The language, title and author save the report on change; the refetch that follows used to
+    // reload the note boxes from the server and wipe what had been typed but not saved yet.
+    updateCaseReportMock.mockResolvedValue({ ...reportDraft, language: "es" });
+    getCaseReportMock.mockResolvedValueOnce(reportDraft).mockResolvedValue({ ...reportDraft, language: "es" });
+    renderPage();
+    const note = await screen.findByLabelText(/Executive summary note/i);
+    await userEvent.clear(note);
+    await userEvent.type(note, "Unsaved analyst text");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Report language" }), "es");
+    await waitFor(() => expect(updateCaseReportMock).toHaveBeenCalledWith("case-1", "report-1", { language: "es" }));
+    await waitFor(() => expect(getCaseReportMock.mock.calls.length).toBeGreaterThan(1));
+    await new Promise((resolve) => setTimeout(resolve, 100)); // let the refetched report render
+    expect(screen.getByLabelText(/Executive summary note/i)).toHaveValue("Unsaved analyst text");
+  });
+
   it("section checkboxes and notes update draft", async () => {
     renderPage();
     const appendixCheckbox = await screen.findByRole("checkbox", { name: /Appendix/i });
