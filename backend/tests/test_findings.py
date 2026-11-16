@@ -140,6 +140,22 @@ def test_normalize_finding_create_rejects_missing_events_without_detections() ->
         routes_findings.fetch_event_by_id = original_fetch  # type: ignore[assignment]
 
 
+def test_a_memory_row_can_become_a_finding(monkeypatch) -> None:
+    """Search and Timeline hand out memory: ids for rows from a memory image; they live in the
+    memory index, so looking them up only in the events index rejected every one."""
+    from app.services.ai import memory_tools
+
+    monkeypatch.setattr(routes_findings, "fetch_event_by_id", lambda *a, **kw: pytest.fail("a memory id is not an event"))
+    monkeypatch.setattr(memory_tools, "memory_event_detail", lambda db, case_id, event_id: {"found": True} if event_id == "memory:doc-1" else None)
+
+    result = routes_findings._normalize_finding_create("case-1", FindingCreate(title="Connection", event_ids=["memory:doc-1"]), _FakeDb())
+    assert result["event_ids"] == ["memory:doc-1"]
+
+    with pytest.raises(HTTPException) as missing:
+        routes_findings._normalize_finding_create("case-1", FindingCreate(title="Gone", event_ids=["memory:gone"]), _FakeDb())
+    assert missing.value.detail["missing_event_ids"] == ["memory:gone"]
+
+
 def test_normalize_finding_create_allows_manual_finding() -> None:
     result = routes_findings._normalize_finding_create("case-1", FindingCreate(title="Manual finding", body="Analyst notes"), _FakeDb())
     assert result["title"] == "Manual finding"
