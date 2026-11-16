@@ -54,6 +54,7 @@ SYSTEM_TARGETS: tuple[tuple[str, str, tuple[str, ...] | None, str], ...] = (
     ("{CCS}\\Control\\Session Manager\\AppCompatCache", "values", ("AppCompatCache",), "shimcache"),
     ("{CCS}\\Services", "subkeys", ("ImagePath", "Start", "Type", "DisplayName"), "service"),
 )
+DEFENDER_EXCLUSION_KINDS = ("Paths", "Extensions", "Processes", "IpAddresses", "TemporaryPaths")
 SOFTWARE_TARGETS: tuple[tuple[str, str, tuple[str, ...] | None, str], ...] = (
     ("Microsoft\\Windows NT\\CurrentVersion", "values", (
         "ProductName", "DisplayVersion", "CurrentBuild", "EditionID", "InstallDate", "RegisteredOwner", "RegisteredOrganization",
@@ -64,6 +65,13 @@ SOFTWARE_TARGETS: tuple[tuple[str, str, tuple[str, ...] | None, str], ...] = (
     ("Microsoft\\Windows\\CurrentVersion\\RunOnce", "values", None, "autorun"),
     ("WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run", "values", None, "autorun"),
     ("WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\RunOnce", "values", None, "autorun"),
+    # Defender exclusions: each value NAME is the excluded item (its data is 0). Set locally or by
+    # policy; an exclusion added just before a payload runs is a classic defence-evasion step.
+    *(
+        (f"{root}Microsoft\\Windows Defender\\Exclusions\\{kind}", "values", None, "defender_exclusion")
+        for root in ("", "Policies\\")
+        for kind in DEFENDER_EXCLUSION_KINDS
+    ),
 )
 USER_TARGETS: tuple[tuple[str, str, tuple[str, ...] | None, str], ...] = (
     ("Software\\Microsoft\\Windows\\CurrentVersion\\Run", "values", None, "autorun"),
@@ -411,6 +419,9 @@ def _decode(category: str | None, key: dict, value: dict, raw: bytes, value_type
     if category == "network_interface" and name.lower() in ("leaseobtainedtime",) and len(raw) >= 4:
         seconds = struct.unpack("<I", raw[:4])[0]
         return {"lease_obtained": datetime.fromtimestamp(seconds, UTC).isoformat()}, None
+    if category == "defender_exclusion":
+        kind = str(key.get("path") or "").rsplit("\\", 1)[-1]
+        return {"excluded": name, "kind": kind, "by_policy": "\\Policies\\" in str(key.get("path") or "")}, None
     if category == "os_version" and name.lower() == "installdate" and len(raw) >= 4:
         return {"install_date": datetime.fromtimestamp(struct.unpack("<I", raw[:4])[0], UTC).isoformat()}, None
     return {}, None
@@ -449,6 +460,8 @@ def _summary(document: dict[str, Any]) -> str:
         return f"UserAssist: {decoded.get('program')} ran {decoded.get('run_count')} times, last {decoded.get('last_run')}"
     if category == "shimcache":
         return f"ShimCache (as loaded at boot): {decoded.get('path')}"
+    if category == "defender_exclusion":
+        return f"Defender exclusion ({decoded.get('kind')}{', by policy' if decoded.get('by_policy') else ''}): {decoded.get('excluded')}"
     return f"{document.get('value_name')} = {document.get('value_data')}"[:512]
 
 

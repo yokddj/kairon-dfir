@@ -12,7 +12,7 @@ from app.models.case_host import CaseHost
 from app.models.evidence import Evidence, EvidenceType
 from app.services.command_risk import score_command
 from app.services.memory.command_history import build_command_line_history
-from app.services.memory.search import resolve_requested_families, search_memory_artifacts
+from app.services.memory.search import MAX_WINDOW, resolve_requested_families, search_memory_artifacts
 from app.services.memory.timeline import get_memory_timeline
 from app.services.windows_accounts import service_account
 
@@ -105,6 +105,12 @@ def memory_search_results(db: Session, case_id: str, params: dict[str, Any]) -> 
     warnings: list[str] = []
     evidences = [] if families == [] else _memory_evidences_for_hosts(db, case_id, params)
     exclude_terms = [word.lower() for phrase in _as_list(params.get("exclude_q")) for word in phrase.split()]
+    # Every image is asked for the rows up to the end of the requested page (the merge below
+    # re-sorts them across images), and for its real match count: the rows fetched are only a
+    # window, so counting them made the total the page size and hid every page after the first.
+    fetch_size = min(page * page_size, MAX_WINDOW)
+    matched = 0
+    excluded = 0
     for evidence, host_name in evidences:
         payload = search_memory_artifacts(
             db,
@@ -113,8 +119,7 @@ def memory_search_results(db: Session, case_id: str, params: dict[str, Any]) -> 
             query=q,
             artifact_types=families,
             run_id=params.get("run_id") or params.get("memory_run_id"),
-            page=1,
-            page_size=page_size,
+            window=fetch_size,
             sort=_memory_search_sort(str(params.get("sort") or "relevance")),
             pid=_int_or_none(params.get("pid")),
             ppid=_int_or_none(params.get("ppid")),
@@ -129,10 +134,12 @@ def memory_search_results(db: Session, case_id: str, params: dict[str, Any]) -> 
             mixed_run=True,
         )
         warnings.extend(payload.get("warnings") or [])
+        matched += int(payload.get("total") or 0)
         for result in payload.get("results") or []:
             row = _memory_search_row(case_id, result)
             row["host"] = host_name
             if exclude_terms and any(term in f"{row['title']} {row['summary']}".lower() for term in exclude_terms):
+                excluded += 1
                 continue
             all_results.append(row)
             facets["source_category"][SOURCE_CATEGORY_MEMORY] += 1
@@ -143,7 +150,9 @@ def memory_search_results(db: Session, case_id: str, params: dict[str, Any]) -> 
             if result.get("evidence_name") or result.get("evidence_id"):
                 facets["evidence"][str(result.get("evidence_name") or result.get("evidence_id"))] += 1
     all_results.sort(key=lambda item: (item.get("timestamp") is None, item.get("timestamp") or "", item.get("id") or ""), reverse=str(params.get("sort") or "").endswith("desc"))
-    total = len(all_results)
+    # exclude_q is applied to the fetched rows only, so rows it would drop beyond them are
+    # still counted: the total can overstate a filtered search, never understate it.
+    total = max(matched - excluded, len(all_results))
     start = (page - 1) * page_size
     return {
         "total": total,

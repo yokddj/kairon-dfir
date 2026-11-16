@@ -27,15 +27,18 @@ from app.services.host_identity import get_case_hosts
 # small and high level: the point is to spot a whole missing capability, not to
 # audit every parser. Each entry maps a display name to the artifact.type values
 # that satisfy it.
+# The memprocfs_* types are the same families read out of a memory image by
+# MemProcFS (an MFT, event logs, hives... still resident): a case with only a
+# memory image has them and must not read as having nothing.
 EXPECTED_ARTIFACT_FAMILIES: dict[str, tuple[str, ...]] = {
-    "Filesystem (MFT)": ("mft", "usn"),
-    "Event logs": ("windows_event", "evtx"),
-    "Process execution": ("process", "prefetch", "amcache", "shimcache"),
+    "Filesystem (MFT)": ("mft", "usn", "memprocfs_ntfs"),
+    "Event logs": ("windows_event", "evtx", "memprocfs_eventlog"),
+    "Process execution": ("process", "prefetch", "amcache", "shimcache", "memprocfs_prefetch", "memprocfs_amcache"),
     "PowerShell": ("powershell",),
-    "Registry": ("registry", "registry_event", "registry_persistence"),
-    "Persistence": ("registry_persistence", "scheduled_task", "service"),
+    "Registry": ("registry", "registry_event", "registry_persistence", "memprocfs_registry"),
+    "Persistence": ("registry_persistence", "scheduled_task", "service", "memprocfs_task"),
     "User activity": ("lnk", "jumplist", "userassist", "recentdocs"),
-    "Browser": ("browser",),
+    "Browser": ("browser", "memprocfs_web"),
 }
 
 # Telemetry: the live records an investigation leans on, identified by the

@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from app.core.opensearch import get_memory_index, get_opensearch_client
+from app.core.opensearch import get_memory_index, get_opensearch_client, wildcard_literal
 from app.services.memory.artifact_indexing import _aggregatable_field
 
 MAX_VALUES = 10000
@@ -61,7 +61,7 @@ def stack_family(
     ]
     filters = list(base)
     if q and q.strip():
-        needle = q.strip().replace("*", "").replace("?", "")
+        needle = wildcard_literal(q.strip())
         filters.append({"wildcard": {value_field: {"value": f"*{needle}*", "case_insensitive": True}}})
     if group_field and group_value:
         filters.append({"term": {group_field: group_value}})

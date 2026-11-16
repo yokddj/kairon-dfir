@@ -15,6 +15,8 @@ from app.services.memory.artifact_indexing import _prepare_artifact_document_for
 
 
 PAGE_SIZES = {50, 100, 250, 500}
+# OpenSearch's default max_result_window: rows past it cannot be fetched with from/size.
+MAX_WINDOW = 10_000
 
 
 @dataclass(frozen=True)
@@ -82,9 +84,14 @@ def search_memory_artifacts(
     has_process: bool | None = None,
     warnings_only: bool = False,
     mixed_run: bool = False,
+    window: int | None = None,
 ) -> dict[str, Any]:
     page_size = int(page_size or 100)
-    if page_size not in PAGE_SIZES:
+    if window:
+        # Internal callers that merge several images take the first `window` rows in one
+        # request (page sizes below are the ones the API offers).
+        page, page_size = 1, max(1, min(int(window), MAX_WINDOW))
+    elif page_size not in PAGE_SIZES:
         page_size = 100
     page = max(int(page or 1), 1)
     families = _selected_families(artifact_types)

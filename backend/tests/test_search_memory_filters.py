@@ -92,3 +92,24 @@ def test_memory_rows_follow_host_type_and_exclusion_filters(monkeypatch: pytest.
     searched.clear()
     investigation_memory.memory_search_results(None, "case-1", {"exclude_host": ["SRV01"]})
     assert [evidence for evidence, _ in searched] == ["mem-a", "mem-c"]
+
+
+def test_memory_total_is_the_match_count_not_the_rows_fetched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rows fetched are a window; the total must be what matched, so later pages exist."""
+    asked: list[int] = []
+
+    def fake_search(db, *, evidence_id, window, **_kwargs):
+        asked.append(window)
+        rows = [{"result_id": f"{evidence_id}-{n:05d}", "title": f"p{n}", "summary": "", "artifact_type": "memory_process_entity"} for n in range(window)]
+        return {"total": 1234, "results": rows, "warnings": []}
+
+    monkeypatch.setattr(investigation_memory, "memory_evidences", lambda db, case_id, evidence_id=None: [SimpleNamespace(id="mem-a", host="WS01")])
+    monkeypatch.setattr(investigation_memory, "_evidence_host_name", lambda db, evidence: evidence.host)
+    monkeypatch.setattr(investigation_memory, "search_memory_artifacts", fake_search)
+
+    first = investigation_memory.memory_search_results(None, "case-1", {"page_size": 50})
+    assert first["total"] == 1234 and first["has_next"] and len(first["results"]) == 50
+
+    third = investigation_memory.memory_search_results(None, "case-1", {"page": 3, "page_size": 50})
+    assert asked[-1] == 150  # rows up to the end of the requested page
+    assert [row["title"] for row in third["results"]][:1] == ["p100"]

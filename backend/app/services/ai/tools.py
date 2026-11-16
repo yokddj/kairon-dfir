@@ -1496,13 +1496,13 @@ TOOL_SPECS: list[dict] = [
             "computer name, time zone, network interfaces and their addresses, OS version, user profiles "
             "(ProfileList), Winlogon, Run/RunOnce autoruns, services, and decoded execution artifacts -- "
             "BAM (last execution per user), UserAssist (run count and last run), ShimCache (as loaded at "
-            "boot), RunMRU and TypedPaths. Each image gets a host summary (computer name, addresses, users). "
+            "boot), RunMRU and TypedPaths, and Defender exclusions (paths, extensions, processes). Each image gets a host summary (computer name, addresses, users). "
             "Paths show the hive (HKLM\\SYSTEM\\..., HKU\\<SID>\\...). Says which images had their registry not read."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "category": {"type": "string", "description": "One of: computer_name, time_zone, network_interface, os_version, profile, winlogon, autorun, service, bam, userassist, shimcache, run_mru, typed_paths."},
+                "category": {"type": "string", "description": "One of: computer_name, time_zone, network_interface, os_version, profile, winlogon, autorun, service, bam, userassist, shimcache, run_mru, typed_paths, defender_exclusion."},
                 "query": {"type": "string", "description": "Text in the key path, value name, value data or decoded program."},
                 "user_sid": {"type": "string", "description": "Only values of this user (BAM, UserAssist, per-user Run keys)."},
                 "evidence_id": {"type": "string", "description": "Restrict to one memory evidence item."},
