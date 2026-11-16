@@ -193,8 +193,13 @@ def normalize_threat_name(value: str | None) -> str | None:
     return clean_text(value)
 
 
+# A Defender resource list separates entries with "; " ("file:_C:\a.exe;
+# webfile:_C:\a.exe|http://...") and a webfile entry splits its parts with "|".
+_PATH_IN_RESOURCE = re.compile(r'([A-Za-z]:\\[^"\r\n|]+?)(?=;\s*[A-Za-z]+:|\||["\r\n]|$)')
+
+
 def _extract_first_windows_path(text: str) -> str | None:
-    match = re.search(r'([A-Za-z]:\\[^"\r\n]+)', text)
+    match = _PATH_IN_RESOURCE.search(text)
     if match:
         return normalize_windows_path(match.group(1).rstrip(".,;"))
     return None
@@ -204,7 +209,7 @@ def extract_paths_from_defender_resource(value: str | None) -> tuple[str | None,
     text = clean_text(value)
     if not text:
         return None, None
-    container_match = re.search(r"containerfile:?_?([A-Za-z]:\\[^,\r\n]+)", text, flags=re.IGNORECASE)
+    container_match = re.search(r"containerfile:?_?([A-Za-z]:\\[^,;|\r\n]+)", text, flags=re.IGNORECASE)
     container_file = normalize_windows_path(container_match.group(1)) if container_match else None
     file_path = _extract_first_windows_path(text)
     return file_path, container_file

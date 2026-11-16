@@ -40,6 +40,13 @@ def tr(text: str, **values: Any) -> str:
 
 
 _SPANISH: dict[str, str] = {
+    # Generic recommendations
+    "Isolate affected hosts and preserve volatile evidence if the case is still active.": "Aislar los equipos afectados y preservar la evidencia volátil si el caso sigue activo.",
+    "Review process trees and persistence mechanisms related to the suspicious execution chain.": "Revisar los árboles de procesos y los mecanismos de persistencia relacionados con la cadena de ejecución sospechosa.",
+    "Review outbound network, cloud access and removable media activity around the suspicious timeline.": "Revisar la actividad de red saliente, de acceso a la nube y de medios extraíbles en torno a la cronología sospechosa.",
+    "Review and remove confirmed persistence only after preserving the relevant artifacts and event references.": "Revisar y eliminar la persistencia confirmada solo después de preservar los artefactos y las referencias a los eventos relevantes.",
+    "Block or monitor the extracted IOCs in downstream detection and containment tooling.": "Bloquear o vigilar los IOC extraídos en las herramientas de detección y contención.",
+    "Preserve the collected evidence and investigation exports to keep the case narrative reproducible.": "Conservar la evidencia recogida y las exportaciones de la investigación para que la narrativa del caso sea reproducible.",
     # Section titles
     "Executive Summary": "Resumen ejecutivo",
     "Scope": "Alcance",

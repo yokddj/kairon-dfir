@@ -32,6 +32,9 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asString(value: unknown): string {
   if (value === null || value === undefined) return "";
+  // A nested object (an event's "process" block) is not a value: "[object Object]".
+  if (Array.isArray(value)) return value.filter((item) => item !== null && typeof item !== "object").map(String).join(", ").trim();
+  if (typeof value === "object") return "";
   return String(value).trim();
 }
 

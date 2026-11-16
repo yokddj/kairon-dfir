@@ -155,6 +155,18 @@ function BreakdownList({ title, values }: { title: string; values?: Record<strin
   );
 }
 
+function linkedName(names: Map<string, string>, id: string | null | undefined) {
+  if (!id) return "none";
+  return names.get(id) || id;
+}
+
+// The options of a link picker; a linked id the case no longer lists stays selectable.
+function withCurrent(names: Map<string, string>, current: string): Array<[string, string]> {
+  const options = Array.from(names.entries());
+  if (current && !names.has(current)) options.push([current, current]);
+  return options;
+}
+
 export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", hostId, embedded = false, showHeader = true }: Props) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -188,6 +200,8 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
   const [formTitle, setFormTitle] = useState("");
   const [formBody, setFormBody] = useState("");
   const [formSeverity, setFormSeverity] = useState("info");
+  const [formConfidence, setFormConfidence] = useState("");
+  const [formRisk, setFormRisk] = useState("");
   const [formStatus, setFormStatus] = useState("draft");
   const [formTags, setFormTags] = useState("");
   const [formEvidenceId, setFormEvidenceId] = useState(evidenceId);
@@ -196,6 +210,12 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
   const [formArtifactFamily, setFormArtifactFamily] = useState("");
   const [formArtifactType, setFormArtifactType] = useState("");
   const [formSourceView, setFormSourceView] = useState("");
+
+  // Names for the host and evidence a finding links to; the finding stores ids.
+  const caseHostsQuery = useQuery({ queryKey: ["case-hosts", caseId], queryFn: () => api.getCaseHosts(caseId), enabled: Boolean(caseId), staleTime: 15_000, refetchOnWindowFocus: false });
+  const caseEvidencesQuery = useQuery({ queryKey: ["evidences", caseId], queryFn: () => api.listEvidences(caseId), enabled: Boolean(caseId), staleTime: 15_000, refetchOnWindowFocus: false });
+  const hostNames = new Map((caseHostsQuery.data?.hosts ?? []).map((item) => [item.id, item.display_name || item.canonical_name]));
+  const evidenceNames = new Map((caseEvidencesQuery.data ?? []).map((item) => [item.id, item.original_filename]));
 
   const findingsQuery = useQuery({
     queryKey: ["findings", caseId, filters, host || "all-hosts", hostId || "", page, pageSize],
@@ -264,6 +284,8 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
         description: formBody,
         severity: formSeverity as Finding["severity"],
         status: formStatus as Finding["status"],
+        ...(formConfidence ? { confidence: formConfidence as Finding["confidence"] } : {}),
+        ...(formRisk.trim() !== "" && Number.isFinite(Number(formRisk)) ? { risk_score: Math.min(100, Math.max(0, Math.round(Number(formRisk)))) } : {}),
         tags: formTags.split(",").map((tag) => tag.trim()).filter(Boolean),
         linked_evidence_id: formEvidenceId.trim() || undefined,
         evidence_id: formEvidenceId.trim() || undefined,
@@ -314,6 +336,8 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     setFormTitle(searchParams.get("title") || "Suspicious memory artifact");
     setFormBody(searchParams.get("body") || "");
     setFormSeverity(searchParams.get("severity") || "info");
+    setFormConfidence("");
+    setFormRisk("");
     setFormStatus(searchParams.get("status") || "draft");
     setFormTags(searchParams.get("tags") || "");
     setFormEvidenceId(searchParams.get("evidence_id") || evidenceId || "");
@@ -333,6 +357,8 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     setFormTitle(finding?.title || "");
     setFormBody(finding?.body || finding?.description || "");
     setFormSeverity(finding?.severity || "info");
+    setFormConfidence(finding?.confidence || "");
+    setFormRisk(finding?.risk_score ? String(finding.risk_score) : "");
     setFormStatus(finding?.status === "new" ? "draft" : finding?.status || "draft");
     setFormTags((finding?.tags || []).join(", "));
     setFormEvidenceId(finding?.linked_evidence_id || finding?.evidence_id || evidenceId || "");
@@ -1004,7 +1030,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
                         <Chip>{sourceLabel(finding)}</Chip>
                       </div>
                       <p className="mt-3 line-clamp-2 text-sm text-muted">{finding.summary || finding.body || finding.description || "No summary."}</p>
-                      <p className="mt-2 text-xs text-muted">Linked evidence: {finding.linked_evidence_id || finding.evidence_id || "none"} · Linked host: {finding.linked_host_id || "none"} · Source: {finding.source_view || finding.source || "manual"}</p>
+                      <p className="mt-2 text-xs text-muted">Linked evidence: {linkedName(evidenceNames, finding.linked_evidence_id || finding.evidence_id)} · Linked host: {linkedName(hostNames, finding.linked_host_id)} · Source: {finding.source_view || finding.source || "manual"}</p>
                       <div className="mt-3 flex flex-wrap gap-2">
                         {(finding.reasons ?? []).slice(0, 3).map((reason) => <Chip key={`${finding.id}-${reason}`} tone="warning">{reason}</Chip>)}
                         {(finding.tags ?? []).slice(0, 3).map((tag) => <Chip key={`${finding.id}-${tag}`}>{tag}</Chip>)}
@@ -1052,12 +1078,14 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
               <label className="text-xs text-muted">Body / Notes<textarea value={formBody} onChange={(event) => setFormBody(event.target.value)} className="mt-1 h-28 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="text-xs text-muted">Severity<select value={formSeverity} onChange={(event) => setFormSeverity(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink">{["info", "low", "medium", "high", "critical"].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+                <label className="text-xs text-muted">Confidence<select value={formConfidence} onChange={(event) => setFormConfidence(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink"><option value="">Not set</option>{["low", "medium", "high", "exact"].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+                <label className="text-xs text-muted">Risk score (0-100)<input type="number" min={0} max={100} value={formRisk} onChange={(event) => setFormRisk(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
                 <label className="text-xs text-muted">Status<select value={formStatus} onChange={(event) => setFormStatus(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink">{v1Statuses.map((value) => <option key={value} value={value}>{lifecycleLabel(value)}</option>)}</select></label>
               </div>
               <label className="text-xs text-muted">Tags<input value={formTags} onChange={(event) => setFormTags(event.target.value)} placeholder="ctf, memory, suspicious" className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
               <div className="grid gap-3 md:grid-cols-2">
-                <label className="text-xs text-muted">Linked evidence<input value={formEvidenceId} onChange={(event) => setFormEvidenceId(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
-                <label className="text-xs text-muted">Linked host<input value={formHostId} onChange={(event) => setFormHostId(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+                <label className="text-xs text-muted">Linked evidence<select value={formEvidenceId} onChange={(event) => setFormEvidenceId(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink"><option value="">None</option>{withCurrent(evidenceNames, formEvidenceId).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
+                <label className="text-xs text-muted">Linked host<select value={formHostId} onChange={(event) => setFormHostId(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink"><option value="">None</option>{withCurrent(hostNames, formHostId).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
               </div>
               <div className="grid gap-3 md:grid-cols-3">
                 <label className="text-xs text-muted">Artifact ID<input value={formArtifactId} onChange={(event) => setFormArtifactId(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>

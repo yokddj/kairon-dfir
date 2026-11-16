@@ -8,6 +8,7 @@ from urllib.parse import quote_plus, urlparse
 
 from sqlalchemy.orm import Session
 
+from app.ingest.defender.helpers import parse_defender_webfile
 from app.services.case_capabilities import capability_route
 from app.services.host_identity import normalize_host_alias
 from app.services.indicator_resolution import extract_indicators
@@ -76,6 +77,10 @@ def list_motw_items(db: Session, case_id: str, params: dict[str, Any]) -> dict[s
         fetched.extend(_search_source(db, case_id, "mft_ads", ["mft"], q or "Zone.Identifier", host_filter, 75, warnings))
     if not source_filter or "sysmon_15" in source_filter:
         fetched.extend(_search_source(db, case_id, "sysmon_15", ["windows_event", "sysmon"], q or "Zone.Identifier", host_filter, 75, warnings))
+    if not source_filter or "defender_webfile" in source_filter:
+        # Defender records the URL of a file it detects on download; with no
+        # Zone.Identifier left (or none collected) it is the download's record.
+        fetched.extend(_search_source(db, case_id, "defender_webfile", ["defender", "memprocfs_eventlog"], q or "webfile", host_filter, 50, warnings))
     if q and (not source_filter or "browser_correlation" in source_filter):
         fetched.extend(_search_source(db, case_id, "browser_correlation", ["browser", "browser_download"], q, host_filter, 30, warnings))
 
@@ -192,7 +197,13 @@ def _normalize_row(case_id: str, row: dict[str, Any], source: str) -> dict[str, 
         base_path = _first(file.get("path"), raw.get("download", {}).get("target_path") if isinstance(raw.get("download"), dict) else "", row.get("summary"))
         zone_path = f"{base_path}:Zone.Identifier" if base_path else ""
         host_url = host_url or _first(_obj(raw.get("download")).get("url"), raw.get("url"))
-    if not ZONE_ADS_SUFFIX_RE.search(zone_path) and "zone.identifier" not in message.lower() and source != "browser_correlation":
+    if source == "defender_webfile":
+        resource = " ".join(str(value or "") for value in (_obj(raw.get("detection")).get("resource"), _obj(raw.get("defender")).get("resource"), event_data.get("Path"), raw.get("raw_summary")))
+        origin = next(iter(parse_defender_webfile(resource)), None)
+        if not origin or not origin.get("file_path"):
+            return None
+        base_path, zone_path, host_url = str(origin["file_path"]), "", str(origin["url"])
+    elif not ZONE_ADS_SUFFIX_RE.search(zone_path) and "zone.identifier" not in message.lower() and source != "browser_correlation":
         return None
     zone_id = parsed["zone_id"]
     risk_score, risk_reasons = _score_motw(base_path, zone_id, host_url, referrer_url, message)
@@ -271,7 +282,9 @@ def _dedupe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     output: list[dict[str, Any]] = []
     for item in items:
-        key = "|".join(str(item.get(part) or "").lower() for part in ("host", "file_path", "zone_identifier_path", "source_artifact", "source_event_id"))
+        # Defender logs a download in several records (detected, remediated).
+        parts = ("host", "file_path", "host_url", "source_artifact") if item.get("source_artifact") == "defender_webfile" else ("host", "file_path", "zone_identifier_path", "source_artifact", "source_event_id")
+        key = "|".join(str(item.get(part) or "").lower() for part in parts)
         if key in seen:
             continue
         seen.add(key)

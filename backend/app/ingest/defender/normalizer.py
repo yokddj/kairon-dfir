@@ -36,7 +36,9 @@ def normalize_defender_row(document: dict, row: dict, artifact_meta: dict) -> di
     engine_version = clean_text(first("EngineVersion", "Engine Version"))
     signature_version = clean_text(first("SignatureVersion", "Signature Version", "Security intelligence Version"))
     resource = clean_text(first("Resource", "Resources", "Path", "FilePath"))
-    path = normalize_windows_path(first("Path", "FilePath"))
+    raw_path = first("Path", "FilePath")
+    # EVTX records name the detected item as a resource list, like Resource does.
+    path = extract_paths_from_defender_resource(raw_path)[0] or normalize_windows_path(raw_path)
     resource_path, container_file = extract_paths_from_defender_resource(resource)
     container_file = normalize_windows_path(first("ContainerFile")) or container_file
     effective_path = path or resource_path

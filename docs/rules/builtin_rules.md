@@ -178,6 +178,7 @@ Then restart the backend and worker so the change takes effect.
   - `service.image_path`
 - **Match example**: a new service pointing to `C:\\Users\\...\\AppData\\...`
 - **Possible false positives**: legitimate installers, EDR agents, support tools
+- **Severity adjustment**: a service whose binary sits where only installers write is scored lower: a driver in `System32\drivers` or an `svchost.exe` service is low, any other binary in `System32`/`SysWOW64` or under `Program Files` is medium. A service built on an interpreter (`cmd.exe`, `powershell.exe`, `rundll32.exe`...) or with an encoded or hidden command keeps the event's severity.
 - **How to investigate it**: review image path, account, start type, and whether the binary exists
 
 ### 3. Scheduled task persistence

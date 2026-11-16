@@ -262,6 +262,24 @@ def _serialize_analysis_job(job: CaseAnalysisJob | None) -> dict:
     }
 
 
+def _indexed_counts_by_evidence(case_id: str) -> dict[str, int]:
+    """Indexed events per evidence; empty when the index cannot be read."""
+    try:
+        client = get_opensearch_client()
+        index = get_events_index(case_id)
+        if not index_exists(client, index) or not is_index_queryable(client, index):
+            return {}
+        response = client.search(
+            index=index,
+            body={"size": 0, "query": {"term": {"case_id": case_id}}, "aggs": {"evidence": {"terms": {"field": "evidence_id", "size": 500}}}},
+            params={"ignore_unavailable": "true"},
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+    buckets = ((response.get("aggregations") or {}).get("evidence") or {}).get("buckets") or []
+    return {str(bucket.get("key")): int(bucket.get("doc_count") or 0) for bucket in buckets if bucket.get("key")}
+
+
 def _build_case_context(db: Session, case_id: str) -> dict:
     item = db.get(Case, case_id)
     if not item:
@@ -282,6 +300,10 @@ def _build_case_context(db: Session, case_id: str) -> dict:
     for artifact in artifacts:
         artifact_counts_by_evidence[artifact.evidence_id] = artifact_counts_by_evidence.get(artifact.evidence_id, 0) + int(artifact.record_count or 0)
         artifact_record_counts_by_type[artifact.artifact_type] = artifact_record_counts_by_type.get(artifact.artifact_type, 0) + int(artifact.record_count or 0)
+    # Events indexed without an artifact row (memory-image timelines, for one)
+    # only show in the index itself.
+    for evidence_id, count in _indexed_counts_by_evidence(case_id).items():
+        artifact_counts_by_evidence[evidence_id] = max(artifact_counts_by_evidence.get(evidence_id, 0), count)
 
     parser_errors_by_evidence: dict[str, int] = {}
     active_jobs: list[dict] = []
