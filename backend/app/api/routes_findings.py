@@ -104,6 +104,21 @@ def _normalize_finding_create(case_id: str, payload: FindingCreate, db: Session)
     event_previews: list[dict] = []
     missing_event_ids: list[str] = []
     for event_id in event_ids:
+        if event_id.startswith(("memory:", "memory-timeline:")):
+            # Rows from a memory image (Search, Timeline) carry ids of the memory index, not of
+            # the events index: look them up there, or every one reads as missing.
+            from app.services.ai.memory_tools import memory_event_detail
+
+            detail = memory_event_detail(db, case_id, event_id)
+            if not detail:
+                missing_event_ids.append(event_id)
+            elif detail.get("event_id"):  # a memory-timeline id that points at a disk event
+                event = fetch_event_by_id(case_id, detail["event_id"], event_index=None, opensearch_id=None)
+                if event:
+                    event_previews.append(event)
+                else:
+                    missing_event_ids.append(event_id)
+            continue
         event = fetch_event_by_id(case_id, event_id, event_index=None, opensearch_id=None)
         if not event:
             missing_event_ids.append(event_id)

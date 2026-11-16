@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from app.core.database import Base, TimestampMixin, UUIDMixin
 
@@ -41,3 +41,13 @@ class TimelineBookmark(UUIDMixin, TimestampMixin, Base):
     order_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     include_in_report: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     remap_status: Mapped[str] = mapped_column(String(32), default="current", nullable=False)
+
+    @validates("title", "created_by")
+    def _fit_column(self, key: str, value: str | None) -> str | None:
+        # A key event's title defaults to the event's message, which for some sources (a Defender
+        # detection with its full resource path, a long command line) is far longer than the
+        # column: saving it failed with a 500. The full text stays in summary.
+        limit = 255
+        if value is not None and len(value) > limit:
+            return value[: limit - 1] + "\u2026"
+        return value

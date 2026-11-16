@@ -841,6 +841,7 @@ function TimelinePage() {
                 Save key event
               </button>
             </div>
+            {createBookmark.isError ? <p className="mt-3 text-sm text-red-300">{createBookmark.error instanceof Error ? createBookmark.error.message : "Could not save the key event."}</p> : null}
           </div>
         </div>
       ) : null}
