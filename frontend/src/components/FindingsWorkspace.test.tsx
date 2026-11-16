@@ -14,6 +14,8 @@ const deleteFindingMock = vi.fn();
 const runCorrelationMock = vi.fn();
 const searchMock = vi.fn();
 const extractAndResolveIndicatorsMock = vi.fn();
+const getCaseHostsMock = vi.fn();
+const listEvidencesMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -24,6 +26,8 @@ vi.mock("../api/client", () => ({
     runCorrelation: (...args: unknown[]) => runCorrelationMock(...args),
     search: (...args: unknown[]) => searchMock(...args),
     extractAndResolveIndicators: (...args: unknown[]) => extractAndResolveIndicatorsMock(...args),
+    getCaseHosts: (...args: unknown[]) => getCaseHostsMock(...args),
+    listEvidences: (...args: unknown[]) => listEvidencesMock(...args),
   },
 }));
 
@@ -100,6 +104,21 @@ describe("FindingsWorkspace", () => {
     runCorrelationMock.mockResolvedValue({ report: { findings_generated: 0 }, findings: [] });
     searchMock.mockResolvedValue({ items: [] });
     extractAndResolveIndicatorsMock.mockResolvedValue({ indicators: [] });
+    getCaseHostsMock.mockResolvedValue({ case_id: "case-1", hosts: [{ id: "host-1", display_name: "WS-01", canonical_name: "ws-01" }, { id: "host-2", display_name: "WS-02", canonical_name: "ws-02" }], host_candidates: [] });
+    listEvidencesMock.mockResolvedValue([{ id: "evidence-1", original_filename: "memory.raw" }]);
+  });
+
+  it("names the linked host and evidence and saves confidence and risk", async () => {
+    listFindingsPageMock.mockResolvedValue({ items: [finding()], total: 1, page: 1, page_size: 100, total_pages: 1 });
+    renderWorkspace();
+    expect(await screen.findByText(/Linked evidence: memory.raw · Linked host: WS-01/)).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Edit"));
+    const dialog = screen.getByRole("dialog", { name: /Finding editor/i });
+    await userEvent.selectOptions(within(dialog).getByLabelText(/Linked host/i), "host-2");
+    await userEvent.selectOptions(within(dialog).getByLabelText(/Confidence/i), "high");
+    await userEvent.type(within(dialog).getByLabelText(/Risk score/i), "85");
+    await userEvent.click(within(dialog).getByRole("button", { name: /Save finding/i }));
+    await waitFor(() => expect(updateFindingMock).toHaveBeenCalledWith("case-1", "finding-1", expect.objectContaining({ linked_host_id: "host-2", confidence: "high", risk_score: 85 })));
   });
 
   it("shows empty state and creates a finding", async () => {

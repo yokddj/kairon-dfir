@@ -1663,6 +1663,40 @@ def _command_is_strongly_suspicious(command: str | None) -> bool:
     )
 
 
+# Binaries that run whatever their arguments say: a service built on one is
+# not vouched for by the folder it lives in.
+_SERVICE_INTERPRETERS = {"cmd.exe", "powershell.exe", "pwsh.exe", "rundll32.exe", "regsvr32.exe", "mshta.exe", "wscript.exe", "cscript.exe", "msiexec.exe", "conhost.exe", "bitsadmin.exe", "certutil.exe"}
+
+
+def _service_image_path(document: dict) -> str:
+    event_data = ((document.get("windows", {}) or {}).get("event_data") or {}) if isinstance(document.get("windows"), dict) else {}
+    service = document.get("service", {}) if isinstance(document.get("service"), dict) else {}
+    return str(service.get("image_path") or event_data.get("ImagePath") or event_data.get("ServiceFileName") or "").strip()
+
+
+def _protected_service_image_score(image: str) -> int | None:
+    """Risk for a service whose binary is in a folder only installers write,
+    or None when the folder says nothing about it."""
+    text = image.strip().lower()
+    quoted = re.match(r'^"([^"]+)"', text)
+    binary = (quoted.group(1) if quoted else re.split(r"\s(?=[-/])", text, maxsplit=1)[0]).replace("/", "\\")
+    binary = binary.replace("%systemroot%", "\\windows").replace("%windir%", "\\windows")
+    if binary.startswith("\\systemroot\\"):
+        binary = "\\windows\\" + binary[len("\\systemroot\\"):]
+    elif binary.startswith("system32\\"):
+        binary = "\\windows\\" + binary
+    name = binary.rsplit("\\", 1)[-1]
+    if name in _SERVICE_INTERPRETERS:
+        return None
+    if re.search(r"(?:^|\\)windows\\system32\\drivers\\[^\\]+\.sys$", binary):
+        return 30
+    if re.search(r"(?:^|\\)windows\\(?:system32|syswow64)\\svchost\.exe$", binary):
+        return 30
+    if re.search(r"(?:^|\\)windows\\(?:system32|syswow64)\\[^\\]+$", binary) or re.search(r"^[a-z]:\\program files(?: \(x86\))?\\", binary):
+        return 50
+    return None
+
+
 def _apply_false_positive_reduction(document: dict) -> dict:
     tags = set(document.get("tags", []))
     reasons = set(str(item) for item in (document.get("suspicious_reasons") or []) if item)
@@ -1776,6 +1810,17 @@ def _apply_false_positive_reduction(document: dict) -> dict:
                 if reason not in {"Run key persistence", "RunOnce persistence", "Startup folder persistence"}
             }
             _apply_noise_score(document, 20, "Known-good Microsoft persistence location")
+
+    if "service_install" in tags and not strong_suspicion:
+        # Installing a service is persistence, but drivers and services whose
+        # binary sits where only an installer writes (the system folder,
+        # Program Files) are how hardware and software are set up.
+        image = _service_image_path(document)
+        if image:
+            folder_score = _protected_service_image_score(image)
+            if folder_score is not None:
+                tags.add("service_in_protected_folder")
+                _apply_noise_score(document, folder_score, "Service binary in a protected install folder")
 
     if artifact_type in {"amcache", "shimcache", "mft", "recycle_bin", "cloud", "dns", "srum", "wlan"} and not strong_suspicion and int(document.get("risk_score") or 0) <= 20:
         tags.add("weak_single_signal")

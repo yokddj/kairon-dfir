@@ -1889,7 +1889,7 @@ def _build_timeline_entries(bookmarks: list[TimelineBookmark], findings: list[Fi
         return entries, False
     entries = []
     for finding in findings[:10]:
-        timeline_items = list(finding.timeline or [])
+        timeline_items = _finding_events(finding)
         if timeline_items:
             for item in timeline_items[:3]:
                 entries.append(
@@ -2063,6 +2063,13 @@ def _build_defender_report_context(db: Session, case_id: str, filters: dict[str,
     }
     total, rows, warnings, _facets = search_events_v2(case_id, params, db=db)
     reportable = [row for row in rows if _is_reportable_defender_event(row)]
+    seen_records = {key for key in (_defender_record_key(row) for row in reportable) if key}
+    for row in _memory_defender_rows(case_id, filters):
+        key = _defender_record_key(row)
+        if key and key in seen_records:
+            continue
+        seen_records.add(key)
+        reportable.append(row)
     rows = reportable[:max_events]
     high_severity = 0
     failed_actions = 0
@@ -2095,6 +2102,46 @@ _DEFENDER_REPORTABLE_EVENT_IDS = {
     "1006", "1007", "1008", "1015", "1116", "1117", "1118", "1119", "1120",
     "5001", "5004", "5007", "5008", "5010", "5011", "5012", "5013",
 }
+
+
+def _defender_record_key(row: dict[str, Any]) -> tuple[str, str, str] | None:
+    """The event log record a Defender row comes from, so the same record read
+    from disk and from a memory image is reported once."""
+    raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
+    windows = raw.get("windows") if isinstance(raw.get("windows"), dict) else {}
+    host = raw.get("host") if isinstance(raw.get("host"), dict) else {}
+    record = str(windows.get("record_id") or windows.get("record_number") or "").strip()
+    if not record:
+        return None
+    return (str(host.get("name") or "").lower(), str(windows.get("event_id") or ""), record)
+
+
+def _memory_defender_rows(case_id: str, filters: dict[str, Any], limit: int = 100) -> list[dict[str, Any]]:
+    """Defender records recovered from a memory image's event logs. They are
+    indexed as event log records, not as Defender artifacts, so the Defender
+    artifact search does not return them. Empty when the index cannot be read."""
+    query_filters: list[dict[str, Any]] = [
+        {"term": {"artifact.type": "memprocfs_eventlog"}},
+        {"term": {"windows.provider": "Microsoft-Windows-Windows Defender"}},
+        {"terms": {"windows.event_id": sorted(int(item) for item in _DEFENDER_REPORTABLE_EVENT_IDS)}},
+    ]
+    if filters.get("evidence_id"):
+        query_filters.append({"term": {"evidence_id": filters["evidence_id"]}})
+    hosts = [str(item) for item in (filters.get("host") if isinstance(filters.get("host"), list) else [filters.get("host")]) if item]
+    if hosts:
+        query_filters.append({"terms": {"host.name": hosts}})
+    time_range = {key: filters.get(name) for key, name in (("gte", "time_from"), ("lte", "time_to")) if filters.get(name)}
+    if time_range:
+        query_filters.append({"range": {"@timestamp": time_range}})
+    try:
+        result = search_documents(get_events_index(case_id), {"size": limit, "sort": [{"@timestamp": {"order": "asc"}}], "query": {"bool": {"filter": query_filters}}})
+    except Exception:  # noqa: BLE001
+        return []
+    rows = []
+    for hit in (result.get("hits") or {}).get("hits") or []:
+        source = dict(hit.get("_source") or {})
+        rows.append({"id": hit.get("_id"), "timestamp": source.get("@timestamp"), "raw": source})
+    return rows
 
 
 def _is_reportable_defender_event(row: dict[str, Any]) -> bool:
@@ -2336,7 +2383,7 @@ def _extract_iocs(case_id: str, findings: list[Finding], bookmarks: list[Timelin
             remember("ip", value, source=source, timestamp=finding.time_start or finding.created_at)
         for value in finding.related_users or []:
             remember("user", value, source=source, timestamp=finding.time_start or finding.created_at)
-        for item in finding.timeline or []:
+        for item in _finding_events(finding):
             if item.get("event_id"):
                 remember("event_id", item["event_id"], source=source, timestamp=item.get("timestamp"))
 
@@ -2344,7 +2391,7 @@ def _extract_iocs(case_id: str, findings: list[Finding], bookmarks: list[Timelin
     # binaries, destinations) the finding's summary fields often leave out.
     finding_events: dict[str, Finding] = {}
     for finding in findings:
-        event_ids = [*(finding.related_event_ids or []), *(str(item.get("event_id") or "") for item in finding.timeline or [])]
+        event_ids = [*(finding.related_event_ids or []), *(str(item.get("event_id") or "") for item in _finding_events(finding))]
         for event_id in event_ids:
             if event_id and not str(event_id).startswith("memory:") and len(finding_events) < _IOC_EVENT_LIMIT:
                 finding_events.setdefault(str(event_id), finding)
@@ -2817,9 +2864,10 @@ def _render_findings(findings: list[Finding]) -> str:
             related.append([tr("IP addresses"), ", ".join(_code(str(item)) for item in finding.related_ips[:5])])
         if related:
             lines.extend(["", _markdown_table([["Related", "Values"], *related])])
-        if finding.timeline:
+        supporting = _finding_events(finding)
+        if supporting:
             lines.extend(["", tr("Supporting events:")])
-            for item in finding.timeline[:6]:
+            for item in supporting[:6]:
                 lines.append(
                     f"- {_fmt_ts(item.get('timestamp')) or 'unknown time'} · {_humanize(str(item.get('event_type') or 'event'))} · {_sanitize_text(str(item.get('summary') or ''))}"
                 )
@@ -2829,6 +2877,25 @@ def _render_findings(findings: list[Finding]) -> str:
                 lines.append(f"- {_sanitize_text(item)}")
         lines.append("")
     return "\n".join(lines).strip()
+
+
+def _finding_events(finding: Finding) -> list[dict[str, Any]]:
+    """The events a finding rests on: its timeline without the bookkeeping
+    entries (status history), or else the row it was created from."""
+    events = [item for item in (finding.timeline or []) if isinstance(item, dict) and item.get("kind") != "hunting_meta" and (item.get("timestamp") or item.get("summary"))]
+    if events:
+        return events
+    snapshot = getattr(finding, "source_snapshot_json", None)
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    summary = snapshot.get("summary") or getattr(finding, "source_summary", None)
+    if not summary:
+        return []
+    return [{
+        "timestamp": snapshot.get("timestamp") or getattr(finding, "source_timestamp", None),
+        "event_type": snapshot.get("type") or "event",
+        "summary": _clip(str(summary), 300),
+        "event_id": getattr(finding, "linked_event_id", None) or (snapshot.get("fields") or {}).get("event_id"),
+    }]
 
 
 def _resolve_detection_event_times(case_id: str, detections: list[DetectionResult]) -> dict[str, str]:
@@ -3048,7 +3115,7 @@ def _render_process_chains(findings: list[Finding], trees: dict[str, dict[str, A
         else:
             if trees is not None:
                 lines.append("- " + tr("No process-creation record was found for this finding's events, so no execution tree is drawn."))
-            for item in (finding.timeline or [])[:4]:
+            for item in _finding_events(finding)[:4]:
                 lines.append(f"- {_fmt_ts(item.get('timestamp')) or 'unknown time'} · {_sanitize_text(str(item.get('summary') or ''))}")
         lines.append("")
     return "\n".join(lines).strip()
@@ -3190,7 +3257,9 @@ def _render_defender_section(events: list[dict[str, Any]]) -> str:
     rows = [["Time (UTC)", "Threat", "Severity", "Action / result", "Path", "User", "Event ID"]]
     for event in events[:100]:
         raw = event.get("raw") if isinstance(event.get("raw"), dict) else {}
-        defender = raw.get("defender") if isinstance(raw.get("defender"), dict) else {}
+        # Records read from an event log carry Defender's fields in "detection".
+        detection = raw.get("detection") if isinstance(raw.get("detection"), dict) else {}
+        defender = {**detection, **(raw.get("defender") if isinstance(raw.get("defender"), dict) else {})}
         threat = raw.get("threat") if isinstance(raw.get("threat"), dict) else {}
         file_data = raw.get("file") if isinstance(raw.get("file"), dict) else {}
         user = raw.get("user") if isinstance(raw.get("user"), dict) else {}
@@ -3301,7 +3370,7 @@ def _render_recommendations(findings: list[Finding], report: CaseReport) -> str:
     if findings:
         recommendations.append("Block or monitor the extracted IOCs in downstream detection and containment tooling.")
     recommendations.append("Preserve the collected evidence and investigation exports to keep the case narrative reproducible.")
-    body = "\n".join(f"- {_sanitize_text(item)}" for item in _dedupe(recommendations))
+    body = "\n".join(f"- {_sanitize_text(tr(item))}" for item in _dedupe(recommendations))
     if manual:
         return f"{manual}\n\n{tr('Additional general recommendations:')}\n{body}"
     return body
@@ -3418,7 +3487,7 @@ def _report_ai_context(
                 "ips": list(finding.related_ips or []),
                 "supporting_events": [
                     {"time_utc": _fmt_ts(item.get("timestamp")), "summary": _sanitize_text(str(item.get("summary") or ""))}
-                    for item in (finding.timeline or [])[:8]
+                    for item in _finding_events(finding)[:8]
                 ],
                 "next_steps": [_sanitize_text(str(item)) for item in (finding.recommended_triage or [])[:6]],
             }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMemoryFindingPrefill } from "./findingPrefill";
+import { buildFindingPrefillFromArtifact, buildMemoryFindingPrefill } from "./findingPrefill";
 
 const context = { caseId: "case-1", evidenceId: "ev-1", hosts: [], sourceView: "memory", sourceRoute: "/cases/case-1/memory" };
 
@@ -37,5 +37,10 @@ describe("buildMemoryFindingPrefill", () => {
     }, context);
     expect(prefill.title).toBe("Memory: connection to 203.0.113.7:443 from powershell.exe (PID 900)");
     expect(prefill.related_ips).toEqual(["203.0.113.7"]);
+  });
+
+  it("keeps nested blocks out of the source fields", () => {
+    const prefill = buildFindingPrefillFromArtifact({ event_id: "evt-1", summary: "row", process: { pid: 7, name: "tool.exe" } }, { ...context, artifactFamily: "eventlog", artifactType: "event" });
+    expect(JSON.stringify(prefill.source_snapshot_json ?? {})).not.toContain("[object Object]");
   });
 });

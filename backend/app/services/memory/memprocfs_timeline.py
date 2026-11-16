@@ -79,7 +79,8 @@ _MAX_EVENTLOG_TEXT = 32768
 # which name the host's command line.
 POWERSHELL_EVENT_IDS = (4104, 4103, 400, 403, 600, 800)
 # "Key=Value; Key=Value": a value can itself contain "; ", so split only where a key follows.
-_EVENT_DATA_FIELD = re.compile(r";\s+(?=[A-Za-z][A-Za-z0-9_]*=)")
+# Field names may hold spaces (Defender: "Threat Name=...; Severity Name=...").
+_EVENT_DATA_FIELD = re.compile(r";\s+(?=[A-Za-z][A-Za-z0-9_ ]{0,63}=)")
 # Inside a field's text: "HostApplication=..." (400/403/600/800) or "Host Application = ..." (4103's
 # ContextInfo), and "CommandLine=..." (800), one per line.
 # MemProcFS writes the record's level as its number.
