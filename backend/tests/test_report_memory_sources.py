@@ -121,3 +121,14 @@ def test_evidence_counts_include_events_without_an_artifact_row(monkeypatch) -> 
     monkeypatch.setattr(routes_cases, "is_index_queryable", lambda *_a: True)
 
     assert routes_cases._indexed_counts_by_evidence("case-1") == {"ev-1": 42}
+
+
+def test_unknown_process_is_not_a_file_indicator() -> None:
+    from app.ingest.defender.normalizer import normalize_defender_row
+
+    document = {"event": {}, "artifact": {}, "tags": []}
+    normalize_defender_row(document, {"Process Name": "Unknown", "Path": RESOURCE, "Threat Name": "Trojan:Win32/Test"}, {})
+    assert not document["process"].get("path") and not document["process"].get("name")
+    rows: list[tuple] = []
+    report_service._extract_iocs_from_event({"process": {"path": "Unknown"}, "file": {"path": r"C:\Users\usera\Downloads\tool.exe"}}, lambda t, v, **_k: rows.append((t, v)), "x", None)
+    assert rows == [("file", r"C:\Users\usera\Downloads\tool.exe")]

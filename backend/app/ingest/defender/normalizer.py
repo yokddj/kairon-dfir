@@ -16,6 +16,10 @@ from app.ingest.defender.helpers import (
 )
 
 
+def _known(value: str | None) -> str | None:
+    return None if str(value or "").strip().lower() in {"", "unknown", "n/a", "-"} else value
+
+
 def normalize_defender_row(document: dict, row: dict, artifact_meta: dict) -> dict:
     first = lambda *names: first_value(row, list(names))
     detection = document.setdefault("detection", {})
@@ -42,8 +46,9 @@ def normalize_defender_row(document: dict, row: dict, artifact_meta: dict) -> di
     resource_path, container_file = extract_paths_from_defender_resource(resource)
     container_file = normalize_windows_path(first("ContainerFile")) or container_file
     effective_path = path or resource_path
-    process_name = clean_text(first("ProcessName", "Process Name"))
-    process_path = normalize_windows_path(first("ProcessPath", "Process Path", "ProcessName", "Process Name"))
+    # Defender writes "Unknown" when it could not tell which process acted.
+    process_name = _known(clean_text(first("ProcessName", "Process Name")))
+    process_path = _known(normalize_windows_path(first("ProcessPath", "Process Path", "ProcessName", "Process Name")))
     user_name = clean_text(first("User", "DetectionUser", "Detection User", "Remediation User"))
     user_sid = clean_text(first("SID", "UserSid", "User SID", "UserId", "User ID"))
     if not user_name:
