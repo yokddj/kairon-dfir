@@ -301,12 +301,24 @@ def ensure_registry(
     timeout_seconds: int,
     cancellation_check: Callable[[], bool] | None = None,
 ) -> None:
-    """The registry values of a scan saved before they were part of it: read them now (seconds,
-    no forensic scan) next to the rest of the scan."""
+    """The registry values of a scan saved before they were part of it, or read with an older key
+    list: read them now (seconds, no forensic scan) next to the rest of the scan."""
     from app.services.memory.memprocfs_runner import run_registry
 
-    if (directory / REGISTRY_FILE).is_file():
+    if _registry_current(directory / REGISTRY_FILE):
         return
     with _lock(directory):
-        if not (directory / REGISTRY_FILE).is_file():
-            run_registry(evidence_path, work_dir, directory / REGISTRY_FILE, timeout_seconds=timeout_seconds, cancellation_check=cancellation_check)
+        if not _registry_current(directory / REGISTRY_FILE):
+            # Read into a temporary file: a failed read must not lose the snapshot already there.
+            partial = directory / f"{REGISTRY_FILE}.partial"
+            run_registry(evidence_path, work_dir, partial, timeout_seconds=timeout_seconds, cancellation_check=cancellation_check)
+            partial.replace(directory / REGISTRY_FILE)
+
+
+def _registry_current(path: Path) -> bool:
+    from app.services.memory.memprocfs_registry import snapshot_is_current
+
+    try:
+        return snapshot_is_current(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return False

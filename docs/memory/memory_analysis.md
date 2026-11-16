@@ -333,7 +333,7 @@ The **System information** analysis (MemProcFS) also reads the registry hives Wi
 | `run_mru`, `typed_paths` | each user's `RunMRU` and `TypedPaths` |
 | `defender_exclusion` | `HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\*` and its `Policies` counterpart: each excluded path, extension, process or address (the value name), and whether a policy set it |
 
-Per-user keys are shown under the user's SID (`HKU\<SID>\...`), matched through ProfileList. The computer name and time zone become Host Facts (ranked just below the SYSTEM hive file), ProfileList entries become the host's users, and the interface addresses appear in the host's network addresses. BAM, UserAssist and ShimCache entries with a time are in the memory Timeline. A hive that cannot be read from the image is recorded as unknown, not as absent. An image analysed before this reads its registry on the next System information run, in seconds, without a new forensic scan.
+Per-user keys are shown under the user's SID (`HKU\<SID>\...`), matched through ProfileList. The computer name and time zone become Host Facts (ranked just below the SYSTEM hive file), ProfileList entries become the host's users, and the interface addresses appear in the host's network addresses. BAM, UserAssist and ShimCache entries with a time are in the memory Timeline. A hive that cannot be read from the image is recorded as unknown, not as absent. An image analysed before this, or before a key was added to the list above, reads its registry again on the next System information run, in seconds, without a new forensic scan.
 
 ### MemProcFS timeline in the case Timeline
 

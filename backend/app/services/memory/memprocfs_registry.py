@@ -81,6 +81,16 @@ USER_TARGETS: tuple[tuple[str, str, tuple[str, ...] | None, str], ...] = (
     ("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\TypedPaths", "values", None, "typed_paths"),
 )
 
+# Which keys a saved registry.json holds: a snapshot taken with an older key list is read again
+# (seconds, no forensic scan) so keys added later reach images analysed before them.
+TARGETS_VERSION = hashlib.sha256(repr((SYSTEM_TARGETS, SOFTWARE_TARGETS, USER_TARGETS)).encode()).hexdigest()[:16]
+
+
+def snapshot_is_current(snapshot: Any) -> bool:
+    """The saved snapshot was read with today's key list (an unreadable one counts as outdated)."""
+    return isinstance(snapshot, dict) and snapshot.get("targets_version") == TARGETS_VERSION
+
+
 # BAM keys' own counters, not programs.
 _BAM_BOOKKEEPING = {"version", "sequencenumber"}
 _MAX_VALUE_BYTES = 64 * 1024
@@ -213,7 +223,7 @@ def _hives(lib: Any, handle: int) -> list[dict[str, Any]]:
 def read_registry(lib: Any, handle: int) -> dict[str, Any]:
     """The target keys of every loaded hive, as plain data for registry.json."""
     if not bind(lib):
-        return {"available": False, "reason": "This MemProcFS has no registry API.", "keys": [], "missing": []}
+        return {"available": False, "reason": "This MemProcFS has no registry API.", "keys": [], "missing": [], "targets_version": TARGETS_VERSION}
     reader = _Reader(lib, handle)
     keys: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
@@ -249,6 +259,7 @@ def read_registry(lib: Any, handle: int) -> dict[str, Any]:
         "hives": [{"name": h["name"], "path": h["path"]} for h in hives],
         "keys": keys,
         "missing": missing,
+        "targets_version": TARGETS_VERSION,
     }
 
 

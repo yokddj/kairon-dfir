@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import codecs
 import ctypes
+import json
 import struct
 from datetime import UTC, datetime
 
@@ -376,13 +377,47 @@ def test_an_old_scan_gets_its_registry_read_without_a_new_scan(tmp_path, monkeyp
     calls = []
 
     def fake_run_registry(evidence_path, work_dir, destination, **kw):
-        calls.append(destination)
-        destination.write_text("{}")
+        calls.append(destination.name)
+        destination.write_text(json.dumps({"keys": [], "targets_version": registry.TARGETS_VERSION}))
 
     monkeypatch.setattr(memprocfs_runner, "run_registry", fake_run_registry)
     memprocfs_engine.ensure_registry(tmp_path, tmp_path / "image.raw", tmp_path, timeout_seconds=60)
     memprocfs_engine.ensure_registry(tmp_path, tmp_path / "image.raw", tmp_path, timeout_seconds=60)
-    assert calls == [tmp_path / "registry.json"]
+    assert calls == ["registry.json.partial"]
+    assert registry.snapshot_is_current(json.loads((tmp_path / "registry.json").read_text()))
+
+
+def test_a_snapshot_read_with_an_older_key_list_is_read_again(tmp_path, monkeypatch):
+    """Keys added to the list (Defender exclusions, for one) must reach images analysed before."""
+    from app.services.memory import memprocfs_engine, memprocfs_runner
+
+    (tmp_path / "registry.json").write_text(json.dumps({"keys": [{"path": "old"}]}))  # no targets_version
+    calls = []
+
+    def fake_run_registry(evidence_path, work_dir, destination, **kw):
+        calls.append(destination.name)
+        destination.write_text(json.dumps({"keys": [], "targets_version": registry.TARGETS_VERSION}))
+
+    monkeypatch.setattr(memprocfs_runner, "run_registry", fake_run_registry)
+    memprocfs_engine.ensure_registry(tmp_path, tmp_path / "image.raw", tmp_path, timeout_seconds=60)
+    assert calls == ["registry.json.partial"]
+    assert json.loads((tmp_path / "registry.json").read_text())["keys"] == []
+
+
+def test_a_failed_reread_keeps_the_snapshot_already_there(tmp_path, monkeypatch):
+    from app.services.memory import memprocfs_engine, memprocfs_runner
+
+    (tmp_path / "registry.json").write_text(json.dumps({"keys": [{"path": "old"}]}))
+
+    def failing_run_registry(evidence_path, work_dir, destination, **kw):
+        raise RuntimeError("MemProcFS could not read the registry")
+
+    monkeypatch.setattr(memprocfs_runner, "run_registry", failing_run_registry)
+    try:
+        memprocfs_engine.ensure_registry(tmp_path, tmp_path / "image.raw", tmp_path, timeout_seconds=60)
+    except RuntimeError:
+        pass
+    assert json.loads((tmp_path / "registry.json").read_text())["keys"] == [{"path": "old"}]
 
 
 def test_an_image_analysed_twice_gives_one_timeline_event_per_value():
