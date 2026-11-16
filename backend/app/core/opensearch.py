@@ -50,6 +50,16 @@ class OpenSearchIngestBlockedError(RuntimeError):
         self.details = dict(details or {})
 
 
+
+def wildcard_literal(text: str) -> str:
+    """Text to embed in a wildcard query as a literal substring.
+
+    ``*`` and ``?`` are dropped (a search box is not a pattern language) and a
+    backslash is escaped: in a wildcard query it escapes the next character, so
+    a Windows path such as ``Edge\\User Data`` silently matched nothing.
+    """
+    return text.replace("*", "").replace("?", "").replace("\\", "\\\\")
+
 def _as_bool(value) -> bool:
     if isinstance(value, bool):
         return value

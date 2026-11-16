@@ -20,6 +20,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.opensearch import wildcard_literal
+
 logger = logging.getLogger(__name__)
 
 MEMORY_ID_PREFIX = "memory:"
@@ -631,7 +633,7 @@ def _memory_process_executions(db: Session, case_id: str, host: Any, name: str, 
             {"term": {"scan_run_id.keyword": run_id}},
         ]
         if name:
-            needle = name.replace("*", "").replace("?", "")
+            needle = wildcard_literal(name)
             filters.append({"wildcard": {"process.name": {"value": f"*{needle}*", "case_insensitive": True}}})
         body = {
             "size": min(limit, 200),
@@ -817,7 +819,7 @@ REGISTRY_ROW_KEYS = (
 )
 REGISTRY_CATEGORIES = (
     "computer_name", "time_zone", "network_interface", "os_version", "profile", "winlogon", "autorun",
-    "service", "bam", "userassist", "shimcache", "run_mru", "typed_paths",
+    "service", "bam", "userassist", "shimcache", "run_mru", "typed_paths", "defender_exclusion",
 )
 
 
@@ -852,7 +854,7 @@ def tool_get_memory_registry(db: Session, case_id: str, args: dict) -> dict:
             filters.append(_term_any("user_sid", user_sid))
         must = []
         if query:
-            needle = query.replace("*", "").replace("?", "")
+            needle = wildcard_literal(query)
             must.append({"bool": {"should": [
                 {"wildcard": {f"{field}.keyword": {"value": f"*{needle}*", "case_insensitive": True}}}
                 for field in ("key_path", "value_name", "value_data", "summary", "decoded.program", "decoded.path")
@@ -992,7 +994,7 @@ def _registry_executions(case_id: str, run_ids: list[str], name: str, limit: int
         {"exists": {"field": "decoded"}},
     ]
     if name:
-        needle = name.replace("*", "").replace("?", "")
+        needle = wildcard_literal(name)
         filters.append({"bool": {"should": [
             {"wildcard": {f"{field}.keyword": {"value": f"*{needle}*", "case_insensitive": True}}}
             for field in ("decoded.program", "decoded.path")

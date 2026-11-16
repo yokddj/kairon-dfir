@@ -392,3 +392,17 @@ def test_an_image_analysed_twice_gives_one_timeline_event_per_value():
     again = [{**d, "scan_run_id": "r2", "document_id": d["document_id"] + "-2"} for d in first]
     events, _ = _memory_events("c", "e", "r", first + again)
     assert len(events) == len(first)
+
+
+def test_defender_exclusions_are_read_with_their_kind():
+    machine = _machine()
+    machine.keys.update({path.lower(): key for path, key in {
+        "HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths": {"values": [("C:\\Staging", 4, struct.pack("<I", 0))]},
+        "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Exclusions\\Extensions": {"values": [(".tmp", 4, struct.pack("<I", 0))]},
+    }.items()})
+    snapshot = registry.read_registry(machine, handle=1)
+    documents = registry.normalize_memprocfs_registry([snapshot], case_id="c", evidence_id="e", scan_run_id="r", plugin_run_id="p")["items"]
+    exclusions = {d["decoded"]["excluded"]: d for d in documents if d["category"] == "defender_exclusion"}
+    assert exclusions["C:\\Staging"]["decoded"] == {"excluded": "C:\\Staging", "kind": "Paths", "by_policy": False}
+    assert exclusions[".tmp"]["decoded"]["by_policy"] is True
+    assert exclusions["C:\\Staging"]["summary"] == "Defender exclusion (Paths): C:\\Staging"

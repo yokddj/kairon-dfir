@@ -338,3 +338,22 @@ def test_the_defender_normalizer_records_the_download_url():
     assert document["url"]["full"] == "http://203.0.113.10:8080/tool.exe"
     assert document["url"]["domain"] == "203.0.113.10"
     assert document["defender"]["download_url"] == "http://203.0.113.10:8080/tool.exe"
+
+
+def test_registry_text_search_keeps_backslashes_literal(monkeypatch):
+    """A key path typed with backslashes must reach OpenSearch escaped, or it matches nothing."""
+    bodies: list[dict] = []
+
+    def search(index, body, params=None):
+        bodies.append(body)
+        return {"hits": {"total": {"value": 0}, "hits": []}, "aggregations": {"categories": {"buckets": []}}}
+
+    monkeypatch.setattr("app.core.opensearch.get_opensearch_client", lambda **kw: FakeClient(search=search))
+    monkeypatch.setattr("app.core.opensearch.get_memory_index", lambda case_id: "mem-case")
+    monkeypatch.setattr(memory_tools, "_memory_evidences", lambda db, case_id, evidence_id: [SimpleNamespace(id="ev-1", original_filename="image.raw")])
+    monkeypatch.setattr(memory_tools, "_registry_run_id", lambda evidence_id, case_id, db=None: "run-1")
+
+    memory_tools.tool_get_memory_registry(None, "case-1", {"query": "Exclusions\\Paths", "category": "defender_exclusion"})
+
+    wildcard = bodies[0]["query"]["bool"]["must"][0]["bool"]["should"][0]["wildcard"]
+    assert next(iter(wildcard.values()))["value"] == "*Exclusions\\\\Paths*"

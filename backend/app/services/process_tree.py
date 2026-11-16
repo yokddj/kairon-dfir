@@ -12,7 +12,7 @@ from typing import Any
 from dateutil import parser as date_parser
 
 from app.api.routes_search import build_search_query
-from app.core.opensearch import fetch_event_by_id, get_events_index, search_documents
+from app.core.opensearch import fetch_event_by_id, get_events_index, search_documents, wildcard_literal
 from app.models.case import Case
 from app.models.evidence import Evidence
 from app.schemas.event import SearchRequest
@@ -1474,7 +1474,7 @@ def _host_focus_filter(host: str | None) -> dict | None:
     for alias in sorted(aliases):
         # A hostname should never contain these, but a stray one would silently
         # widen the match rather than fail, so they are neutralised.
-        literal = alias.replace("*", "").replace("?", "")
+        literal = wildcard_literal(alias)
         if not literal:
             continue
         for field in ("host.name", "host.canonical"):

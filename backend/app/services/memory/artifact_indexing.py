@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Iterable
 
-from app.core.opensearch import get_memory_index, get_opensearch_client
+from app.core.opensearch import get_memory_index, get_opensearch_client, wildcard_literal
 
 
 logger = logging.getLogger(__name__)
@@ -403,7 +403,7 @@ def search_artifact_documents(
                     # Free text over the whole command: the keyword form holds commands up to
                     # 1024 characters (substring match); longer ones only exist as analysed
                     # text, matched as a phrase.
-                    needle = value.strip().replace("*", "").replace("?", "")
+                    needle = wildcard_literal(value.strip())
                     query_filters.append({"bool": {"should": [
                         {"wildcard": {"command.keyword": {"value": f"*{needle}*", "case_insensitive": True}}},
                         {"match_phrase": {"command": needle}},
@@ -426,7 +426,7 @@ def search_artifact_documents(
                     # instead, consistent with every other free-text
                     # search box in the app. "name" is memory_file_object's
                     # full path field (Files/windows.filescan).
-                    needle = value.strip().replace("*", "").replace("?", "")
+                    needle = wildcard_literal(value.strip())
                     wildcard = {"value": f"*{needle}*", "case_insensitive": True}
                     if key == "name":
                         # name is analysed text: its words are path segments, so a search that

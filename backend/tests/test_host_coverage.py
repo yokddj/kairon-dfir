@@ -137,3 +137,21 @@ def test_reports_log_clears_and_when_process_records_begin(monkeypatch) -> None:
         "A: event logs were cleared 2024-03-22 12:45:25 to 2024-03-22 12:45:26 by CORP\\admin (2 records). "
         "Activity on this host before then is missing from those logs; its process creation records begin 2024-03-22 12:45:12."
     ]
+
+
+def test_memory_only_host_counts_families_read_from_the_image(monkeypatch) -> None:
+    """A host whose only evidence is a memory image has its MFT, event logs and
+    hives read out of RAM; coverage must count them, not report zero everywhere."""
+    monkeypatch.setattr(host_coverage, "get_case_hosts", lambda db, case_id: _hosts()[:1])
+    monkeypatch.setattr(
+        host_coverage,
+        "_artifact_type_counts_by_host",
+        lambda case_id: {"ws01": {"memprocfs_ntfs": 30, "memprocfs_eventlog": 20, "memprocfs_registry": 10, "memprocfs_web": 2}},
+    )
+
+    families = host_coverage.build_case_host_coverage(None, "case-1")["hosts"][0]["families"]
+
+    assert families["Filesystem (MFT)"] == 30
+    assert families["Event logs"] == 20
+    assert families["Registry"] == 10
+    assert families["Browser"] == 2
