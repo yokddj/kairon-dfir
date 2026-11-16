@@ -114,13 +114,18 @@ export default function CaseReportsPage() {
     }
   }, [reportsQuery.data, selectedReportId]);
 
+  // Reload the note boxes only when another report is opened or its saved notes change: the
+  // title, language and author save the report on change, and reloading on every refetch wiped
+  // whatever the analyst had written in these boxes and not saved yet.
+  const savedNotesKey = `${reportQuery.data?.id ?? ""}:${JSON.stringify(reportQuery.data?.analyst_notes ?? {})}`;
   useEffect(() => {
     const notes = reportQuery.data?.analyst_notes ?? {};
     setExecutiveNote(notes.executive_summary ?? "");
     setRecommendationsNote(notes.recommendations ?? "");
     setLimitationsNote(notes.limitations ?? "");
     setNarrativeNote(notes.attack_narrative ?? "");
-  }, [reportQuery.data]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedNotesKey]);
 
   useEffect(() => {
     setAiDraft(null);
