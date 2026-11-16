@@ -64,6 +64,7 @@ def test_defender_records_from_memory_reach_the_report(monkeypatch) -> None:
 
     assert len(context["events"]) == 1  # the same record read from disk and memory is reported once
     assert {"terms": {"host.name": ["host-a"]}} in queries[0]["query"]["bool"]["filter"]
+    assert queries[0]["sort"][0] == {"risk_score": {"order": "desc", "missing": "_last"}}  # detections before setting changes
     markdown = report_service._render_defender_section(report_service._memory_defender_rows("case-1", {}))
     assert "Trojan:Win32/Test" in markdown and r"C:\Users\usera\Downloads\tool.exe" in markdown
 

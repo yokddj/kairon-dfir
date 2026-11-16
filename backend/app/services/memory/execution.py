@@ -67,7 +67,7 @@ from app.services.memory.kairon_findevil import KAIRON_FINDEVIL_PLUGIN, run_kair
 from app.services.memory.kairon_psreadline import KAIRON_PSREADLINE_PLUGIN, run_kairon_psreadline
 from app.services.memory.kairon_linux_findevil import KAIRON_LINUX_FINDEVIL_PLUGIN, run_kairon_linux_findevil
 from app.services.memory.memprocfs_runner import CONSOLE_PLUGIN as MEMPROCFS_CONSOLE_PLUGIN, FINDEVIL_PLUGIN as MEMPROCFS_FINDEVIL_PLUGIN, INVENTORY_PLUGINS as MEMPROCFS_INVENTORY_PLUGINS, MEMPROCFS_PLUGINS, NETWORK_PLUGIN as MEMPROCFS_NETWORK_PLUGIN, PROCESSES_PLUGIN as MEMPROCFS_PROCESSES_PLUGIN, TIMELINE_DIRNAME as MEMPROCFS_TIMELINE_DIRNAME, memprocfs_available, run_console as run_memprocfs_console, run_findevil, run_inventory as run_memprocfs_inventory
-from app.services.memory.memprocfs_timeline import index_memprocfs_timeline
+from app.services.memory.memprocfs_timeline import INDEX_VERSION as TIMELINE_INDEX_VERSION, index_memprocfs_timeline
 from app.services.memory import volatility_runner
 from app.services.memory.symbol_control import record_symbol_requirement
 from app.services.memory.analysis_plan import MemoryAnalysisPlan, build_memory_analysis_plan
@@ -1262,12 +1262,13 @@ def _index_scan_timeline(db: Session, run: MemoryScanRun) -> dict[str, Any] | No
     directory = memprocfs_engine.forensic_dir(memprocfs_engine.inventory_dir(run.case_id, run.evidence_id))
     if not scan.get("scanned_at") or not directory.is_dir():
         return None
-    if scan.get("timeline_indexed_for") == scan["scanned_at"]:
+    marker = f"{scan['scanned_at']}#v{TIMELINE_INDEX_VERSION}"
+    if scan.get("timeline_indexed_for") == marker:
         return {"indexed": 0, "skipped": "already indexed for this scan"}
     report = _index_memprocfs_timeline(db, run, directory)
     if not report.get("error") and evidence is not None:
         metadata = dict(evidence.metadata_json or {})
-        metadata["memprocfs_scan"] = {**scan, "timeline_indexed_for": scan["scanned_at"]}
+        metadata["memprocfs_scan"] = {**scan, "timeline_indexed_for": marker}
         evidence.metadata_json = metadata
         flag_modified(evidence, "metadata_json")
         db.commit()

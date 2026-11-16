@@ -352,7 +352,7 @@ The forensic scan Find Evil runs also builds MemProcFS's timelines. The ones Vol
 
 The same Find Evil run also saves MemProcFS's inventories (see **MemProcFS tab** below).
 
-Process, network and thread timelines are not added: the Processes and Network analyses already give them from Volatility. NTFS and registry can run to hundreds of thousands of rows, so the Timeline hides them by default (like MFT from disk) and shows them when filtered by their type or when searching; the **Memory (MemProcFS)** quick filter shows every MemProcFS timeline. A new Find Evil run replaces the evidence's previous MemProcFS events; at most 1,000,000 are indexed per run (NTFS and registry are indexed last, so the cap falls on them). If the forensic scan does not finish, no timeline is added and Find Evil works as before.
+Process, network and thread timelines are not added: the Processes and Network analyses already give them from Volatility. NTFS and registry can run to hundreds of thousands of rows, so the Timeline hides them by default (like MFT from disk) and shows them when filtered by their type or when searching; the **Memory (MemProcFS)** quick filter shows every MemProcFS timeline. A new Find Evil run replaces the evidence's previous MemProcFS events, and so does the next run after an upgrade that changes how these events are read (triage, findings and marked events keep pointing at the same event ids); at most 1,000,000 are indexed per run (NTFS and registry are indexed last, so the cap falls on them). If the forensic scan does not finish, no timeline is added and Find Evil works as before.
 
 ### Volatility's events in the case Timeline
 
