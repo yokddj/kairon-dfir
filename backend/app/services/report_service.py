@@ -2456,7 +2456,8 @@ def _extract_iocs_from_event(event: dict[str, Any], remember, source: str, times
     hashed_path = ""
     if isinstance(process_data, dict):
         path = str(process_data.get("executable") or process_data.get("path") or "")
-        if path and not BENIGN_SYSTEM_PATH.search(path):
+        # A placeholder ("Unknown") is not a binary.
+        if path and ("\\" in path or "/" in path) and not BENIGN_SYSTEM_PATH.search(path):
             remember("file", path, source=source, timestamp=timestamp)
             hashed_path = path
     event_data = ((event.get("windows") or {}).get("event_data") or {}) if isinstance(event.get("windows"), dict) else {}

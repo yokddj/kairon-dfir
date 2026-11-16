@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 PARSER = "memprocfs"
 # Raise when the events read from a scan change (parsing, normalization, scoring):
 # a saved scan indexed by an older version is indexed again on the next memory run.
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 MEMORY_PLUGIN = "memprocfs.timeline"
 # Indexed in this order, so the row cap falls on the bulkiest timelines (registry, NTFS) last.
 TIMELINES: dict[str, str] = {
