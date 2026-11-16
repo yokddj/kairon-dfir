@@ -704,3 +704,24 @@ def test_flat_patch_finding_endpoint_validates_status_transitions(monkeypatch):
     valid = client.patch(f"/api/findings/{created['id']}", json={"status": "triaged"})
     assert valid.status_code == 200
     assert valid.json()["status"] == "triaged"
+
+
+def test_a_finding_from_a_row_takes_the_row_time_and_host() -> None:
+    """Otherwise the Incident Timeline and the report place it at its creation date with no host."""
+    original_fetch = routes_findings.fetch_event_by_id
+    routes_findings.fetch_event_by_id = lambda case_id, event_id, **kwargs: {"@timestamp": "2024-01-02T09:30:00Z", "host": {"name": "ws01"}, "event": {"message": "x"}}  # type: ignore[assignment]
+    try:
+        result = routes_findings._normalize_finding_create("case-1", FindingCreate(title="Row finding", event_ids=["evt-1"]), _FakeDb())
+    finally:
+        routes_findings.fetch_event_by_id = original_fetch  # type: ignore[assignment]
+    assert result["time_start"].isoformat() == "2024-01-02T09:30:00+00:00"
+    assert result["time_end"].isoformat() == "2024-01-02T09:30:00+00:00"
+    assert result["related_hosts"] == ["ws01"]
+
+
+def test_the_source_timestamp_dates_a_finding_without_events() -> None:
+    from datetime import datetime, timezone
+
+    when = datetime(2024, 1, 2, 9, 30, tzinfo=timezone.utc)
+    result = routes_findings._normalize_finding_create("case-1", FindingCreate(title="Snapshot finding", source_timestamp=when), _FakeDb())
+    assert result["time_start"] == when and result["time_end"] == when

@@ -2997,3 +2997,29 @@ def _v43_service_tokens(connection: Connection) -> None:
         )
     """))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_service_tokens_token_hash ON service_tokens (token_hash)"))
+
+
+@register(44, "findings_observed_time_and_host")
+def _v44_findings_observed_time_and_host(connection: Connection) -> None:
+    """Findings created from a Search/Timeline row kept the row's time only in
+    ``source_timestamp`` and their host only in ``linked_host_id``, so every
+    consumer that reads ``time_start`` / ``related_hosts`` (Incident Timeline,
+    reports, the host filter) placed them at their creation date with no host.
+    Fill those two from what the finding already records; nothing is guessed.
+    """
+    import json as _json
+
+    connection.execute(text("UPDATE findings SET time_start = source_timestamp WHERE time_start IS NULL AND source_timestamp IS NOT NULL"))
+    connection.execute(text("UPDATE findings SET time_end = time_start WHERE time_end IS NULL AND time_start IS NOT NULL AND source_timestamp IS NOT NULL"))
+    rows = connection.execute(text(
+        "SELECT f.id, f.related_hosts, COALESCE(h.canonical_name, h.display_name) "
+        "FROM findings f JOIN case_hosts h ON h.id = f.linked_host_id"
+    )).fetchall()
+    for finding_id, related_hosts, host_name in rows:
+        current = related_hosts if isinstance(related_hosts, list) else _json.loads(related_hosts or "[]")
+        if current or not host_name:
+            continue
+        connection.execute(
+            text("UPDATE findings SET related_hosts = :hosts WHERE id = :id"),
+            {"hosts": _json.dumps([host_name]), "id": finding_id},
+        )

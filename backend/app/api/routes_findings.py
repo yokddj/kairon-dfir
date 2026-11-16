@@ -75,6 +75,16 @@ def _default_finding_description(*, event_ids: list[str], detection_ids: list[st
     return "Manual finding created by the analyst."
 
 
+def _event_time(events: list[dict], pick) -> datetime | None:
+    times = []
+    for event in events:
+        try:
+            times.append(datetime.fromisoformat(str(event.get("@timestamp") or "").replace("Z", "+00:00")))
+        except ValueError:
+            continue
+    return pick(times) if times else None
+
+
 def _normalize_finding_create(case_id: str, payload: FindingCreate, db: Session) -> dict:
     if not db.get(Case, case_id):
         raise HTTPException(status_code=404, detail="Case not found")
@@ -159,7 +169,8 @@ def _normalize_finding_create(case_id: str, payload: FindingCreate, db: Session)
     # this finding invisible to the host filter -- derive it here as a
     # fallback so a resolved link always keeps the finding host-filterable.
     fallback_host_name = (linked_host.canonical_name or linked_host.display_name) if linked_host else None
-    related_hosts = _dedupe(payload.related_hosts) if payload.related_hosts else _dedupe([fallback_host_name] if fallback_host_name else [])
+    event_hosts = [str(((event.get("host") or {}) if isinstance(event.get("host"), dict) else {}).get("name") or "") for event in event_previews]
+    related_hosts = _dedupe(payload.related_hosts) if payload.related_hosts else _dedupe(([fallback_host_name] if fallback_host_name else []) + [name for name in event_hosts if name])
     linked_artifact_id = payload.linked_artifact_id
     if linked_artifact_id:
         artifact = db.get(Artifact, linked_artifact_id)
@@ -202,8 +213,10 @@ def _normalize_finding_create(case_id: str, payload: FindingCreate, db: Session)
         "correlation_version": payload.correlation_version,
         "fingerprint": payload.fingerprint,
         "risk_score": payload.risk_score,
-        "time_start": payload.time_start,
-        "time_end": payload.time_end,
+        # A finding about a row happened when the row did: without this it was placed at its
+        # creation date in the Incident Timeline and the report.
+        "time_start": payload.time_start or payload.source_timestamp or _event_time(event_previews, min),
+        "time_end": payload.time_end or payload.time_start or payload.source_timestamp or _event_time(event_previews, max),
         "timeline": payload.timeline,
         "related_event_ids": payload.related_event_ids,
         "related_artifact_ids": payload.related_artifact_ids,
@@ -333,6 +346,11 @@ def update_finding(finding_id: str, payload: FindingUpdate, db: Session = Depend
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     for key, value in updates.items():
         setattr(item, key, value)
+    if updates.get("linked_host_id") and not item.related_hosts:
+        # Linking a host afterwards must make the finding visible under that host too.
+        host = db.get(CaseHost, updates["linked_host_id"])
+        if host and host.case_id == item.case_id and (host.canonical_name or host.display_name):
+            item.related_hosts = [host.canonical_name or host.display_name]
     db.commit()
     db.refresh(item)
     return item

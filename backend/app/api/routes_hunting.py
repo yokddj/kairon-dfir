@@ -313,6 +313,13 @@ def hunting_patch_finding(case_id: str, finding_id: str, payload: dict = Body(..
             setattr(finding, key, value)
     if "evidence_id" in payload and "linked_evidence_id" not in payload:
         finding.linked_evidence_id = payload["evidence_id"]
+    if payload.get("linked_host_id") and not finding.related_hosts and "related_hosts" not in payload:
+        # Linking a host afterwards must make the finding visible under that host too.
+        linked = db.get(CaseHost, payload["linked_host_id"])
+        if linked and (linked.canonical_name or linked.display_name):
+            finding.related_hosts = [linked.canonical_name or linked.display_name]
+    if payload.get("source_timestamp") and finding.time_start is None:
+        finding.time_start = finding.source_timestamp
     db.commit()
     db.refresh(finding)
     log_activity(db, activity_type="finding_updated", title="Finding updated", message=f"Updated finding {finding.title}", case_id=case_id, metadata={"finding_id": finding.id})
