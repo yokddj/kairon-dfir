@@ -166,6 +166,10 @@ def test_the_timeline_is_indexed_once_per_scan(tmp_path, monkeypatch):
     evidence.metadata_json["memprocfs_scan"]["scanned_at"] = "T2"
     assert execution._index_scan_timeline(_Db(), run) == {"indexed": 3}
     assert indexed == [scan / "forensic", scan / "forensic"]
+    # A newer way of reading the same scan indexes it again.
+    monkeypatch.setattr(execution, "TIMELINE_INDEX_VERSION", execution.TIMELINE_INDEX_VERSION + 1)
+    assert execution._index_scan_timeline(_Db(), run) == {"indexed": 3}
+    assert execution._index_scan_timeline(_Db(), run)["skipped"] == "already indexed for this scan"
 
 
 def test_a_rescan_batch_asks_only_its_first_memprocfs_run_for_a_new_scan(monkeypatch):

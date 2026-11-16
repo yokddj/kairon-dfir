@@ -2117,9 +2117,11 @@ def _defender_record_key(row: dict[str, Any]) -> tuple[str, str, str] | None:
 
 
 def _memory_defender_rows(case_id: str, filters: dict[str, Any], limit: int = 100) -> list[dict[str, Any]]:
-    """Defender records recovered from a memory image's event logs. They are
-    indexed as event log records, not as Defender artifacts, so the Defender
-    artifact search does not return them. Empty when the index cannot be read."""
+    """Defender records recovered from a memory image's event logs, riskiest
+    first (detections before configuration changes), like the Defender
+    artifact search. They are indexed as event log records, not as Defender
+    artifacts, so that search does not return them. Empty when the index
+    cannot be read."""
     query_filters: list[dict[str, Any]] = [
         {"term": {"artifact.type": "memprocfs_eventlog"}},
         {"term": {"windows.provider": "Microsoft-Windows-Windows Defender"}},
@@ -2134,7 +2136,7 @@ def _memory_defender_rows(case_id: str, filters: dict[str, Any], limit: int = 10
     if time_range:
         query_filters.append({"range": {"@timestamp": time_range}})
     try:
-        result = search_documents(get_events_index(case_id), {"size": limit, "sort": [{"@timestamp": {"order": "asc"}}], "query": {"bool": {"filter": query_filters}}})
+        result = search_documents(get_events_index(case_id), {"size": limit, "sort": [{"risk_score": {"order": "desc", "missing": "_last"}}, {"@timestamp": {"order": "asc"}}], "query": {"bool": {"filter": query_filters}}})
     except Exception:  # noqa: BLE001
         return []
     rows = []
