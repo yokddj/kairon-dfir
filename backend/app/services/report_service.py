@@ -2885,15 +2885,16 @@ def _finding_events(finding: Finding) -> list[dict[str, Any]]:
     events = [item for item in (finding.timeline or []) if isinstance(item, dict) and item.get("kind") != "hunting_meta" and (item.get("timestamp") or item.get("summary"))]
     if events:
         return events
-    snapshot = finding.source_snapshot_json if isinstance(finding.source_snapshot_json, dict) else {}
-    summary = snapshot.get("summary") or finding.source_summary
+    snapshot = getattr(finding, "source_snapshot_json", None)
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    summary = snapshot.get("summary") or getattr(finding, "source_summary", None)
     if not summary:
         return []
     return [{
-        "timestamp": snapshot.get("timestamp") or finding.source_timestamp,
+        "timestamp": snapshot.get("timestamp") or getattr(finding, "source_timestamp", None),
         "event_type": snapshot.get("type") or "event",
         "summary": _clip(str(summary), 300),
-        "event_id": finding.linked_event_id or (snapshot.get("fields") or {}).get("event_id"),
+        "event_id": getattr(finding, "linked_event_id", None) or (snapshot.get("fields") or {}).get("event_id"),
     }]
 
 
