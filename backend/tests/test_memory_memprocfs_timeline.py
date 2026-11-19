@@ -512,3 +512,54 @@ def test_memory_event_log_copies_of_disk_records_of_the_same_host_are_marked(mon
     assert memprocfs_timeline.mark_event_log_copies("case-1")["updated"] == 1 and fake.docs["0"]["memprocfs"]["on_disk"] is False
     # Run again with nothing new: nothing is rewritten.
     assert memprocfs_timeline.mark_event_log_copies("case-1")["updated"] == 0
+
+
+def _memory_defender_source(event_id: int, provider: str, event_data: dict) -> dict:
+    return {
+        "case_id": "c", "evidence_id": "e", "event_id": f"memprocfs-{event_id}-{provider}", "@timestamp": "2025-03-07T19:40:01Z",
+        "artifact": {"type": "memprocfs_eventlog", "parser": "memprocfs"}, "source_file": "memprocfs\\timeline_eventlog.csv",
+        "windows": {"event_id": event_id, "provider": provider, "channel": "Microsoft-Windows-Windows Defender/Operational" if "Defender" in provider else "Microsoft-Windows-PushNotification-Platform/Operational", "event_data": event_data},
+        "event": {"message": f"Windows event {event_id}"}, "memprocfs": {"scan_run_id": "r", "timeline": "eventlog"}, "tags": ["memory"],
+    }
+
+
+def test_defender_records_recovered_from_memory_become_defender_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core import opensearch
+    from app.services.memory import memprocfs_timeline
+
+    detection = _memory_defender_source(1116, "Microsoft-Windows-Windows Defender", {"Threat Name": "Trojan:Win32/Example.A", "Path": "file:_C:\\Users\\x\\Downloads\\a.exe", "Action Name": "Not Applicable", "Severity Name": "Severe"})
+    queries: list[dict] = []
+    indexed: list[dict] = []
+
+    class Client:
+        pass
+
+    monkeypatch.setattr(opensearch, "get_opensearch_client", lambda *a, **k: Client())
+    monkeypatch.setattr(opensearch, "index_exists", lambda client, index: True)
+    monkeypatch.setattr(opensearch, "refresh_index", lambda *a, **k: None)
+    monkeypatch.setattr(opensearch, "bulk_index_events_with_report", lambda case_id, docs, **k: (indexed.extend(docs), {"documents_indexed": len(docs)})[1])
+    import opensearchpy.helpers as helpers
+
+    def scan(client, index, query, size):
+        queries.append(query)
+        return iter([{"_id": detection["event_id"], "_source": detection}])
+
+    monkeypatch.setattr(helpers, "scan", scan)
+    report = memprocfs_timeline.index_memory_defender_events("c", "e")
+
+    assert report == {"sources": 1, "indexed": 1}
+    document = indexed[0]
+    assert document["artifact"]["type"] == "defender" and document["artifact"]["parser"] == "memprocfs"
+    assert document["threat"]["name"] == "Trojan:Win32/Example.A"
+    assert "memory" in document["tags"]
+    query = str(queries[0])
+    assert "memprocfs_eventlog" in query and "'memprocfs.on_disk': True" in query and "*Defender*" in query
+
+
+def test_a_defender_event_id_from_another_provider_is_not_a_defender_event() -> None:
+    from app.ingest.raw_parsers.defender_evtx_backend import build_defender_document
+
+    other = _memory_defender_source(1117, "Microsoft-Windows-PushNotifications-Platform", {"Error": "2147952453"})
+    assert build_defender_document(other["event_id"], other) is None
+    defender = _memory_defender_source(1117, "Microsoft-Windows-Windows Defender", {"Threat Name": "Trojan:Win32/Example.A", "Action Name": "Quarantine"})
+    assert build_defender_document(defender["event_id"], defender)["artifact"]["type"] == "defender"
