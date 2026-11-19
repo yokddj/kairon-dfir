@@ -1382,3 +1382,29 @@ def test_get_event_detail_shows_a_srum_rows_byte_counts(monkeypatch):
     assert fields["network.bytes_sent"] == 1048576
     assert fields["network.bytes_received"] == 2048
     assert fields["srum.app_name"] == "example.exe"
+
+
+def test_a_reused_parent_pid_is_not_reported_as_the_parent(monkeypatch):
+    """The real parent exited and a later process holds its PID: a process that
+    started after the child cannot have launched it."""
+    story = {"target": None, "quality": {"identity_resolution": {"candidates": []}, "warnings": []}}
+    session = _patch_story(monkeypatch, story, _case_row())
+    evidence = type("Ev", (), {"id": "mem-1"})()
+    docs = [
+        {"memory_run_id": "run-1", "process": {"pid": 600, "ppid": 500, "name": "child.exe", "create_time": "2026-01-01 08:00:05+00:00"}},
+        {"memory_run_id": "run-1", "process": {"pid": 500, "ppid": 4, "name": "later.exe", "create_time": "2026-01-01 09:30:00+00:00"}},
+    ]
+
+    def fake_processes(case_id, *, run_id=None, evidence_id=None, pid=None, ppid=None, page_size=50, **_):
+        items = [d for d in docs if (pid is None or d["process"]["pid"] == pid) and (ppid is None or d["process"]["ppid"] == ppid)]
+        return {"items": items, "total": len(items)}
+
+    monkeypatch.setattr("app.services.investigation_memory._memory_evidences_for_hosts", lambda db, case_id, params: [(evidence, "WS-01")])
+    monkeypatch.setattr("app.services.memory.indexing.search_memory_processes", fake_processes)
+
+    tree = tools_module.tool_get_process_tree(session, "case-1", {"pid": 600})["memory_trees"][0]
+
+    assert tree["parents"] == []
+    assert tree["parent_not_in_image"] is True
+    assert [p["name"] for p in tree["ppid_now_held_by"]] == ["later.exe"]
+    assert "reused" in tree["note"]
