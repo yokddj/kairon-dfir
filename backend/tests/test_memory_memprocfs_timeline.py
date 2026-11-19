@@ -282,6 +282,26 @@ def test_powershell_command_invocations_and_engine_starts_name_their_command() -
     assert pipeline["powershell"]["command"] == "whoami /all"
 
 
+def test_a_flattened_engine_record_names_only_its_command() -> None:
+    """MemProcFS can flatten the 600/400 Details block onto one line, separated only by whitespace:
+    the command ends where PowerShell's own next field begins."""
+    flat = "Registry; Started; \tProviderName=Registry NewProviderState=Started SequenceNumber=1 HostName=ConsoleHost HostVersion=5.1 HostId=1a2b HostApplication=C:\\Windows\\system32\\DllHost.exe /Processid:{11111111-2222-3333-4444-555555555555}\tEngineVersion=\tRunspaceId=\tPipelineId=\tCommandName=\tCommandType=\tScriptName=\tCommandPath=\tCommandLine="
+    engine = timeline_event(_eventlog_row(600, "PowerShell", "Windows PowerShell", flat), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
+    assert engine["powershell"]["command"] == "C:\\Windows\\system32\\DllHost.exe /Processid:{11111111-2222-3333-4444-555555555555}"
+    spaced = "Started; \tHostApplication=powershell.exe -Version 5.1 -s -NoLogo -NoProfile  EngineVersion=  RunspaceId="
+    assert timeline_event(_eventlog_row(400, "PowerShell", "Windows PowerShell", spaced), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")["powershell"]["command"] == "powershell.exe -Version 5.1 -s -NoLogo -NoProfile"
+
+
+def test_a_flattened_pipeline_record_keeps_its_command_line_and_a_name_value_inside_it() -> None:
+    flat = "x; \tHostApplication=powershell.exe EngineVersion=5.1 CommandLine=Set-Item env:Path=C:\\tools; $hostname=1"
+    pipeline = timeline_event(_eventlog_row(800, "PowerShell", "Windows PowerShell", flat), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
+    assert pipeline["powershell"]["command"] == "Set-Item env:Path=C:\\tools; $hostname=1"
+    assert pipeline["powershell"]["host_application"] == "powershell.exe"
+    context = "Host Application = powershell.exe -nop Engine Version = 5.1 Runspace ID = 7"
+    invocation = timeline_event(_eventlog_row(4103, "Microsoft-Windows-PowerShell", "Microsoft-Windows-PowerShell/Operational", f"ContextInfo={context}; UserData=; Payload=x"), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
+    assert invocation["powershell"]["host_application"] == "powershell.exe -nop"
+
+
 def test_other_event_log_records_are_not_powershell_commands() -> None:
     security = timeline_event(_eventlog_row(4104, "Some-Other-Provider", "Application", "ScriptBlockText=x"), timeline="eventlog", case_id="c", evidence_id="e", scan_run_id="r")
     assert "command" not in (security.get("powershell") or {})

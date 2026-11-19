@@ -7045,10 +7045,12 @@ export const api = {
   getMemoryEvidenceTimeline: (
     caseId: string,
     evidenceId: string,
-    params: { kinds?: string[]; q?: string; order?: "asc" | "desc"; cursor?: string | null; page_size?: number } = {},
+    params: { kinds?: string[]; q?: string; order?: "asc" | "desc"; cursor?: string | null; page_size?: number; time_from?: string; time_to?: string } = {},
   ) => {
     const query = new URLSearchParams();
     if (params.kinds) query.set("kinds", params.kinds.join(","));
+    if (params.time_from) query.set("time_from", params.time_from);
+    if (params.time_to) query.set("time_to", params.time_to);
     if (params.q) query.set("q", params.q);
     if (params.order) query.set("order", params.order);
     if (params.cursor) query.set("cursor", params.cursor);
@@ -7062,9 +7064,11 @@ export const api = {
   ) => request<MemoryStack>(buildArtifactQuery(`/cases/${caseId}/memory/evidences/${evidenceId}/stack`, params)),
   getMemoryFindEvilProcesses: (caseId: string, evidenceId: string) =>
     request<MemoryFindEvilProcesses>(`/cases/${caseId}/memory/evidences/${evidenceId}/findevil/processes`),
-  getMemoryPowerShellLog: (caseId: string, evidenceId: string, params: { q?: string; page?: number; page_size?: number } = {}) => {
+  getMemoryPowerShellLog: (caseId: string, evidenceId: string, params: { q?: string; page?: number; page_size?: number; time_from?: string; time_to?: string } = {}) => {
     const query = new URLSearchParams();
     if (params.q) query.set("q", params.q);
+    if (params.time_from) query.set("time_from", params.time_from);
+    if (params.time_to) query.set("time_to", params.time_to);
     if (params.page) query.set("page", String(params.page));
     if (params.page_size) query.set("page_size", String(params.page_size));
     return request<MemoryPowerShellLog>(`/cases/${caseId}/memory/evidences/${evidenceId}/powershell-log?${query.toString()}`);

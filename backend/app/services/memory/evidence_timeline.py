@@ -88,6 +88,39 @@ def _after(item: dict[str, Any], cursor: tuple[str, str] | None, descending: boo
     return key < mark if descending else key > mark
 
 
+def _window(time_from: str | None, time_to: str | None) -> tuple[datetime | None, datetime | None]:
+    """The time window as UTC moments; a bad value is the caller's 400."""
+    from fastapi import HTTPException
+
+    from app.services.search_service import _parse_time
+
+    try:
+        return _parse_time(time_from or None), _parse_time(time_to or None)
+    except (ValueError, OverflowError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid time range: {exc}") from exc
+
+
+def _in_window(item: dict[str, Any], window: tuple[datetime | None, datetime | None]) -> bool:
+    start, end = window
+    if start is None and end is None:
+        return True
+    from app.services.search_service import _parse_time
+
+    try:
+        moment = _parse_time(str(item.get("timestamp") or ""))
+    except (ValueError, OverflowError):
+        return False
+    if moment is None:
+        return False
+    return (start is None or moment >= start) and (end is None or moment <= end)
+
+
+def _range_clause(window: tuple[datetime | None, datetime | None]) -> dict[str, Any] | None:
+    start, end = window
+    bounds = {key: value.isoformat() for key, value in (("gte", start), ("lte", end)) if value is not None}
+    return {"range": {"@timestamp": bounds}} if bounds else None
+
+
 def _matches(item: dict[str, Any], query: str) -> bool:
     if not query:
         return True
@@ -139,7 +172,7 @@ def _volatility_items(db: Session, case_id: str, evidence_id: str, kinds: set[st
     return items
 
 
-def _memprocfs_query(case_id: str, evidence_id: str, kinds: list[str], query: str) -> list[dict[str, Any]]:
+def _memprocfs_query(case_id: str, evidence_id: str, kinds: list[str], query: str, window: tuple[datetime | None, datetime | None] = (None, None)) -> list[dict[str, Any]]:
     from app.core.opensearch import search_text_substring_clause
 
     filters: list[dict[str, Any]] = [
@@ -150,6 +183,9 @@ def _memprocfs_query(case_id: str, evidence_id: str, kinds: list[str], query: st
     ]
     if query:
         filters.append(search_text_substring_clause(f"*{query}*"))
+    time_range = _range_clause(window)
+    if time_range:
+        filters.append(time_range)
     return filters
 
 
@@ -175,13 +211,13 @@ def _memprocfs_item(hit: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _memprocfs_page(case_id: str, evidence_id: str, kinds: list[str], query: str, cursor: tuple[str, str] | None, descending: bool, size: int) -> tuple[list[dict[str, Any]], int]:
+def _memprocfs_page(case_id: str, evidence_id: str, kinds: list[str], query: str, cursor: tuple[str, str] | None, descending: bool, size: int, window: tuple[datetime | None, datetime | None] = (None, None)) -> tuple[list[dict[str, Any]], int]:
     """The next ``size`` MemProcFS events after the cursor, and how many follow it in all."""
     from app.core.opensearch import get_events_index, get_opensearch_client
 
     if not kinds:
         return [], 0
-    filters = _memprocfs_query(case_id, evidence_id, kinds, query)
+    filters = _memprocfs_query(case_id, evidence_id, kinds, query, window)
     if cursor:
         comparison = "lt" if descending else "gt"
         filters.append({"bool": {"should": [
@@ -198,10 +234,10 @@ def _memprocfs_page(case_id: str, evidence_id: str, kinds: list[str], query: str
     return [_memprocfs_item(hit) for hit in hits.get("hits", [])], int((hits.get("total") or {}).get("value") or 0)
 
 
-def _memprocfs_counts(case_id: str, evidence_id: str, query: str) -> dict[str, int]:
+def _memprocfs_counts(case_id: str, evidence_id: str, query: str, window: tuple[datetime | None, datetime | None] = (None, None)) -> dict[str, int]:
     from app.core.opensearch import get_events_index, get_opensearch_client
 
-    body = {"query": {"bool": {"filter": _memprocfs_query(case_id, evidence_id, list(MEMPROCFS_TIMELINES), query)}}, "size": 0, "aggs": {"types": {"terms": {"field": "artifact.type", "size": 50}}}}
+    body = {"query": {"bool": {"filter": _memprocfs_query(case_id, evidence_id, list(MEMPROCFS_TIMELINES), query, window)}}, "size": 0, "aggs": {"types": {"terms": {"field": "artifact.type", "size": 50}}}}
     try:
         response = get_opensearch_client().search(index=get_events_index(case_id), body=body, params={"ignore_unavailable": "true"})
     except Exception:  # noqa: BLE001
@@ -220,21 +256,24 @@ def memory_evidence_timeline(
     order: str = "asc",
     cursor: str | None = None,
     page_size: int = 100,
+    time_from: str | None = None,
+    time_to: str | None = None,
 ) -> dict[str, Any]:
     selected = [kind for kind in (kinds if kinds is not None else DEFAULT_KINDS) if kind in KINDS]
     descending = order == "desc"
     size = page_size if page_size in PAGE_SIZES else 100
     query = (q or "").strip()
     position = decode_cursor(cursor)
+    window = _window(time_from, time_to)
 
-    volatility_all = [item for item in _volatility_items(db, case_id, evidence_id, set(VOLATILITY_KINDS)) if _matches(item, query)]
+    volatility_all = [item for item in _volatility_items(db, case_id, evidence_id, set(VOLATILITY_KINDS)) if _matches(item, query) and _in_window(item, window)]
     counts = {kind: 0 for kind in KINDS}
     for item in volatility_all:
         counts[item["kind"]] += 1
-    counts.update(_memprocfs_counts(case_id, evidence_id, query))
+    counts.update(_memprocfs_counts(case_id, evidence_id, query, window))
 
     volatility = sorted((item for item in volatility_all if item["kind"] in selected and _after(item, position, descending)), key=_sort_key, reverse=descending)
-    memprocfs, memprocfs_remaining = _memprocfs_page(case_id, evidence_id, [kind for kind in selected if KINDS[kind][0] == "memprocfs"], query, position, descending, size)
+    memprocfs, memprocfs_remaining = _memprocfs_page(case_id, evidence_id, [kind for kind in selected if KINDS[kind][0] == "memprocfs"], query, position, descending, size, window)
     merged = sorted([*volatility[:size], *memprocfs], key=_sort_key, reverse=descending)
     page = merged[:size]
     has_more = len(volatility) + memprocfs_remaining > len(page)
@@ -247,11 +286,12 @@ def memory_evidence_timeline(
         "selected_kinds": selected,
         "total": sum(counts[kind] for kind in selected),
         "counts": counts,
+        "time_range": {"from": time_from or None, "to": time_to or None},
         "kinds": [{"key": key, "producer": producer, "label": label, "default": key in DEFAULT_KINDS} for key, (producer, label) in KINDS.items()],
     }
 
 
-def memory_powershell_log(case_id: str, evidence_id: str, *, q: str | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:
+def memory_powershell_log(case_id: str, evidence_id: str, *, q: str | None = None, page: int = 1, page_size: int = 50, time_from: str | None = None, time_to: str | None = None) -> dict[str, Any]:
     """PowerShell's own event log records MemProcFS found in this memory image (script blocks,
     command invocations, engine starts), oldest first. Unlike console history they carry the time
     PowerShell logged them."""
@@ -270,6 +310,9 @@ def memory_powershell_log(case_id: str, evidence_id: str, *, q: str | None = Non
         from app.core.opensearch import search_text_substring_clause
 
         filters.append(search_text_substring_clause(f"*{query}*"))
+    time_range = _range_clause(_window(time_from, time_to))
+    if time_range:
+        filters.append(time_range)
     body = {
         "query": {"bool": {"filter": filters}},
         "from": (page - 1) * size,

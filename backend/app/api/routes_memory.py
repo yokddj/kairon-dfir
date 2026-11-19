@@ -819,6 +819,8 @@ def get_memory_evidence_timeline(
     order: str = Query(default="asc", pattern="^(asc|desc)$"),
     cursor: str | None = Query(default=None),
     page_size: int = Query(default=100, ge=1, le=500),
+    time_from: str | None = Query(default=None, description="ISO 8601 lower bound (inclusive)."),
+    time_to: str | None = Query(default=None, description="ISO 8601 upper bound (inclusive)."),
     db: Session = Depends(get_db),
 ) -> dict:
     """This memory image's own timeline: Volatility's dated events (active runs) and MemProcFS's
@@ -829,7 +831,7 @@ def get_memory_evidence_timeline(
     if not evidence or evidence.case_id != case_id:
         raise HTTPException(status_code=404, detail="Evidence not found for this case.")
     selected = None if kinds is None else [item.strip() for item in kinds.split(",") if item.strip()]
-    return memory_evidence_timeline(db, case_id=case_id, evidence_id=evidence_id, kinds=selected, q=q, order=order, cursor=cursor, page_size=page_size)
+    return memory_evidence_timeline(db, case_id=case_id, evidence_id=evidence_id, kinds=selected, q=q, order=order, cursor=cursor, page_size=page_size, time_from=time_from, time_to=time_to)
 
 
 @router.get(
@@ -902,6 +904,8 @@ def get_memory_powershell_log(
     q: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
+    time_from: str | None = Query(default=None, description="ISO 8601 lower bound (inclusive)."),
+    time_to: str | None = Query(default=None, description="ISO 8601 upper bound (inclusive)."),
     db: Session = Depends(get_db),
 ) -> dict:
     """PowerShell event log records (4104, 4103, 400/403/600/800) MemProcFS recovered from this image."""
@@ -910,7 +914,7 @@ def get_memory_powershell_log(
     evidence = db.get(Evidence, evidence_id)
     if not evidence or evidence.case_id != case_id:
         raise HTTPException(status_code=404, detail="Evidence not found for this case.")
-    return memory_powershell_log(case_id, evidence_id, q=q, page=page, page_size=page_size)
+    return memory_powershell_log(case_id, evidence_id, q=q, page=page, page_size=page_size, time_from=time_from, time_to=time_to)
 
 
 @router.get(

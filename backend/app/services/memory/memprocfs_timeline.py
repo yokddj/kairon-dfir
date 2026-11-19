@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 PARSER = "memprocfs"
 # Raise when the events read from a scan change (parsing, normalization, scoring):
 # a saved scan indexed by an older version is indexed again on the next memory run.
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 MEMORY_PLUGIN = "memprocfs.timeline"
 # Indexed in this order, so the row cap falls on the bulkiest timelines (registry, NTFS) last.
 TIMELINES: dict[str, str] = {
@@ -105,14 +105,31 @@ _GENERIC_EVENT_ACTIONS = {"windows_event_observed"}
 _PREFETCH = re.compile(r"\\Windows\\Prefetch\\(?P<program>[^\\]+?)-[0-9A-F]{8}\.pf$", re.I)
 _HOST_APPLICATION = re.compile(r"Host ?Application\s*=\s*(?P<value>[^\r\n]*)")
 _COMMAND_LINE = re.compile(r"CommandLine\s*=\s*(?P<value>[^\r\n]*)")
+# The other fields of PowerShell's 400/403/600/800 "Details" block (the classic PowerShell log's
+# message schema). On disk each is on its own line; MemProcFS can flatten the block, leaving them
+# on the host's line separated only by whitespace ("...-NoProfile\tEngineVersion=\tRunspaceId=").
+# Only these names end a value: a command line may itself hold "Name=value".
+_POWERSHELL_DETAIL_NAMES = (
+    "New Engine State", "Previous Engine State", "New Command State", "New Provider State", "Provider Name",
+    "Sequence Number", "Host Name", "Host Version", "Host Id", "Host Application", "Engine Version",
+    "Runspace Id", "Pipeline Id", "Command Name", "Command Type", "Script Name", "Command Path",
+    "Command Line", "User Id", "Connected User", "Shell Id",
+)
+# Written either way: "EngineVersion=" (400/403/600/800) or "Engine Version = " (4103's ContextInfo).
+_POWERSHELL_DETAIL_FIELD = re.compile(
+    # Case as Windows writes it ("Id" or "ID"): a lowercase "hostname=" inside a command is not one.
+    r"\s+(?=(?:" + "|".join(name.replace(" ", " ?").replace("Id", "I[Dd]") for name in _POWERSHELL_DETAIL_NAMES) + r")\s*=)"
+)
 
 
 def _line_value(pattern: re.Pattern[str], text: str) -> str | None:
     match = pattern.search(text or "")
     if not match:
         return None
-    # A flattened record continues with "; NextKey=..." on the same line.
-    value = _EVENT_DATA_FIELD.split(match["value"])[0].strip()
+    # A flattened record continues with "; NextKey=..." or whitespace + a PowerShell detail field
+    # on the same line.
+    value = _EVENT_DATA_FIELD.split(match["value"])[0]
+    value = _POWERSHELL_DETAIL_FIELD.split(value)[0].strip()
     return value or None
 
 

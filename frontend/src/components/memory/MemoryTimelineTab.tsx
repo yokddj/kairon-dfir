@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { useTimezonePreference } from "../../context/TimezoneContext";
+import { useCaseTimeWindow } from "../../hooks/useGlobalTimeRange";
+import TimeRangeFilter from "../TimeRangeFilter";
 import { formatTimestamp } from "../../lib/time";
 
 type Props = {
@@ -23,17 +25,20 @@ export function MemoryTimelineTab({ caseId, evidenceId }: Props) {
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [order, setOrder] = useState<"asc" | "desc">("asc");
+  // The case-wide window: the one set in Search, the case Timeline or the top bar applies here too.
+  const { timeFrom, timeTo, setTimeRange } = useCaseTimeWindow();
   // Cursors of the pages already seen, so Previous goes back without offsets.
   const [cursors, setCursors] = useState<(string | null)[]>([null]);
   const cursor = cursors[cursors.length - 1];
 
   useEffect(() => {
     setCursors([null]);
-  }, [kinds, query, order, evidenceId]);
+  }, [kinds, query, order, evidenceId, timeFrom, timeTo]);
 
   const timelineQuery = useQuery({
-    queryKey: ["memory-evidence-timeline", caseId, evidenceId, kinds, query, order, cursor],
-    queryFn: () => api.getMemoryEvidenceTimeline(caseId, evidenceId, { kinds: kinds ?? undefined, q: query || undefined, order, cursor, page_size: 100 }),
+    queryKey: ["memory-evidence-timeline", caseId, evidenceId, kinds, query, order, cursor, timeFrom, timeTo],
+    queryFn: () =>
+      api.getMemoryEvidenceTimeline(caseId, evidenceId, { kinds: kinds ?? undefined, q: query || undefined, order, cursor, page_size: 100, time_from: timeFrom || undefined, time_to: timeTo || undefined }),
     refetchOnWindowFocus: false,
   });
   const data = timelineQuery.data;
@@ -78,6 +83,8 @@ export function MemoryTimelineTab({ caseId, evidenceId }: Props) {
           </button>
         </div>
       </div>
+
+      <TimeRangeFilter compact className="mt-3 max-w-xl" timeFrom={timeFrom} timeTo={timeTo} onChange={setTimeRange} />
 
       {data ? (
         <div className="mt-3 flex flex-wrap gap-2" data-testid="memory-timeline-kinds">
