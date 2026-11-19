@@ -1,4 +1,4 @@
-import { fromDateTimeLocalValue } from "../../lib/time";
+import { formatTimestamp, fromDateTimeLocalValue } from "../../lib/time";
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -12,6 +12,7 @@ const getCommandLineHistoryMock = vi.fn();
 const getMemoryPowerShellLogMock = vi.fn();
 const getMemoryFindEvilProcessesMock = vi.fn();
 
+vi.mock("../../hooks/useEffectiveTimezone", () => ({ useEffectiveTimezone: () => "UTC" }));
 vi.mock("../../api/client", () => ({
   api: {
     getMemoryFindEvilProcesses: (...args: unknown[]) => getMemoryFindEvilProcessesMock(...args),
@@ -120,7 +121,7 @@ describe("MemoryShellHistoryTab", () => {
     fireEvent.change(await screen.findByTestId("shell-history-launched-from"), { target: { value: "2025-03-07T19:40" } });
     fireEvent.change(screen.getByTestId("shell-history-launched-to"), { target: { value: "2025-03-07T19:45" } });
     await waitFor(() =>
-      expect(getCommandLineHistoryMock).toHaveBeenLastCalledWith(CASE, expect.objectContaining({ time_from: fromDateTimeLocalValue("2025-03-07T19:40"), time_to: fromDateTimeLocalValue("2025-03-07T19:45:59") })),
+      expect(getCommandLineHistoryMock).toHaveBeenLastCalledWith(CASE, expect.objectContaining({ time_from: fromDateTimeLocalValue("2025-03-07T19:40", "UTC"), time_to: fromDateTimeLocalValue("2025-03-07T19:45:59", "UTC") })),
     );
   });
 
@@ -136,7 +137,7 @@ describe("MemoryShellHistoryTab", () => {
     const rows = await screen.findAllByTestId("shell-history-launched-row");
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("DumpIt.exe");
-    expect(rows[0]).toHaveTextContent("2025-03-07 19:41:23");
+    expect(rows[0]).toHaveTextContent(formatTimestamp("2025-03-07T19:41:23+00:00", "UTC"));
     expect(rows[1]).toHaveTextContent("Exited");
     expect(getCommandLineHistoryMock).toHaveBeenCalledWith(CASE, expect.objectContaining({ evidence_id: EVIDENCE, sort_order: "oldest_first" }));
   });
@@ -326,7 +327,7 @@ describe("MemoryShellHistoryTab", () => {
     renderTab();
     await waitFor(() => expect(screen.getAllByTestId("shell-history-powershell-row")).toHaveLength(2));
     const rows = screen.getAllByTestId("shell-history-powershell-row");
-    expect(rows[0].textContent).toContain("2025-03-07 19:40:01");
+    expect(rows[0].textContent).toContain(formatTimestamp("2025-03-07T19:40:01Z", "UTC"));
     expect(rows[0].textContent).toContain("4104");
     expect(rows[0].textContent).toContain("part 1/2");
     expect(rows[1].textContent).toContain("Get-LocalUser");
