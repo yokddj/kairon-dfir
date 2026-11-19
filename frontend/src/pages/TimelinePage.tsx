@@ -11,7 +11,6 @@ import { HostFilter } from "../components/HostFilter";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { artifactLabel } from "../lib/artifactRegistry";
 import { windowsExecutionStoriesRoute } from "../lib/canonicalRoutes";
-import { compareValues, nextSortDirection, type SortDirection } from "../lib/sorting";
 import { formatTimestamp } from "../lib/time";
 import TextMatchModeSelect, { parseTextMatchMode } from "../components/TextMatchModeSelect";
 import TimeRangeFilter from "../components/TimeRangeFilter";
@@ -70,27 +69,6 @@ function itemTimestamp(item: TimelineItem, timezone: string) {
   return item.timestamp ? formatTimestamp(item.timestamp, timezone) : "Undated";
 }
 
-function timelineSortValue(item: TimelineItem, key: string) {
-  switch (key) {
-    case "timestamp":
-      return item.timestamp;
-    case "risk":
-      return item.risk_score ?? 0;
-    case "kind":
-      return item.kind;
-    case "artifact":
-      return item.artifact_type;
-    case "type":
-      return timelineTypeDisplay(item);
-    case "host":
-      return item.host;
-    case "summary":
-      return item.summary || item.title;
-    default:
-      return item.summary || item.title;
-  }
-}
-
 function TimelinePage() {
   const { caseId: routeCaseId } = useParams();
   const navigate = useNavigate();
@@ -116,8 +94,6 @@ function TimelinePage() {
   const [hostId, setHostId] = useState(searchParams.get("host_id") ?? "");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get("selected"));
-  const [tableSortKey, setTableSortKey] = useState("timestamp");
-  const [tableSortDirection, setTableSortDirection] = useState<SortDirection>("desc");
   const [bookmarkDraft, setBookmarkDraft] = useState<{ open: boolean; item: TimelineItem | null; note: string; category: TimelineBookmark["category"]; importance: TimelineBookmark["importance"] }>({
     open: false,
     item: null,
@@ -127,7 +103,8 @@ function TimelinePage() {
   });
   const [cursorStack, setCursorStack] = useState<string[]>([]);
   // A new time window (here or from another view / the top bar) starts again from the first page.
-  useEffect(() => setCursorStack([]), [timeFrom, timeTo]);
+  // So does a new order: a cursor is a position in one order and means nothing in another.
+  useEffect(() => setCursorStack([]), [timeFrom, timeTo, sort]);
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [showHidden, setShowHidden] = useState(false);
   const focusedContextRef = useRef<string>("");
@@ -354,9 +331,9 @@ function TimelinePage() {
     return items.filter((item) => item.kind !== "event" || !hiddenMarkingByEventId.has(item.id));
   }, [timelineQuery.data?.items, showHidden, hiddenMarkingByEventId]);
 
-  const sortedTimelineItems = useMemo(() => {
-    return [...visibleTimelineItems].sort((left, right) => compareValues(timelineSortValue(left, tableSortKey), timelineSortValue(right, tableSortKey), tableSortDirection));
-  }, [tableSortDirection, tableSortKey, visibleTimelineItems]);
+  // Rows stay in the server's order (the Sort select / the Timestamp and Risk headers): re-sorting
+  // the loaded page in the browser ordered only the 100 rows shown, and reversed "Oldest first".
+  const sortedTimelineItems = visibleTimelineItems;
 
   const selectableIds = useMemo(
     () => sortedTimelineItems.filter((item) => item.kind === "event" && !hiddenMarkingByEventId.has(item.id)).map((item) => item.id),
@@ -368,9 +345,14 @@ function TimelinePage() {
     setSelectedRowIds(allSelectableSelected ? new Set() : new Set(selectableIds));
   }
 
-  function handleTableSort(key: string) {
-    setTableSortDirection((current) => nextSortDirection(tableSortKey, current, key));
-    setTableSortKey(key);
+  // The two orders the server can apply to the whole timeline. Clicking the active one flips it.
+  const sortField = sort.startsWith("risk") ? "risk" : "timestamp";
+  const sortAscending = sort.endsWith("_asc");
+  function handleTableSort(field: "timestamp" | "risk") {
+    setSort(field === sortField ? `${field}_${sortAscending ? "desc" : "asc"}` : `${field}_desc`);
+  }
+  function sortArrow(field: "timestamp" | "risk") {
+    return field === sortField ? (sortAscending ? "↑" : "↓") : "";
   }
 
   const aroundEventId = searchParams.get("around_event") ?? "";
@@ -697,13 +679,13 @@ function TimelinePage() {
                 onChange={toggleSelectAllVisible}
                 className="h-3.5 w-3.5"
               />
-              <button type="button" onClick={() => handleTableSort("timestamp")} className="text-left">Timestamp {tableSortKey === "timestamp" ? (tableSortDirection === "asc" ? "↑" : "↓") : ""}</button>
-              <button type="button" onClick={() => handleTableSort("risk")} className="text-left">Risk {tableSortKey === "risk" ? (tableSortDirection === "asc" ? "↑" : "↓") : ""}</button>
-              <button type="button" onClick={() => handleTableSort("kind")} className="text-left">Kind {tableSortKey === "kind" ? (tableSortDirection === "asc" ? "↑" : "↓") : ""}</button>
-              <button type="button" onClick={() => handleTableSort("artifact")} className="text-left">Artifact {tableSortKey === "artifact" ? (tableSortDirection === "asc" ? "↑" : "↓") : ""}</button>
-              <button type="button" onClick={() => handleTableSort("type")} className="text-left">Type {tableSortKey === "type" ? (tableSortDirection === "asc" ? "↑" : "↓") : ""}</button>
-              <button type="button" onClick={() => handleTableSort("host")} className="text-left">Host {tableSortKey === "host" ? (tableSortDirection === "asc" ? "↑" : "↓") : ""}</button>
-              <button type="button" onClick={() => handleTableSort("summary")} className="text-left">Summary {tableSortKey === "summary" ? (tableSortDirection === "asc" ? "↑" : "↓") : ""}</button>
+              <button type="button" onClick={() => handleTableSort("timestamp")} className="text-left" title="Orders the whole timeline" data-testid="timeline-sort-timestamp">Timestamp {sortArrow("timestamp")}</button>
+              <button type="button" onClick={() => handleTableSort("risk")} className="text-left" title="Orders the whole timeline" data-testid="timeline-sort-risk">Risk {sortArrow("risk")}</button>
+              <span>Kind</span>
+              <span>Artifact</span>
+              <span>Type</span>
+              <span>Host</span>
+              <span>Summary</span>
               <span>Action</span>
             </div>
             <div className="divide-y divide-line/60">
