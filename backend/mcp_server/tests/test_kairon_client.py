@@ -160,3 +160,71 @@ def test_a_uuid_case_id_reaches_the_tool_endpoint(monkeypatch):
     monkeypatch.setattr(httpx, "get", fake_get)
     KaironClient("http://kairon.test", "token").call_tool("3f2b8c1e-7d4a-4e9b-a6c2-5b1d9e0f4a7c", "describe_case", {})
     assert seen["url"] == "http://kairon.test/api/cases/3f2b8c1e-7d4a-4e9b-a6c2-5b1d9e0f4a7c/ai/tools/describe_case"
+
+
+def test_calls_beyond_the_concurrency_cap_wait_their_turn(monkeypatch):
+    import threading
+    import time as time_module
+
+    in_flight = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def slow_get(*a, **k):
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        time_module.sleep(0.05)
+        with lock:
+            in_flight -= 1
+        return httpx.Response(200, json=[], request=httpx.Request("GET", "http://x"))
+
+    monkeypatch.setattr(httpx, "get", slow_get)
+    client = KaironClient("http://localhost:8000", "token", max_concurrent=2)
+    threads = [threading.Thread(target=client.list_cases) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert peak == 2
+
+
+def test_an_overloaded_backend_is_retried_once(monkeypatch):
+    responses = [503, 200]
+
+    def flaky_get(*a, **k):
+        status = responses.pop(0)
+        return httpx.Response(status, json=[] if status == 200 else {"detail": "busy"}, request=httpx.Request("GET", "http://x"))
+
+    monkeypatch.setattr(httpx, "get", flaky_get)
+    monkeypatch.setattr("mcp_server.kairon_client._RETRY_DELAY_SECONDS", 0)
+
+    assert KaironClient("http://localhost:8000", "token").list_cases() == []
+    assert responses == []
+
+
+def test_a_timeout_is_not_retried(monkeypatch):
+    calls = []
+
+    def timing_out(*a, **k):
+        calls.append(1)
+        raise httpx.ReadTimeout("slow")
+
+    monkeypatch.setattr(httpx, "get", timing_out)
+
+    with pytest.raises(KaironAPIError) as excinfo:
+        KaironClient("http://localhost:8000", "token").list_cases()
+
+    assert len(calls) == 1
+    assert "did not answer" in excinfo.value.detail
+
+
+def test_the_concurrency_cap_comes_from_the_environment(monkeypatch):
+    monkeypatch.setenv("KAIRON_API_URL", "http://localhost:8000")
+    monkeypatch.setenv("KAIRON_SERVICE_TOKEN", "token")
+    monkeypatch.setenv("KAIRON_MCP_MAX_CONCURRENT", "nope")
+
+    with pytest.raises(RuntimeError):
+        KaironClient.from_env()

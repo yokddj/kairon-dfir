@@ -1309,3 +1309,56 @@ def test_host_coverage_tool_reports_gaps(monkeypatch):
     monkeypatch.setattr(tools_module, "_resolve_host", lambda *_a: None)
     result = run_tool(None, "case-1", "get_host_coverage", {})
     assert result["hosts"][0]["missing_families"] == ["Process creation log"] and result["warnings"]
+
+
+def test_search_events_tells_the_model_how_its_query_was_read(monkeypatch):
+    """event_id:4624 is read as eventid:4624; the model must be told, or it
+    reports the corrected query as the one it typed."""
+    def fake_search(case_id, params, db=None):
+        params["_query_syntax"] = {"warnings": ["event_id: ... read as a Windows Event ID"]}
+        return 0, [], [], {}
+
+    monkeypatch.setattr("app.services.search_service.search_events_v2", fake_search)
+    monkeypatch.setattr("app.services.search_service.build_search_v2_params", lambda **kw: dict(kw))
+    monkeypatch.setattr(tools_module, "_zero_guidance", lambda db, case_id: "none")
+
+    result = tools_module.tool_search_events(None, "case-1", {"query": "event_id:4624"})
+
+    assert result["warnings"] == ["event_id: ... read as a Windows Event ID"]
+
+
+def test_a_pid_missing_from_disk_events_is_built_from_the_memory_images(monkeypatch):
+    story = {"target": None, "quality": {"identity_resolution": {"candidates": []}, "warnings": []}}
+    session = _patch_story(monkeypatch, story, _case_row())
+    evidence = type("Ev", (), {"id": "mem-1"})()
+    docs = [
+        {"memory_run_id": "run-1", "process": {"pid": 17988, "ppid": 4400, "name": "cmd.exe", "command_line": "cmd.exe /c whoami"}},
+        {"memory_run_id": "run-1", "process": {"pid": 4400, "ppid": 900, "name": "explorer.exe"}},
+        {"memory_run_id": "run-1", "process": {"pid": 5000, "ppid": 17988, "name": "whoami.exe"}},
+    ]
+
+    def fake_processes(case_id, *, run_id=None, evidence_id=None, pid=None, ppid=None, page_size=50, **_):
+        items = [d for d in docs if (pid is None or d["process"]["pid"] == pid) and (ppid is None or d["process"]["ppid"] == ppid)]
+        return {"items": items, "total": len(items)}
+
+    monkeypatch.setattr("app.services.investigation_memory._memory_evidences_for_hosts", lambda db, case_id, params: [(evidence, "LAPTOP-01")])
+    monkeypatch.setattr("app.services.memory.indexing.search_memory_processes", fake_processes)
+
+    result = tools_module.tool_get_process_tree(session, "case-1", {"pid": 17988})
+
+    assert result["found"] is True and result["source"] == "memory"
+    tree = result["memory_trees"][0]
+    assert tree["target"]["name"] == "cmd.exe"
+    assert [p["name"] for p in tree["parents"]] == ["explorer.exe"]
+    assert [c["name"] for c in tree["children"]] == ["whoami.exe"]
+    assert tree["parent_not_in_image"] is False
+
+
+def test_a_pid_in_neither_disk_nor_memory_is_still_reported_as_not_found(monkeypatch):
+    story = {"target": None, "quality": {"identity_resolution": {"candidates": []}, "warnings": []}}
+    session = _patch_story(monkeypatch, story, _case_row())
+    monkeypatch.setattr("app.services.investigation_memory._memory_evidences_for_hosts", lambda db, case_id, params: [])
+
+    result = tools_module.tool_get_process_tree(session, "case-1", {"pid": 17988})
+
+    assert result["found"] is False

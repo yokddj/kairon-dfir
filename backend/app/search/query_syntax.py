@@ -692,8 +692,24 @@ def _evaluate(node: Node, payload: dict[str, Any], text_haystack: str) -> bool:
     return False
 
 
+# event_id is the document's own id: a long hash, never a short number. A
+# short number after event_id: is a Windows Event ID typed with the wrong
+# field name (event_id:4624), and as written it can only ever match nothing --
+# a silent zero that reads as "no 4624 in this case". Read it as eventid:.
+_NUMERIC_EVENT_ID_RE = re.compile(r"(?<![\w.@])event_id:(\d{1,5})(?![\w.])", re.IGNORECASE)
+WINDOWS_EVENT_ID_REWRITE_WARNING = (
+    "event_id: is the document id; a short number there was read as a Windows Event ID "
+    "(eventid:). Use eventid:<number> for Windows Event IDs."
+)
+
+
+def _rewrite_numeric_event_id(text: str) -> tuple[str, list[str]]:
+    rewritten, count = _NUMERIC_EVENT_ID_RE.subn(r"eventid:\1", text)
+    return rewritten, ([WINDOWS_EVENT_ID_REWRITE_WARNING] if count else [])
+
+
 def analyze_query_syntax(query: str, text_query_builder) -> dict[str, Any]:  # noqa: ANN001
-    text = str(query or "").strip()
+    text, rewrite_warnings = _rewrite_numeric_event_id(str(query or "").strip())
     if not text:
         return {
             "mode": "plain",
@@ -726,7 +742,7 @@ def analyze_query_syntax(query: str, text_query_builder) -> dict[str, Any]:  # n
         "mode": mode,
         "parsed": True,
         "errors": [],
-        "warnings": [],
+        "warnings": rewrite_warnings,
         "normalized_query": text,
         "applied_filters": filters,
         "ast": ast,
