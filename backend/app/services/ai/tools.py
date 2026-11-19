@@ -622,6 +622,16 @@ def _memory_process_node(doc: dict, host_name: str | None) -> dict:
     return {key: value for key, value in node.items() if value not in (None, "", [], {})}
 
 
+def _process_start(doc: dict) -> Any:
+    from app.services.search_service import _parse_time
+
+    value = (doc.get("process") or {}).get("create_time")
+    try:
+        return _parse_time(str(value)) if value else None
+    except Exception:  # noqa: BLE001 - an unreadable time just skips the check
+        return None
+
+
 def _memory_process_tree(db: Session, case_id: str, pid: int, host: CaseHost | None, limit: int) -> list[dict]:
     """Parent and children of a PID as seen in the case's memory images.
 
@@ -646,18 +656,41 @@ def _memory_process_tree(db: Session, case_id: str, pid: int, host: CaseHost | N
             seen_runs.add(run_id)
             target = _memory_process_node(doc, host_name)
             parents: list[dict] = []
+            reused: list[dict] = []
+            started = _process_start(doc)
             ppid = (doc.get("process") or {}).get("ppid")
             if ppid not in (None, ""):
-                parent_docs = search_memory_processes(case_id, run_id=run_id, evidence_id=str(evidence.id), pid=int(ppid), page_size=1)["items"]
-                parents = [_memory_process_node(item, host_name) for item in parent_docs]
+                parent_docs = search_memory_processes(case_id, run_id=run_id, evidence_id=str(evidence.id), pid=int(ppid), page_size=limit)["items"]
+                # PIDs are reused: once the real parent exits, a later process
+                # can hold its PID. One that started after the child cannot be
+                # its parent (wininit.exe's parent smss.exe exits at boot, and
+                # its PID may now belong to some svchost.exe).
+                for item in parent_docs:
+                    parent_start = _process_start(item)
+                    if started and parent_start and parent_start > started:
+                        reused.append(_memory_process_node(item, host_name))
+                    else:
+                        parents.append(_memory_process_node(item, host_name))
             child_docs = search_memory_processes(case_id, run_id=run_id, evidence_id=str(evidence.id), ppid=pid, page_size=limit)["items"]
-            trees.append({
+            children = [
+                _memory_process_node(item, host_name)
+                for item in child_docs
+                if not (started and _process_start(item) and _process_start(item) < started)
+            ]
+            tree = {
                 "evidence_id": str(evidence.id),
                 "target": target,
                 "parents": parents,
                 "parent_not_in_image": bool(ppid not in (None, "") and not parents),
-                "children": [_memory_process_node(item, host_name) for item in child_docs],
-            })
+                "children": children,
+            }
+            if reused:
+                tree["ppid_now_held_by"] = reused
+                tree["note"] = (
+                    f"PID {ppid} now belongs to a process that started after this one, so it is not "
+                    "the parent: the real parent has exited and its PID was reused."
+                )
+            trees.append(tree)
     return trees[:limit]
 
 
