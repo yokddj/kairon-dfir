@@ -321,14 +321,36 @@ describe("TimelinePage", () => {
     expect(document.body.style.overflow).toBe("");
   });
 
-  it("timeline headers sort visible items", async () => {
+  it("the Timestamp and Risk headers order the whole timeline on the server", async () => {
     renderPage();
     await screen.findByText("WINWORD.EXE -> powershell.exe");
-    fireEvent.click(screen.getByRole("button", { name: /^Timestamp/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^Timestamp/i }));
-    const rows = screen.getAllByRole("button", { name: /Open/i });
-    fireEvent.click(rows[0]);
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Office spawned PowerShell" })).toBeInTheDocument());
+    expect(getTimelineMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ sort: "timestamp_desc" }));
+
+    fireEvent.click(screen.getByTestId("timeline-sort-timestamp"));
+    await waitFor(() => expect(getTimelineMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ sort: "timestamp_asc", cursor: undefined })));
+    expect(screen.getByTestId("timeline-sort-timestamp").textContent).toContain("↑");
+
+    fireEvent.click(screen.getByTestId("timeline-sort-risk"));
+    await waitFor(() => expect(getTimelineMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ sort: "risk_desc" })));
+    expect(screen.getByTestId("timeline-sort-risk").textContent).toContain("↓");
+    expect(screen.getByTestId("timeline-sort-timestamp").textContent).not.toMatch(/[↑↓]/);
+
+    // Columns the server cannot order by are not offered as sortable.
+    expect(screen.queryByRole("button", { name: /^Host/ })).toBeNull();
+  });
+
+  it("rows keep the server's order instead of being re-sorted in the page", async () => {
+    getTimelineMock.mockResolvedValue({
+      ...(await getTimelineMock()),
+      items: [
+        { ...(await getTimelineMock()).items[0], id: "old", timestamp: "2025-01-01T00:00:00Z", title: "Oldest row", summary: "Oldest row" },
+        { ...(await getTimelineMock()).items[0], id: "new", timestamp: "2025-06-01T00:00:00Z", title: "Newest row", summary: "Newest row" },
+      ],
+    });
+    renderPage("/cases/case-1/timeline?sort=timestamp_asc");
+    await screen.findByText("Oldest row");
+    const text = document.body.textContent || "";
+    expect(text.indexOf("Oldest row")).toBeLessThan(text.indexOf("Newest row"));
   });
 
   it("quick filters apply params", async () => {
