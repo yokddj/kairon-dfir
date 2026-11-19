@@ -8,6 +8,7 @@ import { MemoryPaginationControls } from "./MemoryPaginationControls";
 import { useEffectiveTimezone } from "../../hooks/useEffectiveTimezone";
 import { useCaseTimeWindow } from "../../hooks/useGlobalTimeRange";
 import { fromDateTimeLocalValue, toDateTimeLocalValue } from "../../lib/time";
+import TimeRangeFilter from "../TimeRangeFilter";
 
 type Props = {
   caseId: string;
@@ -460,10 +461,13 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
 function PowerShellEventLog({ caseId, evidenceId, onTotal }: SectionProps) {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
+  const { timeFrom, timeTo, setTimeRange } = useCaseTimeWindow();
   const pageSize = 50;
+  useEffect(() => setPage(1), [timeFrom, timeTo]);
   const query = useQuery({
-    queryKey: ["memory-powershell-log", caseId, evidenceId, page, search],
-    queryFn: () => api.getMemoryPowerShellLog(caseId, evidenceId || "", { q: search || undefined, page, page_size: pageSize }),
+    queryKey: ["memory-powershell-log", caseId, evidenceId, page, search, timeFrom, timeTo],
+    queryFn: () =>
+      api.getMemoryPowerShellLog(caseId, evidenceId || "", { q: search || undefined, page, page_size: pageSize, time_from: timeFrom || undefined, time_to: timeTo || undefined }),
     enabled: Boolean(caseId && evidenceId),
     refetchOnWindowFocus: false,
   });
@@ -490,13 +494,14 @@ function PowerShellEventLog({ caseId, evidenceId, onTotal }: SectionProps) {
           data-testid="shell-history-powershell-search"
         />
       </SectionHeader>
+      <TimeRangeFilter compact className="mt-3 max-w-xl" timeFrom={timeFrom} timeTo={timeTo} onChange={setTimeRange} />
       {query.isLoading ? <p className="mt-3 text-xs text-muted">Loading…</p> : null}
       {query.error instanceof Error ? (
         <p className="mt-3 rounded-2xl border border-rose-400/30 bg-rose-500/10 p-3 text-xs text-rose-200">{query.error.message}</p>
       ) : null}
       {!query.isLoading && !query.error && items.length === 0 ? (
         <p className="mt-3 text-xs text-muted" data-testid="shell-history-powershell-empty">
-          {search ? "No PowerShell record matches this filter." : "No PowerShell event log record was found in this memory image (or Find Evil has not run yet)."}
+          {search || timeFrom || timeTo ? "No PowerShell record matches these filters." : "No PowerShell event log record was found in this memory image (or Find Evil has not run yet)."}
         </p>
       ) : null}
       {!query.isLoading && !query.error && items.length > 0 ? (

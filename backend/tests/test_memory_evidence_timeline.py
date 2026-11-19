@@ -27,14 +27,15 @@ def fake_sources(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(evidence_timeline, "_volatility_items", lambda db, case_id, evidence_id, kinds: list(volatility))
 
-    def page(case_id, evidence_id, kinds, query, cursor, descending, size):
+    def page(case_id, evidence_id, kinds, query, cursor, descending, size, window=(None, None)):
         calls["kinds"] = kinds
-        rows = sorted((item for item in memprocfs if item["kind"] in kinds and (not query or query in item["title"])), key=evidence_timeline._sort_key, reverse=descending)
+        calls["window"] = window
+        rows = sorted((item for item in memprocfs if item["kind"] in kinds and (not query or query in item["title"]) and evidence_timeline._in_window(item, window)), key=evidence_timeline._sort_key, reverse=descending)
         rows = [item for item in rows if evidence_timeline._after(item, cursor, descending)]
         return rows[:size], len(rows)
 
     monkeypatch.setattr(evidence_timeline, "_memprocfs_page", page)
-    monkeypatch.setattr(evidence_timeline, "_memprocfs_counts", lambda case_id, evidence_id, query: {"eventlog": 20, "ntfs": 5})
+    monkeypatch.setattr(evidence_timeline, "_memprocfs_counts", lambda case_id, evidence_id, query, window=(None, None): {"eventlog": 20, "ntfs": 5})
     return calls
 
 
@@ -123,3 +124,41 @@ def test_route_rejects_evidence_from_another_case() -> None:
     with pytest.raises(HTTPException) as exc:
         routes_memory.get_memory_evidence_timeline("c", "e", kinds=None, q=None, order="asc", cursor=None, page_size=100, db=Db())
     assert exc.value.status_code == 404
+
+
+def test_a_time_window_limits_both_producers(fake_sources) -> None:
+    items = _walk(time_from="2025-03-07T19:10:00Z", time_to="2025-03-07T19:19:59Z")
+    assert [item["timestamp"][14:16] for item in items] == [f"{minute:02d}" for minute in range(10, 20)]
+    assert {item["producer"] for item in items} == {"volatility", "memprocfs"}
+    result = memory_evidence_timeline(None, case_id="c", evidence_id="e", time_from="2025-03-07T19:10:00Z")
+    assert result["counts"]["processes"] == 15
+    assert result["time_range"] == {"from": "2025-03-07T19:10:00Z", "to": None}
+
+
+def test_a_window_in_another_timezone_is_compared_as_the_same_moment(fake_sources) -> None:
+    items = _walk(time_from="2025-03-07T21:30:00+02:00", time_to="2025-03-07T21:31:59+02:00")
+    assert [item["id"] for item in items] == ["vol-030", "memprocfs-031"]
+
+
+def test_an_unreadable_window_is_a_400(fake_sources) -> None:
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as excinfo:
+        memory_evidence_timeline(None, case_id="c", evidence_id="e", time_from="not a date")
+    assert excinfo.value.status_code == 400
+
+
+def test_memprocfs_rows_are_limited_to_the_window_in_opensearch(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core import opensearch
+
+    bodies: list[dict[str, Any]] = []
+
+    class Client:
+        def search(self, index, body, params=None):
+            bodies.append(body)
+            return {"hits": {"total": {"value": 0}, "hits": []}}
+
+    monkeypatch.setattr(opensearch, "get_opensearch_client", lambda *a, **k: Client())
+    window = evidence_timeline._window("2025-03-07T19:00:00Z", "2025-03-07T20:00:00Z")
+    evidence_timeline._memprocfs_page("c", "e", ["eventlog"], "", None, False, 50, window)
+    assert {"range": {"@timestamp": {"gte": "2025-03-07T19:00:00+00:00", "lte": "2025-03-07T20:00:00+00:00"}}} in bodies[0]["query"]["bool"]["filter"]

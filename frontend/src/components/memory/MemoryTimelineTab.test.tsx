@@ -9,6 +9,10 @@ const getMemoryEvidenceTimelineMock = vi.fn();
 vi.mock("../../api/client", () => ({
   api: { getMemoryEvidenceTimeline: (...args: unknown[]) => getMemoryEvidenceTimelineMock(...args) },
 }));
+const caseWindow = { timeFrom: "", timeTo: "" };
+vi.mock("../../hooks/useGlobalTimeRange", () => ({
+  useCaseTimeWindow: () => ({ ...caseWindow, setTimeRange: vi.fn(), setTimeFrom: vi.fn(), setTimeTo: vi.fn() }),
+}));
 vi.mock("../../context/TimezoneContext", () => ({ useTimezonePreference: () => ({ effectiveTimezone: "UTC" }) }));
 
 const KINDS = [
@@ -45,6 +49,8 @@ function renderTab() {
 
 describe("MemoryTimelineTab", () => {
   beforeEach(() => {
+    caseWindow.timeFrom = "";
+    caseWindow.timeTo = "";
     getMemoryEvidenceTimelineMock.mockReset();
     getMemoryEvidenceTimelineMock.mockResolvedValue(page());
   });
@@ -80,5 +86,14 @@ describe("MemoryTimelineTab", () => {
     getMemoryEvidenceTimelineMock.mockResolvedValue(page({ items: [], next_cursor: null, total: 0, counts: { processes: 0, eventlog: 0, ntfs: 0 } }));
     renderTab();
     expect((await screen.findByTestId("memory-timeline-empty")).textContent).toContain("Find Evil");
+  });
+
+  it("asks only for the case time window and offers the From/To filter", async () => {
+    caseWindow.timeFrom = "2025-03-07T19:00:00.000Z";
+    caseWindow.timeTo = "2025-03-07T20:00:59.999Z";
+    renderTab();
+    await waitFor(() => expect(getMemoryEvidenceTimelineMock).toHaveBeenCalled());
+    expect(getMemoryEvidenceTimelineMock.mock.calls[0][2]).toMatchObject({ time_from: "2025-03-07T19:00:00.000Z", time_to: "2025-03-07T20:00:59.999Z" });
+    expect(screen.getByTestId("time-range-filter")).toBeTruthy();
   });
 });
