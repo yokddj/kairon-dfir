@@ -90,6 +90,11 @@ shows where they go):
   (the UI port proxies the API; `http://localhost:8000` also works on the
   Kairon server itself).
 - `KAIRON_SERVICE_TOKEN`: the token from step 1.
+- `KAIRON_MCP_MAX_CONCURRENT` (optional, default `2`): how many tool calls reach
+  Kairon at the same time. Models often fire many searches at once; the rest
+  wait their turn instead of overloading the backend. Raise it together with
+  `BACKEND_UVICORN_WORKERS` on a bigger server. A 502/503/504 or a refused
+  connection is retried once.
 
 **B. HTTP with Docker Compose.** On the Kairon server, add two values to `.env`:
 

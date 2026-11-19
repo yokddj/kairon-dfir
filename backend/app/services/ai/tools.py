@@ -182,6 +182,10 @@ def tool_search_events(db: Session, case_id: str, args: dict) -> dict:
         include_facets=True,
     )
     total, rows, warnings, facets = search_events_v2(case_id, params, db=db)
+    # How the query itself was read (e.g. event_id:4624 taken as eventid:) --
+    # the model has to see it, or it reports a corrected query as typed.
+    syntax_warnings = list((params.get("_query_syntax") or {}).get("warnings") or [])
+    warnings = [*(warnings or []), *syntax_warnings]
     limit = _limit(args.get("limit"))
     returned = min(len(rows), limit)
     return {
@@ -600,6 +604,63 @@ def _process_node_list(nodes: Any, limit: int) -> list[dict]:
     return [item for item in summaries if item]
 
 
+def _memory_process_node(doc: dict, host_name: str | None) -> dict:
+    process = doc.get("process") or {}
+    node = {
+        "pid": process.get("pid"),
+        "ppid": process.get("ppid"),
+        "name": process.get("name"),
+        "path": process.get("path") or process.get("executable"),
+        "command_line": _clip(process.get("command_line")),
+        "start_time": process.get("create_time"),
+        "exit_time": process.get("exit_time"),
+        "user": process.get("user"),
+        "host": host_name,
+        "memory_run_id": doc.get("memory_run_id"),
+        "plugins": doc.get("plugins"),
+    }
+    return {key: value for key, value in node.items() if value not in (None, "", [], {})}
+
+
+def _memory_process_tree(db: Session, case_id: str, pid: int, host: CaseHost | None, limit: int) -> list[dict]:
+    """Parent and children of a PID as seen in the case's memory images.
+
+    Disk events only know processes whose creation was logged (Sysmon 1,
+    4688). A process that is only in a memory capture still has its PPID and
+    its children there, so a PID missing from the disk tree is looked up here
+    before answering that nothing was found. Each image is read on its own:
+    a PID is only meaningful inside the capture that holds it.
+    """
+    from app.services.investigation_memory import _memory_evidences_for_hosts
+    from app.services.memory.indexing import search_memory_processes
+
+    params = {"host_id": host.id} if host else {}
+    trees: list[dict] = []
+    for evidence, host_name in _memory_evidences_for_hosts(db, case_id, params):
+        matches = search_memory_processes(case_id, evidence_id=str(evidence.id), pid=pid, page_size=limit)["items"]
+        seen_runs: set[Any] = set()
+        for doc in matches:
+            run_id = doc.get("memory_run_id")
+            if run_id in seen_runs:
+                continue
+            seen_runs.add(run_id)
+            target = _memory_process_node(doc, host_name)
+            parents: list[dict] = []
+            ppid = (doc.get("process") or {}).get("ppid")
+            if ppid not in (None, ""):
+                parent_docs = search_memory_processes(case_id, run_id=run_id, evidence_id=str(evidence.id), pid=int(ppid), page_size=1)["items"]
+                parents = [_memory_process_node(item, host_name) for item in parent_docs]
+            child_docs = search_memory_processes(case_id, run_id=run_id, evidence_id=str(evidence.id), ppid=pid, page_size=limit)["items"]
+            trees.append({
+                "evidence_id": str(evidence.id),
+                "target": target,
+                "parents": parents,
+                "parent_not_in_image": bool(ppid not in (None, "") and not parents),
+                "children": [_memory_process_node(item, host_name) for item in child_docs],
+            })
+    return trees[:limit]
+
+
 def tool_get_process_tree(db: Session, case_id: str, args: dict) -> dict:
     """The parent/children of one process: who launched it, what it launched.
 
@@ -662,6 +723,25 @@ def tool_get_process_tree(db: Session, case_id: str, args: dict) -> dict:
         # explanation of which kind of event it actually was).
         candidates = identity.get("candidates") or story.get("candidate_processes") or []
         event_summary = story.get("event_summary")
+        memory_trees: list[dict] = []
+        if pid is not None and not event_summary:
+            try:
+                memory_trees = _memory_process_tree(db, case_id, pid, host, limit)
+            except Exception:  # noqa: BLE001 - the disk answer stands on its own
+                warnings.append("The memory images could not be read for this PID.")
+        if memory_trees:
+            return {
+                "found": True,
+                "source": "memory",
+                "exact": True,
+                "match_method": "memory_pid",
+                "match_explanation": (
+                    f"PID {pid} has no process-creation event on disk; this tree comes from the "
+                    "process list of the memory image(s), one entry per image that holds the PID."
+                ),
+                "memory_trees": memory_trees,
+                "warnings": warnings,
+            }
         return {
             "found": False,
             "warnings": warnings,
@@ -977,6 +1057,12 @@ EVENT_DETAIL_FIELDS = (
     "dns.domain",
     "url.full", "url.domain",
     "source.ip", "destination.ip", "network.direction",
+    # Not text-searchable, but they are what a SRUM network row is about:
+    # without them the model sees the app and the interface, never the volume.
+    "network.bytes_sent", "network.bytes_received", "network.bytes_total",
+    "srum.table", "srum.app_name",
+    "windows.event_id", "windows.channel", "windows.provider", "windows.logon_type",
+    "process.pid",
     "email.message_id", "email.subject", "email.from.address",
     "email.from.domain", "email.to.addresses", "email.attachments.file_name",
     "ntfs.reason", "ntfs.zone_id", "ntfs.host_url", "ntfs.referrer_url",
@@ -1186,7 +1272,9 @@ TOOL_SPECS: list[dict] = [
             "and reports which happened -- a relaxed match is never presented as exact. "
             "Give whatever identity you have (a PID, a ProcessGuid, a source_event_id from "
             "search_events, or a name/path); at least one is required. When nothing matches "
-            "exactly, the closest candidates by name are returned instead of nothing."
+            "exactly, the closest candidates by name are returned instead of nothing. A PID "
+            "with no process-creation event on disk is looked up in the memory images' "
+            "process lists (source: memory), which give its parent and children per image."
         ),
         "input_schema": {
             "type": "object",

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+import time
 from urllib.parse import quote
 
 import httpx
@@ -21,6 +23,15 @@ import httpx
 # the tool's, e.g. "../admin/..." from text an attacker planted in case data
 # that a connected model then passes along. Refused before any request.
 _CASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+
+# A model often fires many tool calls at once, and each one is a search on a
+# backend that by default runs a single worker: dozens in flight made it time
+# out and return errors. Calls beyond this many wait their turn here instead.
+DEFAULT_MAX_CONCURRENT = 2
+# The backend answers these while it is momentarily overloaded or restarting;
+# one retry after a short pause turns most of them into a normal answer.
+_RETRY_STATUSES = {502, 503, 504}
+_RETRY_DELAY_SECONDS = 1.0
 
 
 class KaironAPIError(RuntimeError):
@@ -34,15 +45,16 @@ class KaironAPIError(RuntimeError):
 
 
 class KaironClient:
-    """Stateless; every call opens its own request. An MCP server handles one
-    tool call at a time per session, so there is no meaningful connection
-    pooling to lose by not holding a long-lived ``httpx.Client`` across
-    calls, and it sidesteps event-loop lifecycle questions entirely."""
+    """Every call opens its own request (no long-lived ``httpx.Client``, so no
+    event-loop lifecycle questions). Tool calls do run concurrently -- the
+    server hands each one to a thread -- so a semaphore caps how many reach
+    the backend at the same time."""
 
-    def __init__(self, base_url: str, token: str, *, timeout: float = 30.0):
+    def __init__(self, base_url: str, token: str, *, timeout: float = 30.0, max_concurrent: int = DEFAULT_MAX_CONCURRENT):
         self.base_url = base_url.rstrip("/")
         self._token = token
         self._timeout = timeout
+        self._slots = threading.BoundedSemaphore(max(1, int(max_concurrent)))
 
     @classmethod
     def from_env(cls) -> "KaironClient":
@@ -55,21 +67,41 @@ class KaironClient:
                 "KAIRON_SERVICE_TOKEN is not set. Create one as an administrator: "
                 "POST /api/admin/service-tokens."
             )
-        return cls(base_url, token)
+        raw_limit = os.environ.get("KAIRON_MCP_MAX_CONCURRENT", "").strip()
+        try:
+            max_concurrent = int(raw_limit) if raw_limit else DEFAULT_MAX_CONCURRENT
+        except ValueError:
+            raise RuntimeError(f"KAIRON_MCP_MAX_CONCURRENT must be a whole number, got {raw_limit!r}") from None
+        return cls(base_url, token, max_concurrent=max_concurrent)
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token}"}
 
     def get(self, path: str, params: dict | None = None) -> dict:
         url = f"{self.base_url}{path}"
-        try:
-            response = httpx.get(url, params=params, headers=self._headers(), timeout=self._timeout)
-        except httpx.HTTPError as exc:
-            raise KaironAPIError(0, f"Could not reach Kairon at {url}: {exc}") from exc
+        with self._slots:
+            response = self._send(url, params)
+            if response is None or response.status_code in _RETRY_STATUSES:
+                time.sleep(_RETRY_DELAY_SECONDS)
+                response = self._send(url, params, final=True)
         if response.status_code >= 400:
             detail = _error_detail(response)
             raise KaironAPIError(response.status_code, detail)
         return response.json()
+
+    def _send(self, url: str, params: dict | None, *, final: bool = False) -> httpx.Response | None:
+        """One request. A transport failure is retried once; only the last
+        attempt reports it."""
+        try:
+            return httpx.get(url, params=params, headers=self._headers(), timeout=self._timeout)
+        except httpx.TimeoutException as exc:
+            # A timeout is a slow query, not a lost one: sending it again
+            # would only double the load that made it slow.
+            raise KaironAPIError(0, f"Kairon at {url} did not answer within {self._timeout:g}s: {exc}") from exc
+        except httpx.HTTPError as exc:
+            if final:
+                raise KaironAPIError(0, f"Could not reach Kairon at {url}: {exc}") from exc
+            return None
 
     def list_tool_specs(self) -> list[dict]:
         return self.get("/api/ai/tools")["tools"]

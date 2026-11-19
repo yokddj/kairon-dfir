@@ -232,3 +232,25 @@ def test_findings_scope_respects_advanced_query():
     )
     assert response["total"] == 1
     assert response["results"][0]["id"] == "finding-1"
+
+
+def test_a_short_number_after_event_id_is_read_as_a_windows_event_id():
+    """event_id: holds the document's own hash id, so event_id:4624 could only
+    ever return a silent zero -- read as "no 4624 in this case"."""
+    from app.search.query_syntax import WINDOWS_EVENT_ID_REWRITE_WARNING, analyze_query_syntax
+
+    info = analyze_query_syntax("event_id:4624 AND host.name:ws01", lambda text: {"match": text})
+
+    assert [(item["field"], item["value"]) for item in info["applied_filters"]] == [("eventid", "4624"), ("host.name", "ws01")]
+    assert "windows.event_id" in str(info["query"])
+    assert info["warnings"] == [WINDOWS_EVENT_ID_REWRITE_WARNING]
+
+
+def test_a_real_document_id_after_event_id_is_left_alone():
+    from app.search.query_syntax import analyze_query_syntax
+
+    doc_id = "3f2a9c0b7d1e4f6a8b2c5d7e9f0a1b3c"
+    info = analyze_query_syntax(f"event_id:{doc_id}", lambda text: {"match": text})
+
+    assert [item.get("field") for item in info["applied_filters"]] == ["event_id"]
+    assert info["warnings"] == []
