@@ -151,7 +151,9 @@ def build_defender_document(source_id: str, source: dict[str, Any]) -> dict[str,
     source_channel = str((source.get("windows") or {}).get("channel") or (source.get("event") or {}).get("channel") or "")
     source_file = str(source.get("source_file") or "")
     source_file_is_defender_evtx = "defender" in source_file.lower() and ".evtx" in source_file.lower()
-    if event_id not in DEFENDER_EVENT_IDS and not any("defender" in value.lower() for value in [source_provider, source_channel]) and not source_file_is_defender_evtx:
+    # Defender's event ids are not unique to it (PushNotifications also writes 1117): the record
+    # has to come from Defender's provider, channel or log file.
+    if not any("defender" in value.lower() for value in [source_provider, source_channel]) and not source_file_is_defender_evtx:
         return None
     document = copy.deepcopy(source)
     row = _row_from_source(source)

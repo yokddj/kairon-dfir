@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 PARSER = "memprocfs"
 # Raise when the events read from a scan change (parsing, normalization, scoring):
 # a saved scan indexed by an older version is indexed again on the next memory run.
-INDEX_VERSION = 4
+INDEX_VERSION = 5
 MEMORY_PLUGIN = "memprocfs.timeline"
 # Indexed in this order, so the row cap falls on the bulkiest timelines (registry, NTFS) last.
 TIMELINES: dict[str, str] = {
@@ -519,6 +519,59 @@ def create_timeline_detections(db: Any, *, case_id: str, evidence_id: str, candi
     return created
 
 
+def memory_defender_source_query(case_id: str, evidence_id: str) -> dict[str, Any]:
+    """This image's Defender event log records that no disk evidence of the host also holds."""
+    defender = [
+        {"wildcard": {field: {"value": "*Defender*", "case_insensitive": True}}}
+        for field in ("windows.provider", "windows.channel")
+    ]
+    return {
+        "bool": {
+            "filter": [
+                {"term": {"case_id": case_id}},
+                {"term": {"evidence_id": evidence_id}},
+                {"term": {"artifact.type": "memprocfs_eventlog"}},
+                {"bool": {"should": defender, "minimum_should_match": 1}},
+            ],
+            # The same record from the disk's .evtx is already a Defender event of the case.
+            "must_not": [{"term": {"memprocfs.on_disk": True}}],
+        }
+    }
+
+
+def index_memory_defender_events(case_id: str, evidence_id: str) -> dict[str, int]:
+    """Defender's records recovered from memory as Defender events (threat, path, action, the
+    configuration changes...), the same documents the disk's Defender log gives, so the Defender
+    view, the Timeline's Defender filter and the report show them. They keep the MemProcFS parser,
+    so the next indexing of this scan replaces them with the rest."""
+    from opensearchpy import helpers
+
+    from app.core.opensearch import bulk_index_events_with_report, get_events_index, get_opensearch_client, index_exists, refresh_index
+    from app.ingest.raw_parsers.defender_evtx_backend import build_defender_document
+
+    client = get_opensearch_client(timeout_seconds=300)
+    index = get_events_index(case_id)
+    report = {"sources": 0, "indexed": 0}
+    if not index_exists(client, index):
+        return report
+    documents: list[dict[str, Any]] = []
+    for hit in helpers.scan(client, index=index, query={"query": memory_defender_source_query(case_id, evidence_id)}, size=1000):
+        report["sources"] += 1
+        document = build_defender_document(hit["_id"], hit["_source"])
+        if document is None:
+            continue
+        document["artifact"] = {**document["artifact"], "parser": PARSER, "name": "Microsoft Defender (memory)"}
+        document["source_tool"] = PARSER
+        document["tags"] = sorted({*document.get("tags", []), "memory", "memprocfs"})
+        documents.append(document)
+    for start in range(0, len(documents), BATCH_SIZE):
+        result = bulk_index_events_with_report(case_id, documents[start:start + BATCH_SIZE], index=index, refresh=False)
+        report["indexed"] += int(result.get("documents_indexed") or 0)
+    if documents:
+        refresh_index(index, raise_on_error=False)
+    return report
+
+
 def index_memprocfs_timeline(directory: Path, *, case_id: str, evidence_id: str, scan_run_id: str, db: Any = None) -> dict[str, Any]:
     """Replace the evidence's MemProcFS timeline events with the ones saved in ``directory``, and
     with ``db``, create their detections."""
@@ -557,5 +610,9 @@ def index_memprocfs_timeline(directory: Path, *, case_id: str, evidence_id: str,
         report["event_log_copies"] = mark_event_log_copies(case_id)
     except Exception:  # noqa: BLE001 -- the events are indexed either way
         logger.warning("memprocfs timeline: marking event log copies failed", exc_info=True)
+    try:
+        report["defender"] = index_memory_defender_events(case_id, evidence_id)
+    except Exception:  # noqa: BLE001 -- the events are indexed either way
+        logger.warning("memprocfs timeline: Defender events not derived", exc_info=True)
     logger.info("memprocfs timeline indexed", extra={"case_id": case_id, "evidence_id": evidence_id, "indexed": report["indexed"], "by_timeline": counts})
     return report
