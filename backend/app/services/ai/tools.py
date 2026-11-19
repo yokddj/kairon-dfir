@@ -1057,6 +1057,12 @@ EVENT_DETAIL_FIELDS = (
     "dns.domain",
     "url.full", "url.domain",
     "source.ip", "destination.ip", "network.direction",
+    # Not text-searchable, but they are what a SRUM network row is about:
+    # without them the model sees the app and the interface, never the volume.
+    "network.bytes_sent", "network.bytes_received", "network.bytes_total",
+    "srum.table", "srum.app_name",
+    "windows.event_id", "windows.channel", "windows.provider", "windows.logon_type",
+    "process.pid",
     "email.message_id", "email.subject", "email.from.address",
     "email.from.domain", "email.to.addresses", "email.attachments.file_name",
     "ntfs.reason", "ntfs.zone_id", "ntfs.host_url", "ntfs.referrer_url",

@@ -1362,3 +1362,23 @@ def test_a_pid_in_neither_disk_nor_memory_is_still_reported_as_not_found(monkeyp
     result = tools_module.tool_get_process_tree(session, "case-1", {"pid": 17988})
 
     assert result["found"] is False
+
+
+def test_get_event_detail_shows_a_srum_rows_byte_counts(monkeypatch):
+    raw = {
+        "@timestamp": "2026-08-01T10:00:00Z",
+        "artifact": {"type": "srum_network_usage"},
+        "srum": {"table": "network_usage", "app_name": "example.exe"},
+        "network": {"bytes_sent": 1048576, "bytes_received": 2048, "bytes_total": 1050624},
+    }
+    monkeypatch.setattr("app.core.opensearch.fetch_event_by_id", lambda *a, **k: dict(raw))
+    monkeypatch.setattr(
+        "app.services.search_service.event_context",
+        lambda db, case_id, event_id: {"related_findings": [], "related_detections": [], "counts": {}},
+    )
+
+    fields = tools_module.tool_get_event_detail(None, "case-1", {"event_id": "evt-1"})["fields"]
+
+    assert fields["network.bytes_sent"] == 1048576
+    assert fields["network.bytes_received"] == 2048
+    assert fields["srum.app_name"] == "example.exe"
