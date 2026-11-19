@@ -7,7 +7,7 @@ import { findEvilProcessQueryKey } from "./MemoryFindEvilProcesses";
 import { MemoryPaginationControls } from "./MemoryPaginationControls";
 import { useEffectiveTimezone } from "../../hooks/useEffectiveTimezone";
 import { useCaseTimeWindow } from "../../hooks/useGlobalTimeRange";
-import { fromDateTimeLocalValue, toDateTimeLocalValue } from "../../lib/time";
+import { formatTimestamp, fromDateTimeLocalValue, toDateTimeLocalValue } from "../../lib/time";
 import TimeRangeFilter from "../TimeRangeFilter";
 
 type Props = {
@@ -85,11 +85,18 @@ function copyText(value: string) {
   }
 }
 
+// The display timezone and format every other view uses (the raw UTC string was shown before).
+function TimeCell({ value }: { value: string | null | undefined }) {
+  const timezone = useEffectiveTimezone();
+  return <td className="whitespace-nowrap px-2 py-1 text-muted" title={value || undefined}>{value ? formatTimestamp(value, timezone) : "—"}</td>;
+}
+
 function CommandCell({ command }: { command: string | null | undefined }) {
   const [copied, setCopied] = useState(false);
   if (!command) return <span className="text-muted">—</span>;
   return (
-    <div className="flex max-w-[560px] items-start gap-2">
+    // Full column width: a fixed cap left most of a wide screen empty and wrapped every command.
+    <div className="flex items-start gap-2">
       <span className="whitespace-pre-wrap break-all font-mono text-xs text-ink" data-testid="shell-history-command-text">
         {command}
       </span>
@@ -390,7 +397,7 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
                         {(item.pids ?? []).slice(0, 5).join(", ")}
                         {(item.pids?.length ?? 0) > 5 ? ` +${(item.pids?.length ?? 0) - 5}` : ""}
                       </td>
-                      <td className="whitespace-nowrap px-2 py-1 text-muted">{item.first_start ? item.first_start.replace("T", " ").slice(0, 19) : "—"}</td>
+                      <TimeCell value={item.first_start} />
                     </tr>
                   ))}
                 </tbody>
@@ -412,7 +419,7 @@ function LaunchedCommands({ caseId, evidenceId, onTotal }: SectionProps) {
               <tbody className="divide-y divide-line">
                 {items.map((item) => (
                   <tr key={item.process_entity_id || `${item.pid}-${item.create_time}`} data-testid="shell-history-launched-row">
-                    <td className="whitespace-nowrap px-2 py-1 text-muted">{item.create_time ? item.create_time.replace("T", " ").slice(0, 19) : "—"}</td>
+                    <TimeCell value={item.create_time} />
                     <td className="px-2 py-1 text-muted">{reported(item.pid)}</td>
                     <td className="px-2 py-1 text-muted">
                       {item.ppid !== null && item.ppid !== undefined ? (
@@ -522,7 +529,7 @@ function PowerShellEventLog({ caseId, evidenceId, onTotal }: SectionProps) {
               <tbody className="divide-y divide-line">
                 {items.map((item) => (
                   <tr key={item.id} data-testid="shell-history-powershell-row">
-                    <td className="whitespace-nowrap px-2 py-1 text-muted">{item.timestamp.replace("T", " ").slice(0, 19)}</td>
+                    <TimeCell value={item.timestamp} />
                     <td className="whitespace-nowrap px-2 py-1 text-muted" title={item.channel || undefined}>
                       {reported(item.event_id)}
                       {item.part ? <span className="block text-[10px]">part {item.part}</span> : null}
