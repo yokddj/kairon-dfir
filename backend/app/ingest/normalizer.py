@@ -11,6 +11,7 @@ from dateutil import parser as date_parser
 from app.core.rules import load_suspicious_keywords
 from app.ingest.browser.detector import looks_like_browser_artifact
 from app.ingest.browser.normalizer import normalize_browser_event
+from app.ingest.browser.cache import read_browser_cache
 from app.ingest.browser.parser import read_browser_records
 from app.ingest.browser.sqlite_chromium import parse_chromium_history_sqlite
 from app.ingest.browser.sqlite_firefox import parse_firefox_places_sqlite
@@ -2485,6 +2486,9 @@ def normalize_file(case_id: str, evidence_id: str, artifact_id: str, path: Path,
             rows, sqlite_copies = parse_chromium_history_sqlite(path, source_path=str(artifact_meta.get("source_path") or path))
         elif parser in {"browser_firefox_places", "sqlite_firefox"} or path.name.lower() == "places.sqlite":
             rows, sqlite_copies = parse_firefox_places_sqlite(path, source_path=str(artifact_meta.get("source_path") or path))
+        elif parser == "browser_cache":
+            rows = read_browser_cache(path, source_path=str(artifact_meta.get("source_path") or path))
+            sqlite_copies = []
         elif parser == "webcache_ese" or looks_like_webcache_database(path):
             rows = list(read_webcache_records(path))
             sqlite_copies = []
@@ -2520,6 +2524,7 @@ def normalize_file(case_id: str, evidence_id: str, artifact_id: str, path: Path,
             history_count=sum(1 for doc in documents if (doc.get("browser", {}) or {}).get("artifact_type") == "history"),
             download_count=sum(1 for doc in documents if (doc.get("browser", {}) or {}).get("artifact_type") == "download"),
             search_count=sum(1 for doc in documents if (doc.get("browser", {}) or {}).get("artifact_type") == "search_term"),
+            cache_count=sum(1 for doc in documents if (doc.get("browser", {}) or {}).get("artifact_type") == "cache_resource"),
             suspicious_download_count=sum(1 for doc in documents if "suspicious_download" in set(doc.get("tags") or [])),
             executable_download_count=sum(1 for doc in documents if "executable_download" in set(doc.get("tags") or [])),
             archive_download_count=sum(1 for doc in documents if "archive_download" in set(doc.get("tags") or [])),

@@ -74,6 +74,20 @@ CHROMIUM_PATTERNS: list[tuple[str, str]] = [
 ]
 
 FIREFOX_PATTERN = r"appdata\\roaming\\mozilla\\firefox\\profiles\\([^\\]+)\\places\.sqlite$"
+
+# HTTP caches, anchored on their index file. Chromium moved the cache into
+# Cache\Cache_Data in version 81; older profiles keep it in Cache.
+CHROMIUM_CACHE_PATTERNS: list[tuple[str, str]] = [
+    (r"appdata\\local\\google\\chrome\\user data\\([^\\]+)\\cache\\(?:cache_data\\)?index$", "Chrome"),
+    (r"appdata\\local\\microsoft\\edge\\user data\\([^\\]+)\\cache\\(?:cache_data\\)?index$", "Edge"),
+    (r"appdata\\local\\bravesoftware\\brave-browser\\user data\\([^\\]+)\\cache\\(?:cache_data\\)?index$", "Brave"),
+    (r"appdata\\local\\chromium\\user data\\([^\\]+)\\cache\\(?:cache_data\\)?index$", "Chromium"),
+    (r"appdata\\local\\opera software\\opera stable\\()cache\\(?:cache_data\\)?index$", "Opera"),
+]
+FIREFOX_CACHE_PATTERN = r"appdata\\local\\mozilla\\firefox\\profiles\\([^\\]+)\\cache2\\index$"
+BLOCKFILE_DATA_FILES = ("data_0", "data_1", "data_2", "data_3")
+SIMPLE_CACHE_ENTRY = re.compile(r"^[0-9a-f]{16}_0$")
+FIREFOX_CACHE_ENTRY = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
 DEFENDER_ROOT_TOKEN = "programdata\\microsoft\\windows defender\\"
 DEFENDER_TOKENS = (
     "windows defender",
@@ -216,6 +230,90 @@ def _parse_browser_candidate(entry: ContainerEntry, entry_map: dict[str, Contain
         container_type=container_type,
         container_path=container_path,
     )
+
+
+def _browser_cache_candidates(files: list[ContainerEntry], *, container_path: str, container_type: str) -> tuple[list[VelociraptorEvidenceCandidate], set[str]]:
+    """One candidate per browser HTTP cache, anchored on its index file, with the
+    files the parser reads as companions. Returns the candidates and every path
+    they cover, which the per-file detectors then skip.
+
+    Bodies are never read, so blockfile's external f_* files (large bodies) are
+    left out; Simple Cache and Firefox keep body and metadata in one file per
+    entry, so every entry file is needed."""
+    by_directory: dict[str, list[ContainerEntry]] = {}
+    for entry in files:
+        parent, _, _name = entry.path.replace("\\", "/").rpartition("/")
+        by_directory.setdefault(parent.lower(), []).append(entry)
+    candidates: list[VelociraptorEvidenceCandidate] = []
+    covered: set[str] = set()
+    for entry in files:
+        if Path(entry.path).name.lower() != "index":
+            continue
+        # Matched case-insensitively on the original path, so the profile keeps
+        # its case ("Profile 1", not "profile 1").
+        normalized = normalize_velociraptor_path(entry.path)
+        browser = profile = None
+        artifact_type = None
+        for pattern, browser_name in CHROMIUM_CACHE_PATTERNS:
+            match = re.search(pattern, normalized, flags=re.IGNORECASE)
+            if match:
+                browser, profile, artifact_type = browser_name, (match.group(1) or ("Opera Stable" if browser_name == "Opera" else None)), "chromium_cache"
+                break
+        if not artifact_type:
+            match = re.search(FIREFOX_CACHE_PATTERN, normalized, flags=re.IGNORECASE)
+            if match:
+                browser, profile, artifact_type = "Firefox", match.group(1), "firefox_cache"
+        if not artifact_type:
+            continue
+        directory = entry.path.replace("\\", "/").rpartition("/")[0]
+        siblings = by_directory.get(directory.lower(), [])
+        warnings: list[str] = []
+        if artifact_type == "chromium_cache":
+            names = {Path(item.path).name.lower(): item for item in siblings}
+            if "data_1" in names:
+                cache_format = "blockfile"
+                members = [names[name] for name in BLOCKFILE_DATA_FILES if name in names]
+                if len(members) < len(BLOCKFILE_DATA_FILES):
+                    warnings.append("Some data_N block files were not collected; their entries are skipped.")
+            else:
+                cache_format = "simple"
+                members = [item for item in siblings if SIMPLE_CACHE_ENTRY.match(Path(item.path).name)]
+        else:
+            cache_format = "firefox_cache2"
+            members = [item for item in by_directory.get(f"{directory}/entries".lower(), []) if FIREFOX_CACHE_ENTRY.match(Path(item.path).name)]
+        if not members:
+            continue
+        user = extract_user_from_path(normalized)
+        companions = [item.path for item in members]
+        candidates.append(
+            VelociraptorEvidenceCandidate(
+                id=_candidate_id("browser", entry.path),
+                category="browser",
+                artifact_type=artifact_type,
+                parser_status="ready",
+                display_name=f"{browser} Cache - {user or 'unknown-user'} - {profile or 'default'}",
+                original_path=entry.path,
+                local_path=entry.local_path or "",
+                normalized_windows_path=normalize_velociraptor_path(entry.path),
+                user=user,
+                browser=browser,
+                profile=profile,
+                parser="browser_cache",
+                size=entry.size + sum(item.size for item in members),
+                mtime=entry.mtime,
+                confidence="high",
+                supported=True,
+                reason=f"{cache_format} cache, {len(members)} file(s); response metadata only, bodies are not read.",
+                warnings=warnings,
+                companion_files=companions,
+                container_type=container_type,
+                container_path=container_path,
+            )
+        )
+        covered.add(entry.path)
+        covered.update(companions)
+        covered.update(item.path for item in siblings)
+    return candidates, covered
 
 
 def _parse_notification_db_candidate(entry: ContainerEntry, entry_map: dict[str, ContainerEntry], *, container_path: str, container_type: str) -> VelociraptorEvidenceCandidate | None:
@@ -1808,12 +1906,18 @@ def discover_velociraptor_evidences(root_path: Path | EvidenceContainer, progres
             defender_paths.append(entry)
 
     preferred_results = preferred_result_paths([entry.path for entry in all_files if not entry.ignored])
+    cache_candidates, cache_paths = _browser_cache_candidates([entry for entry in all_files if not entry.ignored], container_path=container_location, container_type=container.type)
+    candidates.extend(cache_candidates)
+    counters["browser_candidates"] += len(cache_candidates)
+    counters["browser_cache_count"] += len(cache_candidates)
 
     for entry in all_files:
         total_files_scanned += 1
         if entry.ignored:
             if progress_cb and (total_files_scanned == total_files or total_files_scanned % 200 == 0):
                 progress_cb({"files_scanned": total_files_scanned, "total_files": total_files, "candidates": len(candidates), "current_path": entry.path})
+            continue
+        if entry.path in cache_paths:
             continue
         # The rows Velociraptor's artifacts produced. They are decided here,
         # before the upload detectors, which match on names and would take
@@ -2160,6 +2264,7 @@ def discover_velociraptor_evidences(root_path: Path | EvidenceContainer, progres
         "orphan_r_files": counters.get("recycle_r_file", 0),
         "unsupported_count": counters.get("unsupported_count", 0),
         "velociraptor_result_count": counters.get("velociraptor_result_count", 0),
+        "browser_cache_count": counters.get("browser_cache_count", 0),
         **inventory_summary(entries),
     }
     hostname = detect_host_from_velociraptor_collection(Path(container_location))
@@ -2202,7 +2307,8 @@ def list_velociraptor_artifacts(root: Path, selected_candidates: list[dict] | No
             if candidate.get("category") == "velociraptor_result":
                 artifacts.append(_velociraptor_result_artifact(common["path"], source_path, common))
             elif candidate.get("category") == "browser":
-                parser = "browser_chromium_history" if candidate.get("artifact_type") == "chromium_history" else "browser_firefox_places"
+                is_cache = candidate.get("artifact_type") in {"chromium_cache", "firefox_cache"}
+                parser = "browser_cache" if is_cache else "browser_chromium_history" if candidate.get("artifact_type") == "chromium_history" else "browser_firefox_places"
                 artifacts.append(
                     {
                         **common,
@@ -2210,7 +2316,8 @@ def list_velociraptor_artifacts(root: Path, selected_candidates: list[dict] | No
                         "parser": parser,
                         "profile": "browser_usage",
                         "source_tool": "velociraptor_raw",
-                        "source_format": "sqlite",
+                        "source_format": str(candidate.get("artifact_type")) if is_cache else "sqlite",
+                        **({"browser_artifact_type": "cache_resource"} if is_cache else {}),
                         "browser_name": candidate.get("browser"),
                         "browser_profile": candidate.get("profile"),
                         "browser_user": candidate.get("user"),
