@@ -13,8 +13,15 @@ from app.ingest.velociraptor.results import classify_velociraptor_result, is_vel
 HUNTER = "Generic.Forensic.SQLiteHunter%2F"
 OSPATH = "C:\\Users\\alex\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\History"
 
+# Column sets as SQLiteHunter writes them.
 VISITS = [
-    {"ID": "1", "VisitTime": "2025-11-20T10:00:00Z", "URLTitle": "Example", "URL": "https://example.com/page", "VisitCount": "3", "TypedCount": "1", "OSPath": OSPATH},
+    {"ID": "1", "VisitTime": "2025-11-20T10:00:00Z", "LastVisitedTime": "2025-11-20T10:30:00Z", "URLTitle": "Example", "URL": "https://example.com/page", "VisitCount": "3", "TypedCount": "1", "Hidden": "0", "VisitID": "11", "FromVisitID": "0", "VisitDurationInSeconds": "5", "OSPath": OSPATH},
+]
+EDGE_NAVIGATION = [
+    {"ID": "1", "Last Visited Time": "2025-11-20T11:00:00Z", "Title": "Docs", "URL": "https://docs.example.com/", "VisitCount": "2", "OSPath": "C:\\Users\\alex\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\History"},
+]
+WEBCACHE_HIGHLIGHTS = [
+    {"AccessedTime": "2025-11-20T12:00:00Z", "ModifiedTime": "2025-11-20T12:00:00Z", "ExpiryTime": "2025-12-20T12:00:00Z", "Url": "https://intranet.example.com/"},
 ]
 DOWNLOADS = [
     {
@@ -197,6 +204,22 @@ def test_sqlitehunter_visits_downloads_and_keywords_normalize_as_browser_events(
     assert keyword["browser"]["artifact_type"] == "search_term"
     assert keyword["browser"]["search_terms"] == "how to dump lsass"
     assert keyword["@timestamp"].startswith("2025-11-20T09:59:00")
+
+
+def test_edge_navigation_and_webcache_highlights_normalize_as_visits(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    results.mkdir()
+    for source, rows, url, timestamp in [
+        ("Edge Browser Navigation History_Navigation History", EDGE_NAVIGATION, "https://docs.example.com/", "2025-11-20T11:00:00"),
+        ("IE or Edge WebCacheV01_Highlights", WEBCACHE_HIGHLIGHTS, "https://intranet.example.com/", "2025-11-20T12:00:00"),
+    ]:
+        source_path = f"results/{HUNTER}{source}.csv"
+        _write_csv(tmp_path / source_path, rows)
+        [doc] = _normalize(tmp_path / source_path, source_path)
+        assert doc["event"]["type"] == "browser_visit"
+        assert doc["browser"]["url"] == url
+        assert doc["@timestamp"].startswith(timestamp)
+        assert doc["timestamp_precision"] == "browser_visit_time"
 
 
 def test_generic_json_lines_table_is_read(tmp_path: Path) -> None:

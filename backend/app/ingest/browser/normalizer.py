@@ -519,7 +519,7 @@ def normalize_browser_event(document: dict, row: dict, artifact_meta: dict, audi
     elif _looks_like_history(row, artifact_meta):
         artifact_subtype = "history"
     visit_ts, _visit_precision = _parse_browser_timestamp_for_source(
-        _first(row, ["Visit Time", "VisitTime", "Last Visit Time", "LastVisitTime", "LastVisitedTime", "LastVisited", "AccessedTime"]),
+        _first(row, ["Visit Time", "VisitTime", "Last Visit Time", "Last Visited Time", "LastVisitTime", "LastVisitedTime", "LastVisited", "AccessedTime"]),
         browser_name=browser_name,
         source_file=source_file,
         parser_name=str(artifact_meta.get("parser") or ""),
