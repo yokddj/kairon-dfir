@@ -501,7 +501,7 @@ def _update_search_text(document: dict, *extra_values: str | None) -> None:
 def normalize_browser_event(document: dict, row: dict, artifact_meta: dict, audit: BrowserAudit | None = None) -> dict:
     audit = audit or BrowserAudit()
     audit.records_read += 1
-    source_file = _first(row, ["SourceFile", "SourceFilename"]) or str(artifact_meta.get("source_path") or artifact_meta.get("name") or "")
+    source_file = _first(row, ["SourceFile", "SourceFilename", "OSPath"]) or str(artifact_meta.get("source_path") or artifact_meta.get("name") or "")
     profile_path = _first(row, ["Profile Path", "ProfilePath"])
     browser_name = _derive_browser_name(_first(row, ["Browser", "Application"]), source_file, str(artifact_meta.get("name") or ""), profile_path)
     profile = _derive_profile(row, source_file, profile_path)
@@ -519,7 +519,7 @@ def normalize_browser_event(document: dict, row: dict, artifact_meta: dict, audi
     elif _looks_like_history(row, artifact_meta):
         artifact_subtype = "history"
     visit_ts, _visit_precision = _parse_browser_timestamp_for_source(
-        _first(row, ["Visit Time", "VisitTime", "Last Visit Time", "LastVisitTime", "LastVisited"]),
+        _first(row, ["Visit Time", "VisitTime", "Last Visit Time", "LastVisitTime", "LastVisitedTime", "LastVisited", "AccessedTime"]),
         browser_name=browser_name,
         source_file=source_file,
         parser_name=str(artifact_meta.get("parser") or ""),
@@ -581,7 +581,7 @@ def normalize_browser_event(document: dict, row: dict, artifact_meta: dict, audi
             "referrer": _first(row, ["Referrer URL", "ReferrerURL", "Referrer"]),
             "tab_url": _first(row, ["Tab URL", "TabUrl"]),
             "domain": parsed_url.get("domain"),
-            "title": _first(row, ["Title", "Page Title", "PageTitle"]),
+            "title": _first(row, ["Title", "Page Title", "PageTitle", "URLTitle"]),
             "visit_count": _first(row, ["Visit Count", "VisitCount"]),
             "typed_count": _first(row, ["Typed Count", "TypedCount"]),
             "transition": _first(row, ["Transition"]),
@@ -593,7 +593,7 @@ def normalize_browser_event(document: dict, row: dict, artifact_meta: dict, audi
             "source_file": source_file,
         }
     )
-    search_terms, search_engine = _extract_search_terms(_first(row, ["Search Term", "SearchTerm", "Search Terms", "SearchTerms", "Query", "Keyword", "Term"]), parsed_url.get("full"))
+    search_terms, search_engine = _extract_search_terms(_first(row, ["Search Term", "SearchTerm", "Search Terms", "SearchTerms", "KeywordSearchTerm", "Query", "Keyword", "Term"]), parsed_url.get("full"))
     document["browser"]["search_terms"] = search_terms
     document["browser"]["search_engine"] = search_engine or _first(row, ["Search Engine"])
     document["url"].update(parsed_url)
@@ -618,7 +618,7 @@ def normalize_browser_event(document: dict, row: dict, artifact_meta: dict, audi
                 "action": "browser_url_visited",
                 "severity": "info",
                 "timeline_include": True,
-                "message": f"Browser visit: {parsed_url.get('domain') or parsed_url.get('full') or 'unknown'} {_first(row, ['Title', 'Page Title']) or parsed_url.get('full') or 'unknown'}",
+                "message": f"Browser visit: {parsed_url.get('domain') or parsed_url.get('full') or 'unknown'} {_first(row, ['Title', 'Page Title', 'URLTitle']) or parsed_url.get('full') or 'unknown'}",
             }
         )
         document["network"]["url"] = parsed_url.get("full")
@@ -648,7 +648,7 @@ def normalize_browser_event(document: dict, row: dict, artifact_meta: dict, audi
             "referrer": _first(row, ["Referrer URL", "ReferrerURL", "Referrer"]),
             "target_path": download_path,
             "file_name": file_name,
-            "mime_type": _first(row, ["MIME Type", "MimeType", "ContentType"]),
+            "mime_type": _first(row, ["MIME Type", "MimeType", "OriginalMIMEType", "ContentType"]),
             "total_bytes": _to_int(_first(row, ["Total Bytes", "File Size", "TotalBytes"])),
             "received_bytes": _to_int(_first(row, ["Received Bytes", "ReceivedBytes"])),
             "state": _normalize_download_state(_first(row, ["State", "Download State", "DownloadState"])),

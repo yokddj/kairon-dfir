@@ -3,8 +3,24 @@ import json
 from pathlib import Path
 
 
+def _load_json_lines(text: str) -> list[dict]:
+    records: list[dict] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            item = json.loads(line)
+            if isinstance(item, dict):
+                records.append(item)
+    return records
+
+
 def _load_json_records(path: Path) -> list[dict]:
-    data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        # Velociraptor writes its result tables as JSON Lines under a .json name.
+        return _load_json_lines(text)
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
     if isinstance(data, dict):

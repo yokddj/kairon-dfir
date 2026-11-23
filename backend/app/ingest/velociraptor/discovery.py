@@ -6,7 +6,11 @@ import logging
 import re
 from pathlib import Path
 
-from app.ingest.detector import classify_artifact
+from app.ingest.velociraptor.results import (
+    classify_velociraptor_result,
+    is_velociraptor_result_path,
+    preferred_result_paths,
+)
 from app.ingest.defender.helpers import normalize_windows_path as normalize_defender_windows_path
 from app.ingest.email.helpers import is_outlook_temp_attachment_path, is_thunderbird_profile_path, is_windows_mail_inventory_path, normalize_windows_path as normalize_email_windows_path
 from app.ingest.host_detection import detect_host_from_velociraptor_collection
@@ -1700,29 +1704,59 @@ def _detect_priority_registry_raw_candidate(
     return candidates
 
 
+def _parse_velociraptor_result_candidate(entry: ContainerEntry, *, container_path: str, container_type: str) -> VelociraptorEvidenceCandidate:
+    classification = classify_velociraptor_result(entry.path)
+    return VelociraptorEvidenceCandidate(
+        id=_candidate_id("velociraptor_result", entry.path),
+        category="velociraptor_result",
+        artifact_type=str(classification.get("browser_artifact_type") or classification["artifact_type"]),
+        parser_status="ready" if classification["supported"] else "detected_not_parsed",
+        display_name=str(classification["display_name"]),
+        original_path=entry.path,
+        local_path=entry.local_path or "",
+        parser=str(classification["parser"]),
+        size=entry.size,
+        mtime=entry.mtime,
+        confidence="high",
+        supported=bool(classification["supported"]),
+        reason=classification.get("reason"),
+        warnings=[],
+        container_type=container_type,
+        container_path=container_path,
+    )
+
+
+def _velociraptor_result_artifact(path: Path, source_path: str, common: dict | None = None) -> dict:
+    """The artifact for one extracted result table. A table the name map does not
+    know stays generic rather than going through classify_artifact's header
+    guesses, written for tool exports: a favicon table's "duration" column
+    would send it to SRUM."""
+    classification = classify_velociraptor_result(source_path)
+    fields = {key: value for key, value in classification.items() if key not in {"supported", "display_name", "reason"}}
+    return {
+        "name": classification["display_name"],
+        "source_path": source_path,
+        "path": path,
+        "status": "processing",
+        "planned_parser": None,
+        "reason": None,
+        **(common or {}),
+        **fields,
+    }
+
+
 def _parsed_results(root: Path) -> list[dict]:
+    """Result tables of a collection extracted whole (no candidate selection)."""
     results_dir = root / "results"
-    artifacts = []
     if not results_dir.exists():
-        return artifacts
-    for path in sorted(results_dir.rglob("*")):
-        if path.is_file() and path.suffix.lower() in {".csv", ".json", ".jsonl", ".txt"}:
-            classification = classify_artifact(path)
-            artifacts.append(
-                {
-                    "name": path.name,
-                    "source_path": str(path.relative_to(root)),
-                    "artifact_type": classification["artifact_type"],
-                    "parser": classification["parser"],
-                    "profile": classification["profile"],
-                    "path": path,
-                    "status": "processing",
-                    "planned_parser": None,
-                    "reason": None,
-                    "source_tool": "velociraptor",
-                    "source_format": path.suffix.lower().lstrip("."),
-                }
-            )
+        return []
+    files = {str(path.relative_to(root)).replace("\\", "/"): path for path in sorted(results_dir.rglob("*")) if path.is_file() and path.stat().st_size > 0}
+    artifacts = []
+    for source_path in sorted(preferred_result_paths(list(files))):
+        classification = classify_velociraptor_result(source_path)
+        if not classification["supported"]:
+            continue
+        artifacts.append(_velociraptor_result_artifact(files[source_path], source_path))
     return artifacts
 
 
@@ -1773,11 +1807,25 @@ def discover_velociraptor_evidences(root_path: Path | EvidenceContainer, progres
         if any(token in normalized_entry for token in DEFENDER_TOKENS):
             defender_paths.append(entry)
 
+    preferred_results = preferred_result_paths([entry.path for entry in all_files if not entry.ignored])
+
     for entry in all_files:
         total_files_scanned += 1
         if entry.ignored:
             if progress_cb and (total_files_scanned == total_files or total_files_scanned % 200 == 0):
                 progress_cb({"files_scanned": total_files_scanned, "total_files": total_files, "candidates": len(candidates), "current_path": entry.path})
+            continue
+        # The rows Velociraptor's artifacts produced. They are decided here,
+        # before the upload detectors, which match on names and would take
+        # "...Notifications_Notifications.csv" for a host file.
+        if is_velociraptor_result_path(entry.path):
+            if entry.path in preferred_results:
+                result_candidate = _parse_velociraptor_result_candidate(entry, container_path=container_location, container_type=container.type)
+                candidates.append(result_candidate)
+                counters["velociraptor_result_count"] += 1
+                seen_paths.add(result_candidate.original_path)
+                if not result_candidate.supported:
+                    counters["unsupported_count"] += 1
             continue
         notification_candidate = _parse_notification_db_candidate(entry, entry_map, container_path=container_location, container_type=container.type)
         if notification_candidate:
@@ -2111,6 +2159,7 @@ def discover_velociraptor_evidences(root_path: Path | EvidenceContainer, progres
         "orphan_i_files": counters.get("recycle_i_file", 0),
         "orphan_r_files": counters.get("recycle_r_file", 0),
         "unsupported_count": counters.get("unsupported_count", 0),
+        "velociraptor_result_count": counters.get("velociraptor_result_count", 0),
         **inventory_summary(entries),
     }
     hostname = detect_host_from_velociraptor_collection(Path(container_location))
@@ -2125,10 +2174,14 @@ def discover_velociraptor_evidences(root_path: Path | EvidenceContainer, progres
 
 
 def list_velociraptor_artifacts(root: Path, selected_candidates: list[dict] | None = None, progress_cb: Callable[[dict], None] | None = None) -> list[dict]:
-    artifacts = _parsed_results(root)
     if selected_candidates is None:
+        artifacts = _parsed_results(root)
         artifacts.extend(list_velociraptor_upload_artifacts(root, progress_cb=progress_cb))
         return artifacts
+    # With a selection, result tables are candidates like any upload: only the
+    # chosen ones are extracted, and the staging directory is shared by every
+    # batch, so scanning it here would list earlier batches' tables again.
+    artifacts: list[dict] = []
     if selected_candidates:
         for candidate in selected_candidates:
             if not candidate.get("supported"):
@@ -2146,7 +2199,9 @@ def list_velociraptor_artifacts(root: Path, selected_candidates: list[dict] | No
                 "velociraptor_normalized_windows_path": candidate.get("normalized_windows_path"),
                 "velociraptor_parser_status": candidate.get("parser_status"),
             }
-            if candidate.get("category") == "browser":
+            if candidate.get("category") == "velociraptor_result":
+                artifacts.append(_velociraptor_result_artifact(common["path"], source_path, common))
+            elif candidate.get("category") == "browser":
                 parser = "browser_chromium_history" if candidate.get("artifact_type") == "chromium_history" else "browser_firefox_places"
                 artifacts.append(
                     {
