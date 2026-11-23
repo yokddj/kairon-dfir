@@ -2086,7 +2086,13 @@ def read_records(path: Path) -> list[dict]:
         with path.open("r", encoding="utf-8-sig", errors="ignore") as handle:
             return list(csv.DictReader(handle))
     if suffix == ".json":
-        data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            # Velociraptor writes its result tables as JSON Lines under a .json name.
+            data = None
+            suffix = ".jsonl"
         if isinstance(data, list):
             return [item for item in data if isinstance(item, dict)]
         if isinstance(data, dict):
