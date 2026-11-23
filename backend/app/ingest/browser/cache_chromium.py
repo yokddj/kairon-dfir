@@ -306,8 +306,11 @@ class _BlockFiles:
         self._handles: dict[str, object] = {}
 
     def close(self) -> None:
+        # A file that was not collected (an f_* body, a missing data_N) is
+        # remembered as None so it is looked up once; there is nothing to close.
         for handle in self._handles.values():
-            handle.close()  # type: ignore[attr-defined]
+            if handle is not None:
+                handle.close()  # type: ignore[attr-defined]
         self._handles.clear()
 
     def _handle(self, name: str):

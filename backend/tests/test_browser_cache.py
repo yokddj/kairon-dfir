@@ -271,3 +271,18 @@ def test_selected_cache_extracted_from_a_zip_is_readable(tmp_path: Path) -> None
     [artifact] = list_velociraptor_artifacts(staging, [{**candidate, "local_path": extracted[candidate["original_path"]]}])
     [row] = read_browser_cache(Path(artifact["path"]), source_path=artifact["source_path"])
     assert row["URL"] == PAGE_URL and row["Server IP"] == "203.0.113.7"
+
+
+def test_blockfile_entries_pointing_at_uncollected_files_are_read(tmp_path: Path) -> None:
+    """f_* bodies are not collected, and a data_N can be missing: the entries
+    that point there still come out, and the cache is not lost."""
+    directory = blockfile_cache(tmp_path / "Cache_Data", [(PAGE_KEY, response_info()), ("https://news.example/", response_info())])
+    entry_at = 8192 + 256  # the second entry in data_1
+    data_1 = bytearray((directory / "data_1").read_bytes())
+    data_1[entry_at + 56:entry_at + 60] = struct.pack("<I", 0x80000000 | 0x00000ABC)  # stream 0 in f_000abc
+    (directory / "data_1").write_bytes(bytes(data_1))
+    (directory / "data_3").unlink()
+    records = {record.url: record for record in iter_chromium_cache(directory)}
+    assert set(records) == {PAGE_URL, "https://news.example/"}
+    assert records[PAGE_URL].server_ip == "203.0.113.7"
+    assert records["https://news.example/"].status_code is None
