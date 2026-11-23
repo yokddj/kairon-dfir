@@ -56,6 +56,7 @@ class BrowserAudit:
     history_count: int = 0
     download_count: int = 0
     search_count: int = 0
+    cache_count: int = 0
     suspicious_download_count: int = 0
     executable_download_count: int = 0
     archive_download_count: int = 0
@@ -86,6 +87,7 @@ class BrowserAudit:
             "history_count": self.history_count,
             "download_count": self.download_count,
             "search_count": self.search_count,
+            "cache_count": self.cache_count,
             "suspicious_download_count": self.suspicious_download_count,
             "executable_download_count": self.executable_download_count,
             "archive_download_count": self.archive_download_count,
@@ -283,7 +285,7 @@ def _canonical_browser_parser(*, parser: str | None, subtype: str, browser_name:
     lowered_parser = str(parser or "").lower()
     lowered_source = str(source_file or "").replace("/", "\\").lower()
     lowered_format = str(source_format or "").lower()
-    if lowered_parser in {"browser_chromium_history", "browser_chromium_downloads", "browser_firefox_places", "browser_json", "browser_jsonl", "browser_csv"}:
+    if lowered_parser in {"browser_chromium_history", "browser_chromium_downloads", "browser_firefox_places", "browser_cache", "browser_json", "browser_jsonl", "browser_csv"}:
         return lowered_parser
     if lowered_parser in {"browserhistoryview", "browser_history_view", "generic_browser", "generic_csv"}:
         return "browser_csv"
@@ -348,6 +350,18 @@ def _extract_search_terms(term: str | None, url: str | None) -> tuple[str | None
     if explicit:
         return explicit, None
     return None, None
+
+
+def _looks_like_cache_resource(row: dict, artifact_meta: dict) -> bool:
+    subtype = str(artifact_meta.get("browser_artifact_type") or "")
+    return subtype == "cache_resource" or str(_first(row, ["ArtifactType"]) or "").lower() == "browser_cache"
+
+
+def _registrable(domain: str | None) -> str:
+    """The last two labels of a host: enough to tell cdn.site.com from site.com
+    as the same party without a public-suffix list."""
+    labels = [label for label in str(domain or "").lower().strip(".").split(".") if label]
+    return ".".join(labels[-2:])
 
 
 def _looks_like_history(row: dict, artifact_meta: dict) -> bool:
@@ -512,7 +526,9 @@ def normalize_browser_event(document: dict, row: dict, artifact_meta: dict, audi
     file_name = _first(row, ["Filename", "FileName"]) or _derive_download_filename(download_path, final_url or url_value)
     user_name = _infer_user(row, source_file, profile_path, download_path)
     artifact_subtype = "browser_generic"
-    if _looks_like_download(row, artifact_meta):
+    if _looks_like_cache_resource(row, artifact_meta):
+        artifact_subtype = "cache_resource"
+    elif _looks_like_download(row, artifact_meta):
         artifact_subtype = "download"
     elif _looks_like_search_term(row, artifact_meta):
         artifact_subtype = "search_term"
@@ -542,7 +558,16 @@ def normalize_browser_event(document: dict, row: dict, artifact_meta: dict, audi
         source_file=source_file,
         parser_name=str(artifact_meta.get("parser") or ""),
     )
-    if artifact_subtype == "download":
+    if artifact_subtype == "cache_resource":
+        cache_ts, cache_precision = None, "unknown"
+        for column, precision in (("Cache Response Time", "browser_cache_response_time"), ("Cache Last Used", "browser_cache_last_used"), ("Cache Created", "browser_cache_created")):
+            cache_ts, _ = _parse_browser_timestamp(_first(row, [column]))
+            if cache_ts:
+                cache_precision = precision
+                break
+        document["@timestamp"] = cache_ts or source_mtime
+        document["timestamp_precision"] = cache_precision if cache_ts else "source_file_mtime" if source_mtime else "unknown"
+    elif artifact_subtype == "download":
         document["@timestamp"] = download_end_ts or download_start_ts or source_mtime
         document["timestamp_precision"] = "browser_download_end_time" if download_end_ts else "browser_download_start_time" if download_start_ts else "source_file_mtime" if source_mtime else "unknown"
     else:
@@ -672,6 +697,48 @@ def normalize_browser_event(document: dict, row: dict, artifact_meta: dict, audi
             audit.suspicious_download_count += 1
         if document["file"].get("extension"):
             audit.top_download_extensions[str(document["file"]["extension"]).lower()] += 1
+    elif artifact_subtype == "cache_resource":
+        audit.cache_count += 1
+        top_frame_site = _first(row, ["Top Frame Site"])
+        top_frame_domain = _parse_url(top_frame_site).get("domain") if top_frame_site and "://" in top_frame_site else None
+        server_ip = _first(row, ["Server IP"])
+        server_port = _to_int(_first(row, ["Server Port"]))
+        document["browser"]["cache"] = {
+            "top_frame_site": top_frame_site,
+            "top_frame_domain": top_frame_domain,
+            "frame_site": _first(row, ["Frame Site"]),
+            "third_party": bool(top_frame_domain and parsed_url.get("domain") and _registrable(top_frame_domain) != _registrable(parsed_url.get("domain"))),
+            "key": _first(row, ["Cache Key"]),
+            "format": _first(row, ["Cache Format"]),
+            "request_time": _parse_browser_timestamp(_first(row, ["Cache Request Time"]))[0],
+            "response_time": _parse_browser_timestamp(_first(row, ["Cache Response Time"]))[0],
+            "last_used": _parse_browser_timestamp(_first(row, ["Cache Last Used"]))[0],
+            "created": _parse_browser_timestamp(_first(row, ["Cache Created"]))[0],
+            "http_status": _to_int(_first(row, ["HTTP Status"])),
+            "status_line": _first(row, ["Status Line"]),
+            "content_type": _first(row, ["Content Type"]),
+            "content_length": _to_int(_first(row, ["Content Length"])),
+            "server": _first(row, ["Server"]),
+            "location": _first(row, ["Location"]),
+            "body_size": _to_int(_first(row, ["Body Size"])),
+        }
+        document["event"].update(
+            {
+                "category": "web",
+                "type": "browser_cache_entry",
+                "action": "browser_resource_cached",
+                "severity": "info",
+                "timeline_include": bool(document.get("@timestamp")),
+                "message": f"Browser cached resource: {parsed_url.get('domain') or parsed_url.get('full') or 'unknown'}" + (f" (loaded by {top_frame_domain})" if top_frame_domain else ""),
+            }
+        )
+        document["network"]["url"] = parsed_url.get("full")
+        document["network"]["domain"] = parsed_url.get("domain")
+        document["network"]["destination_ip"] = server_ip
+        document["network"]["destination_port"] = server_port
+        document["network"]["direction"] = "outbound"
+        document["network"]["application"] = document["browser"]["name"]
+        document.setdefault("destination", {}).update({"hostname": parsed_url.get("domain"), "ip": server_ip, "port": server_port})
     elif artifact_subtype == "search_term":
         audit.search_count += 1
         terms, engine = _extract_search_terms(_first(row, ["Search Term", "Search Terms", "Query", "Keyword", "Term"]), parsed_url.get("full"))
@@ -786,7 +853,9 @@ def normalize_browser_event(document: dict, row: dict, artifact_meta: dict, audi
         audit.browsers_seen[str(browser_name)] += 1
     if profile:
         audit.profiles_seen[profile] += 1
-    for token in SUSPICIOUS_NAME_TOKENS:
+    # A cached resource's "file name" is the last segment of its URL path
+    # (".../api/token", ".../keys.json"): not a file that reached the disk.
+    for token in SUSPICIOUS_NAME_TOKENS if artifact_subtype != "cache_resource" else ():
         if token in str(file_name or "").lower():
             document["tags"] = sorted(set(document.get("tags", [])) | {"suspicious"})
             document["suspicious_reasons"] = sorted(set(document.get("suspicious_reasons", [])) | {f"Interesting downloaded filename contains '{token}'"})
@@ -801,6 +870,8 @@ def normalize_browser_event(document: dict, row: dict, artifact_meta: dict, audi
         _first(row, ["Title", "Page Title"]),
         _first(row, ["Target Path", "Download Path", "Full Path"]),
         _first(row, ["Search Term", "Search Terms", "Query", "Keyword", "Term"]),
+        _first(row, ["Top Frame Site"]),
+        _first(row, ["Server IP"]),
     )
     audit.records_parsed += 1
     return document

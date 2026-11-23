@@ -117,6 +117,28 @@ export type SortField =
   | "linux.line_number"
   | "risk_score";
 export type SortOrder = "asc" | "desc";
+// A cached resource has no title or file path; what matters is the page that
+// loaded it and the server it came from.
+function browserCache(item: Record<string, unknown>): Record<string, unknown> | null {
+  const cache = ((item.browser as Record<string, unknown>) ?? {}).cache;
+  return cache && typeof cache === "object" ? (cache as Record<string, unknown>) : null;
+}
+
+function browserCacheLoadedBy(item: Record<string, unknown>): string | null {
+  const cache = browserCache(item);
+  if (!cache) return null;
+  const site = cache.top_frame_domain ?? cache.top_frame_site;
+  return site ? `Loaded by ${String(site)}${cache.third_party ? " (third party)" : ""}` : "-";
+}
+
+function browserCacheServer(item: Record<string, unknown>): string | null {
+  const cache = browserCache(item);
+  if (!cache) return null;
+  const ip = ((item.network as Record<string, unknown>) ?? {}).destination_ip;
+  const parts = [ip ? String(ip) : null, cache.content_type ? String(cache.content_type) : null].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "-";
+}
+
 export type EventView = "auto" | "generic" | "evtx" | "filesystem" | "mft" | "execution" | "execution_artifacts" | "browser" | "network" | "srum" | "persistence" | "registry" | "defender" | "powershell" | "recycle_bin" | "shellbags" | "jumplist" | "usb" | "bits" | "wmi" | "autoruns" | "cloud_sync";
 
 type Props = {
@@ -488,8 +510,8 @@ function getColumns(view: EventView): Column[] {
         { key: "type", label: "Type", render: (item) => String(((item.browser as Record<string, unknown>) ?? {}).artifact_type ?? ((item.event as Record<string, unknown>) ?? {}).type ?? "-") },
         { key: "domain", label: "Domain", render: (item) => String(((item.url as Record<string, unknown>) ?? {}).domain ?? ((item.browser as Record<string, unknown>) ?? {}).domain ?? "-") },
         { key: "url_or_file", label: "URL / File", render: (item) => String(((item.url as Record<string, unknown>) ?? {}).full ?? ((item.browser as Record<string, unknown>) ?? {}).url ?? ((item.file as Record<string, unknown>) ?? {}).path ?? "-") },
-        { key: "title", label: "Title / Filename", render: (item) => String(((item.browser as Record<string, unknown>) ?? {}).title ?? ((item.file as Record<string, unknown>) ?? {}).name ?? ((item.download as Record<string, unknown>) ?? {}).file_name ?? ((item.browser as Record<string, unknown>) ?? {}).search_terms ?? "-") },
-        { key: "path", label: "Path", render: (item) => String(((item.file as Record<string, unknown>) ?? {}).path ?? ((item.download as Record<string, unknown>) ?? {}).target_path ?? "-") },
+        { key: "title", label: "Title / Filename", render: (item) => browserCacheLoadedBy(item) ?? String(((item.browser as Record<string, unknown>) ?? {}).title ?? ((item.file as Record<string, unknown>) ?? {}).name ?? ((item.download as Record<string, unknown>) ?? {}).file_name ?? ((item.browser as Record<string, unknown>) ?? {}).search_terms ?? "-") },
+        { key: "path", label: "Path", render: (item) => browserCacheServer(item) ?? String(((item.file as Record<string, unknown>) ?? {}).path ?? ((item.download as Record<string, unknown>) ?? {}).target_path ?? "-") },
         tags,
       ];
     case "powershell":

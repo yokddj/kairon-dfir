@@ -51,6 +51,7 @@ from app.analysis.semi_auto import SemiAutoAnalysisCancelled, build_case_semi_au
 from app.disk_images.service import disk_image_readiness, materialize_disk_image_sources
 from app.ingest.evidence_classifier import EvidenceCategory, get_evidence_classifier
 from app.ingest.browser.normalizer import BrowserAudit, normalize_browser_event
+from app.ingest.browser.cache import read_browser_cache
 from app.ingest.browser.sqlite_chromium import parse_chromium_history_sqlite
 from app.ingest.browser.sqlite_firefox import parse_firefox_places_sqlite
 from app.ingest.archive import ArchiveExtractionError, archive_truncation, copy_folder, extract_archive, inventory_folder, write_tree_metadata
@@ -1987,6 +1988,13 @@ PARSER_CAPABILITIES: dict[str, dict] = {
         "shared_state": False,
     },
     "browser_firefox_places": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 2,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "browser_cache": {
         "parallel_safe": True,
         "resource_class": "cpu_io",
         "max_parallelism": 2,
@@ -6049,10 +6057,12 @@ def ingest_evidence(evidence_id: str) -> None:
                     documents: list[dict] = []
                     row_hosts: Counter[str] = Counter()
                     detections_created_inline = False
-                    if artifact_info.get("parser") in {"sqlite_chromium", "sqlite_firefox", "browser_chromium_history", "browser_firefox_places"} and artifact_info["artifact_type"] == "browser":
+                    if artifact_info.get("parser") in {"sqlite_chromium", "sqlite_firefox", "browser_chromium_history", "browser_firefox_places", "browser_cache"} and artifact_info["artifact_type"] == "browser":
                         browser_audit = BrowserAudit()
                         source_path = str(artifact_info.get("velociraptor_original_path") or artifact_info.get("source_path") or artifact_info["name"])
-                        if artifact_info.get("parser") in {"sqlite_chromium", "browser_chromium_history"}:
+                        if artifact_info.get("parser") == "browser_cache":
+                            rows, sqlite_copies = read_browser_cache(Path(artifact_info["path"]), source_path=source_path), []
+                        elif artifact_info.get("parser") in {"sqlite_chromium", "browser_chromium_history"}:
                             rows, sqlite_copies = parse_chromium_history_sqlite(artifact_info["path"], source_path=source_path)
                         else:
                             rows, sqlite_copies = parse_firefox_places_sqlite(artifact_info["path"], source_path=source_path)
