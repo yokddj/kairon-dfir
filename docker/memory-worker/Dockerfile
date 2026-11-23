@@ -11,10 +11,10 @@ ARG VOLATILITY3_VERSION=2.28.0
 # fallback used if the API is unreachable at build time (e.g. offline
 # build); keep them reasonably current but they are not required to be.
 ARG MEMPROCFS_TAG=v5.19
-ARG MEMPROCFS_VERSION=9.9.9
-ARG MEMPROCFS_BUILD=99999999
-ARG MEMPROCFS_SHA256_AMD64=aaaa
-ARG MEMPROCFS_SHA256_ARM64=bbbb
+ARG MEMPROCFS_VERSION=5.19.4
+ARG MEMPROCFS_BUILD=20261114
+ARG MEMPROCFS_SHA256_AMD64=8e1dab767b553a197169c85bf41864e7e552b82e69624ba63cf7a83b3e211470
+ARG MEMPROCFS_SHA256_ARM64=e58e4b57eda9309bb18fe64d6a3abafb092a50ea39561a4be2d5ae1b613ae702
 # Set to "1" to skip the GitHub API lookup and use the fallback pin directly
 # (genuinely offline/air-gapped builds; also used by CI to verify the
 # fallback pin on its own).
