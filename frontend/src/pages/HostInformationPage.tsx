@@ -505,11 +505,9 @@ function UserRow({
 }
 
 const REVIEW_LEAD_LABEL: Record<string, string> = {
-  system_account_with_login_shell: "system account, login shell",
   hidden_user_account: "hidden account",
 };
 const REVIEW_LEAD_TITLE: Record<string, string> = {
-  system_account_with_login_shell: "A lead for review: macOS system accounts (UID below 500 or a leading underscore) normally cannot start a session, this one has an interactive shell.",
   hidden_user_account: "A lead for review: an account in the people's UID range marked hidden from the login window.",
 };
 

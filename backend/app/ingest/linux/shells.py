@@ -22,6 +22,8 @@ _LOGIN_SHELL_BASENAMES = {
 _NON_LOGIN_BASENAMES = {
     "nologin", "false", "true", "sync", "halt", "shutdown", "reboot",
     "poweroff", "sulogin",
+    # Daemons some systems set as an account's "shell" (the UUCP account's uucico on macOS/BSD).
+    "uucico",
 }
 
 

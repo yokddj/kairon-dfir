@@ -90,10 +90,10 @@ UID store (Windows) or the shell does not settle it (an old distribution's `daem
 accounts**; the filter searches all of them. A Mac has about 130 accounts, almost all the OS's own
 (`_spotlight`, `_www`...).
 
-`review_leads` flags, for macOS accounts only (its conventions are strict enough), an account in
-the system range or named with a leading underscore that has an interactive shell, and a hidden
-account in the people's range. They are leads for review, never detections. Linux gets none:
-older distributions shipped system accounts with `/bin/sh`, which would flag healthy hosts.
+`review_leads` flags, for macOS accounts only, a hidden account in the people's range (a lead for
+review, never a detection). A system account with an interactive shell is not flagged: macOS ships
+`_mbsetupuser` with `/bin/bash` and older Linux distributions shipped daemon accounts with
+`/bin/sh`, so it would flag healthy hosts; such accounts stay unfolded in the table instead.
 
 ### Cross-platform field reuse
 
