@@ -143,6 +143,8 @@ nav:
           - artifacts/windows_notifications.md
       - Linux:
           - linux/linux-support.md
+      - macOS:
+          - macos/macos-support.md
   - Memory:
       - memory/memory_analysis.md
       - memory/memory_operations.md

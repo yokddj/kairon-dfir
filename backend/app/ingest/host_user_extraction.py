@@ -70,3 +70,4 @@ def extract_host_user_documents(documents: list[dict]) -> list[dict]:
 # User Facts support; app.workers.tasks only ever calls
 # extract_host_user_documents() above.
 from app.ingest.linux import host_user_facts as _linux_host_user_facts  # noqa: E402,F401
+from app.ingest.macos import host_user_facts as _macos_host_user_facts  # noqa: E402,F401

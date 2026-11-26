@@ -143,6 +143,32 @@ def _nested_archive_depth(container, entries: list[ContainerEntry], *, max_depth
     return deepest
 
 
+def _expected_macos_parsers(live_paths: list[str]) -> tuple[list[str], int]:
+    """The macOS artifact list (app.ingest.macos.helpers), judged by path alone."""
+    from app.core.artifact_registry import artifact_registry_entry
+    from app.ingest.macos.helpers import is_browser_history, is_shared_unix_artifact, looks_like_macos_artifact
+    from app.ingest.uac.live_response import is_ignored_uac_output, looks_like_uac_output
+
+    labels: set[str] = set()
+    matched = 0
+    for rel_path in live_paths:
+        if is_ignored_uac_output(rel_path):
+            continue
+        family = None
+        hit = looks_like_uac_output(rel_path) or looks_like_macos_artifact(rel_path)
+        if hit:
+            family = hit[0]
+        elif is_browser_history(rel_path):
+            family = "browser"
+        elif is_shared_unix_artifact(rel_path):
+            linux = looks_like_linux_artifact(rel_path)
+            family = linux[0] if linux else None
+        if family:
+            matched += 1
+            labels.add(str(artifact_registry_entry(family).get("label") or family))
+    return sorted(labels), matched
+
+
 def _expected_parsers_for_archive(entries: list[ContainerEntry], *, platform: str) -> tuple[list[str], int]:
     live_paths = [entry.path for entry in entries if not entry.is_dir and not entry.ignored]
     if platform == EvidencePlatform.linux.value:
@@ -154,6 +180,8 @@ def _expected_parsers_for_archive(entries: list[ContainerEntry], *, platform: st
                 matched_paths += 1
                 labels.add(hit[0].replace("_", " "))
         return sorted(labels), matched_paths
+    if platform == EvidencePlatform.macos.value:
+        return _expected_macos_parsers(live_paths)
     # Windows / other: match by filename against the static artifact registry labels.
     registry_entries = artifact_registry_entries(platforms=[platform] if platform not in {EvidencePlatform.unknown.value, EvidencePlatform.mixed.value} else None)
     labels = set()
@@ -167,6 +195,31 @@ def _expected_parsers_for_archive(entries: list[ContainerEntry], *, platform: st
                 matched_paths += 1
                 break
     return sorted(labels), matched_paths
+
+
+_UAC_PLATFORMS = {"macos": EvidencePlatform.macos.value, "linux": EvidencePlatform.linux.value}
+_UAC_OUTPUT_PREFIXES = ("[root]/", "live_response/", "bodyfile/", "hash_executables/")
+
+
+def _uac_header(container, entries: list[ContainerEntry], tmp_root: Path) -> dict[str, str]:
+    """The header facts of a UAC collection's own uac.log, when the archive is one."""
+    from app.ingest.uac.collection import read_uac_log
+
+    paths = [entry.path.replace("\\", "/") for entry in entries]
+    for entry in entries:
+        normalized = entry.path.replace("\\", "/")
+        if entry.is_dir or Path(normalized).name != "uac.log" or normalized.count("/") > 2 or entry.size > 64 * 1024 * 1024:
+            continue
+        base = normalized[: -len("uac.log")]
+        if not any(other.startswith(base + prefix) for other in paths for prefix in _UAC_OUTPUT_PREFIXES):
+            continue
+        tmp_root.mkdir(parents=True, exist_ok=True)
+        try:
+            container.extract_entries([entry.path], tmp_root)
+        except Exception:  # noqa: BLE001 - a preview only; ingest reads the log again.
+            return {}
+        return read_uac_log(tmp_root / normalized)
+    return {}
 
 
 def _linux_hostname_distro(container, entries: list[ContainerEntry], tmp_root: Path) -> tuple[str | None, str | None, str | None]:
@@ -196,11 +249,18 @@ def _inspect_archive_or_folder(path: Path, *, declared_platform: str | None, tmp
     entry_paths = [entry.path for entry in live_entries]
 
     detected_platform = detect_evidence_platform(filename=path.name, paths=entry_paths)
+    uac_facts = _uac_header(container, entries, tmp_dir / "uac")
+    if uac_facts.get("operating_system") in _UAC_PLATFORMS:
+        # UAC records the operating system it ran on: firsthand, unlike path markers.
+        detected_platform = _UAC_PLATFORMS[uac_facts["operating_system"]]
     effective_platform = declared_platform if declared_platform and declared_platform != EvidencePlatform.auto.value else detected_platform
 
     hostname = distro = kernel = None
     if effective_platform == EvidencePlatform.linux.value:
         hostname, distro, kernel = _linux_hostname_distro(container, entries, tmp_dir / "peek")
+    elif effective_platform == EvidencePlatform.macos.value:
+        hostname, distro = uac_facts.get("hostname"), "macOS"
+    hostname = hostname or uac_facts.get("hostname")
 
     expected_parsers, matched_count = _expected_parsers_for_archive(entries, platform=effective_platform)
     nested_depth = _nested_archive_depth(container, entries, max_depth_to_check=get_settings().max_archive_depth + 2)

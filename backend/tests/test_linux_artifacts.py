@@ -1371,13 +1371,10 @@ class TestPlatformDetection:
         platform = detect_evidence_platform(paths=macos_paths)
         assert platform == "macos"
 
-    def test_macos_direct_selection_rejected(self):
-        import pytest as pt
-        from fastapi import HTTPException
+    def test_macos_direct_selection_accepted(self):
         from app.api.routes_evidence import _resolve_requested_platform
-        with pt.raises(HTTPException) as exc_info:
-            _resolve_requested_platform("macos", filename="macos_artifacts.zip")
-        assert exc_info.value.status_code == 400
+        provided, _detected, effective = _resolve_requested_platform("macos", filename="macos_artifacts.zip")
+        assert (provided, effective) == ("macos", "macos")
 
     def test_unknown_paths_detected_as_unknown(self):
         from app.models.evidence import detect_evidence_platform

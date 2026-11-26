@@ -54,6 +54,7 @@ from app.ingest.email import (
 )
 from app.ingest.linux.dispatch import LinuxParserDispatchError, LinuxParserExecutionError, parse_linux_artifact_file
 from app.ingest.netscaler.dispatch import NetscalerParserDispatchError, NetscalerParserExecutionError, parse_netscaler_artifact_file
+from app.ingest.macos.dispatch import MacosParserDispatchError, MacosParserExecutionError, parse_macos_artifact_file, parse_uac_artifact_file
 from app.ingest.ntfs import (
     looks_like_ntfs_artifact,
     normalize_ntfs_row,
@@ -142,6 +143,7 @@ from app.ingest.artifact_normalizers import (
     normalize_jumplist_row,
     normalize_linux_row,
     normalize_lnk_row,
+    normalize_macos_row,
     normalize_mft_row,
     normalize_netscaler_row,
     normalize_prefetch_row,
@@ -149,6 +151,7 @@ from app.ingest.artifact_normalizers import (
     normalize_recycle_bin_row,
     normalize_registry_row,
     normalize_service_row,
+    normalize_uac_row,
     normalize_shellbags_row,
     normalize_shimcache_row,
     normalize_srum_row,
@@ -671,12 +674,20 @@ def build_search_text(document: dict) -> str:
 
 
 
+_HOST_OS_LABELS = {"windows": "Windows", "linux": "Linux", "macos": "macOS"}
+
+
 def base_document(case_id: str, evidence_id: str, artifact_id: str, row: dict, artifact_meta: dict) -> dict:
     timestamp, precision = parse_timestamp(first_value(row, TIMESTAMP_CANDIDATES))
     host_name = extract_host(row, artifact_meta)
     user_name = extract_user(row, artifact_meta)
     artifact_family = str(artifact_meta.get("artifact_family") or "")
-    if artifact_family.startswith("linux_"):
+    if artifact_meta.get("os_type") == "macos" or artifact_family.startswith("macos_"):
+        # A macOS collection: also the Unix artifacts (shell history, sudoers...) read by the Linux parsers.
+        os_type = "macos"
+    elif artifact_family.startswith("uac_"):
+        os_type = str(row.get("collection_os") or artifact_meta.get("os_type") or "unknown")
+    elif artifact_family.startswith("linux_"):
         os_type = "linux"
     elif artifact_family.startswith("netscaler_"):
         os_type = "bsd"
@@ -703,7 +714,7 @@ def base_document(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
         "timestamp_precision": precision,
         "timezone": "UTC" if timestamp else None,
         "os": {"type": os_type, "version": None},
-        "host": {"name": host_name, "hostname": host_name, "ip": [], "os": os_type.capitalize() if os_type in {"windows", "linux", "macos"} else None},
+        "host": {"name": host_name, "hostname": host_name, "ip": [], "os": _HOST_OS_LABELS.get(os_type)},
         "user": {"name": user_name if is_valid_username(user_name) else None, "sid": first_value(row, ["SID", "UserSid"])},
         "artifact": {
             "type": artifact_type,
@@ -1874,6 +1885,20 @@ def normalize_row(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
     if artifact_family.startswith("linux_"):
         detected_host = document["host"]["hostname"]
         document = normalize_linux_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
+        if artifact_meta.get("os_type") == "macos":
+            document["os"]["type"] = "macos"
+            document["host"]["os"] = "macOS"
+            if not document["user"].get("name"):
+                # Homes are /Users/<name> on macOS, where the Linux parsers look for /home/<name>.
+                from app.ingest.macos.common import user_from_path
+
+                document["user"]["name"] = user_from_path(source_path) or None
+    elif artifact_family.startswith("macos_"):
+        detected_host = document["host"]["hostname"]
+        document = normalize_macos_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
+    elif artifact_family.startswith("uac_"):
+        detected_host = document["host"]["hostname"]
+        document = normalize_uac_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
     elif artifact_family.startswith("netscaler_"):
         detected_host = document["host"]["hostname"]
         document = normalize_netscaler_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
@@ -2195,7 +2220,55 @@ def normalize_user_activity_raw_hive(case_id: str, evidence_id: str, artifact_id
     return [document]
 
 
+def _normalize_macos_or_uac_file(case_id: str, evidence_id: str, artifact_id: str, path: Path, artifact_meta: dict, artifact_family: str) -> list[dict]:
+    parser = str(artifact_meta.get("parser") or "").lower()
+    source_path_value = str(artifact_meta.get("source_path") or path)
+    try:
+        if artifact_family.startswith("uac_"):
+            rows = parse_uac_artifact_file(path, artifact_type=str(artifact_meta.get("uac_artifact_type") or ""), source_path=source_path_value)
+        else:
+            rows = parse_macos_artifact_file(path, parser=parser, artifact_type=str(artifact_meta.get("macos_artifact_type") or ""), source_path=source_path_value)
+    except (MacosParserDispatchError, MacosParserExecutionError) as exc:
+        artifact_meta["raw_parser_status"] = "failed_dispatch" if isinstance(exc, MacosParserDispatchError) else "failed"
+        artifact_meta["raw_parser_errors"] = [str(exc)]
+        artifact_meta["ingest_audit"] = {
+            "artifact": str(artifact_meta.get("name") or path.name),
+            "parser": parser,
+            "records_read": 0,
+            "records_parsed": 0,
+            "events_indexed": 0,
+            "records_indexed": 0,
+            "parser_status": artifact_meta["raw_parser_status"],
+            "parse_warnings": [],
+            "parser_errors": [str(exc)],
+            "bulk_index_errors": 0,
+        }
+        raise
+    documents = [normalize_row(case_id, evidence_id, artifact_id, row, artifact_meta) for row in rows]
+    parser_status = "parsed" if documents else "parsed_empty"
+    artifact_meta["raw_parser_status"] = parser_status
+    artifact_meta["raw_parser_errors"] = []
+    artifact_meta["ingest_audit"] = {
+        "artifact": str(artifact_meta.get("name") or path.name),
+        "parser": parser,
+        "records_read": len(rows),
+        "records_parsed": len(documents),
+        "events_indexed": len(documents),
+        "records_indexed": len(documents),
+        "parser_status": parser_status,
+        "parse_warnings": [],
+        "parser_errors": [],
+        "bulk_index_errors": 0,
+    }
+    return documents
+
+
 def normalize_file(case_id: str, evidence_id: str, artifact_id: str, path: Path, artifact_meta: dict, progress_cb=None) -> list[dict]:
+    early_family = str(artifact_meta.get("artifact_family") or "").lower()
+    if early_family.startswith(("macos_", "uac_")):
+        # Routed by path to their own parsers: the name-based branches below (netstat, History...)
+        # must not take them over.
+        return _normalize_macos_or_uac_file(case_id, evidence_id, artifact_id, path, artifact_meta, early_family)
     parser_name = str(artifact_meta.get("parser") or "").lower()
     artifact_type = str(artifact_meta.get("artifact_type") or "").lower()
     if parser_name in {"unsupported_text", "unsupported_sensitive_artifact"}:

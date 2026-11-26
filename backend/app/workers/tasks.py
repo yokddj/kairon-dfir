@@ -54,6 +54,8 @@ from app.ingest.browser.normalizer import BrowserAudit, normalize_browser_event
 from app.ingest.browser.cache import read_browser_cache
 from app.ingest.browser.sqlite_chromium import parse_chromium_history_sqlite
 from app.ingest.browser.sqlite_firefox import parse_firefox_places_sqlite
+from app.ingest.browser.sqlite_safari import parse_safari_history_sqlite
+from app.ingest.uac.collection import detect_uac_collection
 from app.ingest.archive import ArchiveExtractionError, archive_truncation, copy_folder, extract_archive, inventory_folder, write_tree_metadata
 from app.ingest.csv_json import list_generic_artifacts
 from app.ingest.bundled_evidence import MAX_DEEP_SCANS_PER_COLLECTION, bundled_evidence, bundled_kind, wants_kernel_scan
@@ -1636,7 +1638,7 @@ def _finalize_artifact_status(*, parser_name: str | None, record_count: int, raw
         if raw_parser_status in {"partial", "failed", "failed_unsupported"}:
             return raw_parser_status
         return "failed"
-    if parser_name in linux_raw_parsers and record_count == 0:
+    if (parser_name in linux_raw_parsers or parser_name.startswith(("macos_", "uac_"))) and record_count == 0:
         if raw_parser_status in {"failed", "failed_dispatch"}:
             return "failed"
         if raw_parser_status == "parsed_empty":
@@ -3709,11 +3711,23 @@ def _selected_single_file_artifacts(evidence: Evidence, root: Path) -> list[dict
     return artifacts
 
 
+# UAC's operating-system names that Kairon parses, and what the collection becomes.
+UAC_PLATFORM_BY_OS = {"macos": EvidencePlatform.macos.value, "linux": EvidencePlatform.linux.value}
+UAC_EVIDENCE_TYPE_BY_OS = {"macos": EvidenceType.macos_triage, "linux": EvidenceType.linux_triage}
+
+
 def _select_artifacts(evidence: Evidence, root: Path, progress_cb=None) -> list[dict]:
     evidence_type = evidence.evidence_type
     if evidence_type == EvidenceType.velociraptor_zip or _is_raw_collection_with_discovery(evidence):
         return list_velociraptor_artifacts(root, _selected_velociraptor_candidates(evidence), progress_cb=progress_cb)
-    if evidence_type in {EvidenceType.kape_archive, EvidenceType.parsed_folder, EvidenceType.linux_triage, EvidenceType.macos_triage, EvidenceType.disk_image}:
+    if evidence_type == EvidenceType.macos_triage:
+        # A closed list of macOS artifacts: see app.ingest.macos.helpers for why nothing else is read.
+        from app.ingest.macos.helpers import list_macos_artifacts
+
+        artifacts, stats = list_macos_artifacts(root)
+        evidence.metadata_json = merge_evidence_metadata(evidence.metadata_json or {}, {"macos_collection_summary": stats})
+        return artifacts
+    if evidence_type in {EvidenceType.kape_archive, EvidenceType.parsed_folder, EvidenceType.linux_triage, EvidenceType.disk_image}:
         return list_kape_artifacts(root)
     if evidence_type == EvidenceType.evtx:
         selected = _selected_single_file_artifacts(evidence, root)
@@ -5714,6 +5728,13 @@ def ingest_evidence(evidence_id: str) -> None:
             paths=extracted_files,
             evidence_type=getattr(evidence.evidence_type, "value", evidence.evidence_type),
         )
+        uac_collection = None if evidence.evidence_type == EvidenceType.disk_image else detect_uac_collection(extract_dir)
+        if uac_collection is not None:
+            # UAC names the operating system it ran on in its own log: firsthand, unlike path markers
+            # (a Mac's /private/var/log/ also looks like Linux's /var/log/).
+            metadata["uac_collection"] = uac_collection.as_metadata()
+            if uac_collection.operating_system in UAC_PLATFORM_BY_OS:
+                path_detected_platform = UAC_PLATFORM_BY_OS[uac_collection.operating_system]
         # For disk images, the path-marker heuristic above only sees whatever
         # KAPE-style artifact rules happened to extract -- empty or near-empty
         # for a platform with no artifact rules defined yet (e.g. BSD), even
@@ -5790,7 +5811,18 @@ def ingest_evidence(evidence_id: str) -> None:
             evidence.source_tool = "raw_collection"
         elif evidence.evidence_type != EvidenceType.disk_image:
             evidence.evidence_type = detect_evidence_type(stored_path, extracted_files if not is_selected_velociraptor else [])
-            if evidence.evidence_type == EvidenceType.velociraptor_zip:
+            uac_os = str(((evidence.metadata_json or {}).get("uac_collection") or {}).get("operating_system") or "")
+            if uac_os in UAC_EVIDENCE_TYPE_BY_OS and not is_selected_velociraptor:
+                evidence.evidence_type = UAC_EVIDENCE_TYPE_BY_OS[uac_os]
+                evidence.source_tool = "uac"
+            elif (
+                str(getattr(evidence, "effective_platform", "") or "") == EvidencePlatform.macos.value
+                and evidence.evidence_type in {EvidenceType.parsed_folder, EvidenceType.kape_archive, EvidenceType.linux_triage, EvidenceType.unknown}
+                and not is_selected_velociraptor
+            ):
+                # The analyst said macOS: read the collection with the macOS artifact list.
+                evidence.evidence_type = EvidenceType.macos_triage
+            elif evidence.evidence_type == EvidenceType.velociraptor_zip:
                 evidence.source_tool = "velociraptor"
             elif evidence.evidence_type in {EvidenceType.kape_archive, EvidenceType.parsed_folder}:
                 evidence.source_tool = "kape"
@@ -5851,6 +5883,10 @@ def ingest_evidence(evidence_id: str) -> None:
                 collection_host_candidate = velo_host
                 candidate_hosts.append(velo_host)
                 detected_host_counts[velo_host] += 1
+        uac_hostname = str(((evidence.metadata_json or {}).get("uac_collection") or {}).get("hostname") or "").strip()
+        if uac_hostname:
+            candidate_hosts.append(uac_hostname)
+            detected_host_counts[uac_hostname] += 1
         linux_hostname = str(((evidence.metadata_json or {}).get("linux_inventory") or {}).get("hostname") or "").strip()
         if linux_hostname:
             candidate_hosts.append(linux_hostname)
@@ -6057,13 +6093,15 @@ def ingest_evidence(evidence_id: str) -> None:
                     documents: list[dict] = []
                     row_hosts: Counter[str] = Counter()
                     detections_created_inline = False
-                    if artifact_info.get("parser") in {"sqlite_chromium", "sqlite_firefox", "browser_chromium_history", "browser_firefox_places", "browser_cache"} and artifact_info["artifact_type"] == "browser":
+                    if artifact_info.get("parser") in {"sqlite_chromium", "sqlite_firefox", "browser_chromium_history", "browser_firefox_places", "browser_cache", "browser_safari_history"} and artifact_info["artifact_type"] == "browser":
                         browser_audit = BrowserAudit()
                         source_path = str(artifact_info.get("velociraptor_original_path") or artifact_info.get("source_path") or artifact_info["name"])
                         if artifact_info.get("parser") == "browser_cache":
                             rows, sqlite_copies = read_browser_cache(Path(artifact_info["path"]), source_path=source_path), []
                         elif artifact_info.get("parser") in {"sqlite_chromium", "browser_chromium_history"}:
                             rows, sqlite_copies = parse_chromium_history_sqlite(artifact_info["path"], source_path=source_path)
+                        elif artifact_info.get("parser") == "browser_safari_history":
+                            rows, sqlite_copies = parse_safari_history_sqlite(artifact_info["path"], source_path=source_path)
                         else:
                             rows, sqlite_copies = parse_firefox_places_sqlite(artifact_info["path"], source_path=source_path)
                         documents = _normalize_velociraptor_browser_rows(

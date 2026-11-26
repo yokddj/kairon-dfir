@@ -4371,6 +4371,231 @@ def normalize_netscaler_row(doc: dict, row: dict, *, source_path: str = "", arti
     return doc
 
 
+# Row fields copied into doc["macos"] / doc["uac"] (declared in the index mapping, see
+# app.core.opensearch.MACOS_MAPPING_PROPERTIES / UAC_MAPPING_PROPERTIES).
+MACOS_ROW_FIELDS = (
+    "artifact_family", "artifact_type", "source_file", "file_path", "line_number", "message", "event_action",
+    "timestamp_status", "username", "uid", "gid", "home", "shell", "gecos", "generated_uid", "hidden", "service_account", "system_account",
+    "account_created", "password_last_set", "failed_login_count", "last_failed_login", "group_name", "members",
+    "launchd_label", "program", "command_line", "run_as_user", "run_at_load", "keep_alive", "triggers", "disabled",
+    "session_type", "bundle_ids", "persistence_scope", "suspicious_indicators",
+    "quarantine_id", "agent_name", "agent_bundle_id", "data_url", "origin_url", "origin_title", "sender_name",
+    "sender_address", "quarantine_type",
+    "stream", "bundle_id", "app_name", "end_time", "duration_seconds", "url", "web_domain", "intent_class",
+    "intent_verb", "bluetooth_name", "bluetooth_address", "value", "value_text", "gmt_offset_seconds",
+    "tcc_scope", "tcc_service", "tcc_service_label", "tcc_client", "tcc_client_type", "tcc_decision", "tcc_reason",
+    "tcc_target", "sensitive_permission",
+    "process", "pid", "package", "package_version", "parse_status", "fact_type",
+)
+UAC_ROW_FIELDS = (
+    "artifact_family", "artifact_type", "source_file", "line_number", "message", "event_action", "timestamp_status",
+    "collection_os", "uac_command", "pid", "ppid", "username", "uid", "tty", "process_state", "cpu_percent",
+    "memory_percent", "command_line", "executable", "process_name", "process_start", "network_protocol", "local_ip",
+    "local_port", "remote_ip", "remote_port", "connection_state", "launchd_label", "exit_status", "running",
+    "terminal", "remote_host", "session_end", "session_state", "package", "package_version", "package_manager",
+    "fact_type",
+)
+_MACOS_SEVERITY_FLOOR = {"login_failed": "low"}
+
+
+def _copy_row_fields(row: dict, fields: tuple[str, ...]) -> dict:
+    return {field: row[field] for field in fields if row.get(field) not in (None, "", [], {})}
+
+
+def _attach_host_fact(doc: dict, row: dict, artifact_type: str, source_path: str) -> None:
+    if row.get("fact_type"):
+        doc["host_fact"] = {
+            "fact_type": row.get("fact_type", ""),
+            "artifact_family": row.get("artifact_family", artifact_type or ""),
+            "artifact_type": row.get("artifact_type", ""),
+            "source_file": row.get("source_file", source_path),
+            "raw_value": row.get("raw_value", ""),
+            "normalized_value": row.get("normalized_value") or "",
+            "confidence": row.get("confidence", ""),
+            "parse_status": row.get("parse_status", ""),
+            "reason": row.get("reason", ""),
+            "tzif_meta": {},
+        }
+        doc["event"].update({"category": "config", "type": row.get("fact_type"), "action": "host_identity_detected"})
+
+
+def _domain_of(url: str) -> str | None:
+    from urllib.parse import urlparse
+
+    try:
+        return (urlparse(url).hostname or "").lower() or None
+    except ValueError:
+        return None
+
+
+def normalize_macos_row(doc: dict, row: dict, *, source_path: str = "", artifact_type: str = "", detected_host: str | None = None) -> dict:
+    """Normalize a macOS artifact row (app.ingest.macos) into the base document."""
+    doc = dict(doc or {})
+    macos_data = _copy_row_fields(row, MACOS_ROW_FIELDS)
+    family = str(row.get("artifact_family") or artifact_type or "")
+    kind = str(row.get("artifact_type") or "")
+    action = str(row.get("event_action") or kind)
+    if detected_host:
+        doc["host"]["hostname"] = detected_host
+        doc["host"]["name"] = detected_host
+    doc["host"]["os"] = "macOS"
+    doc["os"]["type"] = "macos"
+    if row.get("username"):
+        doc["user"]["name"] = row["username"]
+    if row.get("uid") not in (None, ""):
+        doc["user"]["id"] = str(row["uid"])
+    doc["@timestamp"] = row.get("timestamp") or None
+    doc["timezone"] = "UTC" if doc["@timestamp"] else None
+    doc["timestamp_precision"] = "second" if doc["@timestamp"] else "unknown"
+    doc["artifact"]["type"] = family
+    doc["artifact"]["family"] = family
+    doc["event"]["category"] = family
+    doc["event"]["type"] = kind or "macos_record"
+    doc["event"]["action"] = action
+    doc["event"]["message"] = row.get("message", "")
+    doc["title"] = str(row.get("message") or kind)[:300]
+    severity = "info"
+    tags: list[str] = list(doc.get("tags") or [])
+    if family == "macos_launchd":
+        doc["persistence"].update({
+            "mechanism": kind,
+            "location": row.get("file_path"),
+            "name": row.get("launchd_label"),
+            "command": row.get("command_line"),
+            "path": row.get("program"),
+            "enabled": None if row.get("parse_status") == "invalid" else not row.get("disabled"),
+            "scope": row.get("persistence_scope"),
+            "user": row.get("username") or None,
+            "source": "launchd",
+        })
+        doc["file"]["path"] = row.get("file_path")
+        doc["file"]["name"] = str(row.get("file_path") or "").rsplit("/", 1)[-1] or None
+        doc["process"]["path"] = row.get("program") or None
+        doc["process"]["command_line"] = row.get("command_line") or None
+        tags.append("persistence")
+        if row.get("suspicious_indicators"):
+            # Leads for review, never a confirmed detection.
+            severity = "medium"
+    elif family == "macos_quarantine":
+        data_url = row.get("data_url") or ""
+        origin_url = row.get("origin_url") or ""
+        doc["download"].update({"url": data_url or None, "referrer": origin_url or None})
+        doc["url"]["full"] = data_url or origin_url or None
+        doc["url"]["domain"] = _domain_of(data_url or origin_url) if (data_url or origin_url) else None
+        doc["process"]["name"] = row.get("agent_name") or None
+        doc["process"]["application"] = row.get("agent_bundle_id") or None
+        tags.append("download")
+    elif family == "macos_knowledgec":
+        bundle = row.get("bundle_id") or None
+        doc["process"]["application"] = bundle
+        if kind in {"app_usage", "app_in_focus", "app_activity"}:
+            doc["execution"].update({"source": "knowledgeC", "program_name": bundle, "first_seen": row.get("timestamp"), "last_seen": row.get("end_time"), "confidence": "medium"})
+        if row.get("url"):
+            doc["url"]["full"] = row["url"]
+            doc["url"]["domain"] = row.get("web_domain") or _domain_of(row["url"])
+    elif family == "macos_tcc":
+        doc["process"]["application"] = row.get("tcc_client") or None
+        doc["event"]["outcome"] = "success" if row.get("tcc_decision") in {"allowed", "limited"} else "failure" if row.get("tcc_decision") == "denied" else None
+        if row.get("sensitive_permission"):
+            tags.append("sensitive_permission")
+    elif family == "macos_accounts":
+        if kind == "local_group":
+            doc["event"].update({"category": "iam", "type": "group"})
+        elif kind == "local_user":
+            doc["event"].update({"category": "iam", "type": "user"})
+        elif action == "login_failed":
+            doc["event"]["outcome"] = "failure"
+    elif family == "macos_logs":
+        doc["process"]["name"] = row.get("process") or None
+        doc["process"]["pid"] = row.get("pid")
+        if row.get("package"):
+            doc["package"] = {"name": row["package"], "version": row.get("package_version") or None}
+    _attach_host_fact(doc, row, artifact_type, source_path)
+    if row.get("system_account"):
+        doc["_preserve_timeline_include"] = True
+        doc["event"]["timeline_include"] = False
+    floor = _MACOS_SEVERITY_FLOOR.get(action)
+    if floor and severity == "info":
+        severity = floor
+    doc["event"]["severity"] = severity
+    doc["tags"] = list(dict.fromkeys(tags))
+    doc["message"] = row.get("message", "")
+    doc["macos"] = macos_data
+    return doc
+
+
+def normalize_uac_row(doc: dict, row: dict, *, source_path: str = "", artifact_type: str = "", detected_host: str | None = None) -> dict:
+    """Normalize a UAC live-response row (app.ingest.uac.live_response) into the base document."""
+    doc = dict(doc or {})
+    uac_data = _copy_row_fields(row, UAC_ROW_FIELDS)
+    family = str(row.get("artifact_family") or artifact_type or "")
+    kind = str(row.get("artifact_type") or "")
+    action = str(row.get("event_action") or kind)
+    collection_os = str(row.get("collection_os") or "")
+    if detected_host:
+        doc["host"]["hostname"] = detected_host
+        doc["host"]["name"] = detected_host
+    if collection_os in {"macos", "linux"}:
+        doc["os"]["type"] = collection_os
+        doc["host"]["os"] = "macOS" if collection_os == "macos" else "Linux"
+    if row.get("username"):
+        doc["user"]["name"] = row["username"]
+    if row.get("uid") not in (None, ""):
+        doc["user"]["id"] = str(row["uid"])
+    doc["@timestamp"] = row.get("timestamp") or None
+    doc["timezone"] = "UTC" if doc["@timestamp"] else None
+    doc["timestamp_precision"] = "second" if doc["@timestamp"] else "unknown"
+    doc["artifact"]["type"] = family
+    doc["artifact"]["family"] = family
+    doc["event"]["category"] = family
+    doc["event"]["type"] = kind or "uac_record"
+    doc["event"]["action"] = action
+    doc["event"]["message"] = row.get("message", "")
+    doc["event"]["severity"] = "info"
+    doc["title"] = str(row.get("message") or kind)[:300]
+    if row.get("pid") is not None:
+        doc["process"]["pid"] = row.get("pid")
+    if kind == "process_list":
+        doc["event"]["category"] = "process"
+        doc["event"]["type"] = "process_observed"
+        doc["process"].update({
+            "ppid": row.get("ppid"),
+            "parent_pid": row.get("ppid"),
+            "name": row.get("process_name") or None,
+            "path": row.get("executable") or None,
+            "command_line": row.get("command_line") or None,
+        })
+    elif kind == "network_connection":
+        doc["network"].update({
+            "source_ip": row.get("local_ip") if row.get("local_ip") not in (None, "*") else None,
+            "source_port": row.get("local_port"),
+            "destination_ip": row.get("remote_ip") if row.get("remote_ip") not in (None, "*") else None,
+            "destination_port": row.get("remote_port"),
+            "protocol": row.get("network_protocol") or None,
+            "state": row.get("connection_state") or None,
+            "process_id": row.get("pid"),
+            "process_name": row.get("process_name") or None,
+        })
+        doc["destination"].update({
+            "ip": doc["network"]["destination_ip"],
+            "port": row.get("remote_port"),
+        })
+        doc["process"]["name"] = row.get("process_name") or None
+    elif kind == "login_session":
+        doc["event"]["category"] = "authentication"
+        doc["process"]["name"] = None
+    elif kind in {"software_update", "package_inventory"}:
+        doc["package"] = {"name": row.get("package"), "version": row.get("package_version") or None, "manager": row.get("package_manager") or None}
+    _attach_host_fact(doc, row, artifact_type, source_path)
+    # A connection, a loaded job or an installed package is timed by the acquisition itself: kept
+    # searchable, left off the timeline. Process start times and logins are real events.
+    doc["_preserve_timeline_include"] = True
+    doc["event"]["timeline_include"] = bool(doc["@timestamp"]) and row.get("timestamp_status") != "collection_time" and not row.get("fact_type")
+    doc["message"] = row.get("message", "")
+    doc["uac"] = uac_data
+    return doc
+
+
 def normalize_generic_row(document: dict, row: dict, artifact_meta: dict) -> dict:
     document["event"].update({"category": "unknown", "type": "generic_record", "message": first_value(row, ["Message", "Description", "Path", "Name"]) or artifact_meta["name"]})
     return document

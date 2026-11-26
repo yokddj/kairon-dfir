@@ -150,7 +150,7 @@ When interpreting Processing Queue results:
 
 ## Not Supported Yet
 
-- macOS artifact support is not implemented.
+- macOS: only UAC collections, and only the artifacts listed in [macOS Support](../macos/macos-support.md) (no Unified Logs, FSEvents, ASL, Biome or APFS disk images).
 - Virtual Disk Upload is not implemented.
 - Raw SRUDB.dat parsing is not stable in the current Linux deployment.
 - Full PCAP forensics is not claimed.

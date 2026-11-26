@@ -32,6 +32,42 @@ INDEX_QUERY_DEFAULT_FIELDS = ["search_text"]
 # wildcard and no case_insensitive flag (search_text_substring_clause).
 SEARCH_TEXT_SUBSTRING_FIELD = "search_text.wildcard_lc"
 SEARCH_TEXT_SUBSTRING_SUBFIELD = {"wildcard_lc": {"type": "wildcard", "normalizer": "lowercase"}}
+
+# macOS artifact rows (app.ingest.artifact_normalizers.normalize_macos_row) and UAC live-response
+# rows (normalize_uac_row). Declared in full because the index is "dynamic": False: an undeclared
+# field would stay in _source only and no filter could reach it.
+_KW = {"type": "keyword"}
+_TEXT_KW = {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 1024}}}
+_DATE = {"type": "date", "ignore_malformed": True}
+_LONG = {"type": "long", "ignore_malformed": True}
+MACOS_MAPPING_PROPERTIES = {
+    **{field: _KW for field in (
+        "artifact_family", "artifact_type", "source_file", "file_path", "event_action", "timestamp_status", "username",
+        "uid", "gid", "home", "shell", "generated_uid", "group_name", "members", "launchd_label", "program", "run_as_user",
+        "triggers", "session_type", "bundle_ids", "persistence_scope", "suspicious_indicators", "quarantine_id",
+        "agent_name", "agent_bundle_id", "quarantine_type", "sender_address", "stream", "bundle_id", "app_name",
+        "web_domain", "intent_class", "intent_verb", "bluetooth_name", "bluetooth_address", "value_text", "tcc_scope",
+        "tcc_service", "tcc_service_label", "tcc_client", "tcc_client_type", "tcc_decision", "tcc_reason", "tcc_target",
+        "process", "package", "package_version", "parse_status", "fact_type",
+    )},
+    **{field: _TEXT_KW for field in ("message", "gecos", "command_line", "data_url", "origin_url", "origin_title", "sender_name", "url")},
+    **{field: _DATE for field in ("account_created", "password_last_set", "last_failed_login", "end_time")},
+    **{field: _LONG for field in ("line_number", "failed_login_count", "pid", "value", "gmt_offset_seconds")},
+    "duration_seconds": {"type": "double", "ignore_malformed": True},
+    **{field: {"type": "boolean"} for field in ("hidden", "service_account", "system_account", "run_at_load", "keep_alive", "disabled", "sensitive_permission")},
+}
+UAC_MAPPING_PROPERTIES = {
+    **{field: _KW for field in (
+        "artifact_family", "artifact_type", "source_file", "event_action", "timestamp_status", "collection_os", "uac_command",
+        "username", "uid", "tty", "process_state", "cpu_percent", "memory_percent", "executable", "process_name",
+        "network_protocol", "local_ip", "remote_ip", "connection_state", "launchd_label", "terminal", "remote_host",
+        "session_state", "package", "package_version", "package_manager", "fact_type",
+    )},
+    **{field: _TEXT_KW for field in ("message", "command_line")},
+    **{field: _DATE for field in ("process_start", "session_end")},
+    **{field: _LONG for field in ("line_number", "pid", "ppid", "local_port", "remote_port", "exit_status")},
+    "running": {"type": "boolean"},
+}
 SEARCH_TEXT_MAX_CHARS = 32 * 1024
 _SEARCH_TEXT_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+")
 _SEARCH_TEXT_WHITESPACE = re.compile(r"\s+")
@@ -1782,7 +1818,8 @@ def ensure_case_index(case_id: str) -> str:
                                 "interface_out": {"type": "keyword"},
                             }
                         },
-                        "macos": {"type": "object", "enabled": True},
+                        "macos": {"properties": MACOS_MAPPING_PROPERTIES},
+                        "uac": {"properties": UAC_MAPPING_PROPERTIES},
                         "netscaler": {
                             "properties": {
                                 "artifact_family": {"type": "keyword"},
@@ -1922,6 +1959,9 @@ def ensure_case_index(case_id: str) -> str:
                                 }
                             }
                         },
+                        # Backfill: macos.* and uac.* were undeclared until 2026-11 (macOS/UAC support).
+                        "macos": {"properties": MACOS_MAPPING_PROPERTIES},
+                        "uac": {"properties": UAC_MAPPING_PROPERTIES},
                         # Backfill: memprocfs.* was undeclared until 2026-11 (stayed in _source only).
                         "memprocfs": {
                             "properties": {

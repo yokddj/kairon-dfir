@@ -14,7 +14,8 @@ This document describes current known limitations. It is intentionally explicit 
 
 ## Linux
 
-- Coverage is partial: not every log format is parsed, ext4 is not parsed natively, binary journals are read without checking their checksums or sealing, and macOS collections are not parsed. The full list is in [linux/linux-support.md](linux/linux-support.md#limitations).
+- Coverage is partial: not every log format is parsed, ext4 is not parsed natively, binary journals are read without checking their checksums or sealing. The full list is in [linux/linux-support.md](linux/linux-support.md#limitations).
+- macOS: only UAC collections, read from a closed list of artifacts (launchd jobs, quarantine events, KnowledgeC, TCC, dslocal accounts, install.log, shell histories, browsers, UAC live response). Unified Logs, FSEvents, ASL, Biome, recent-items lists and APFS disk images are not parsed. See [macos/macos-support.md](macos/macos-support.md).
 - Cases ingested before a parser existed need their Linux evidence reprocessed to benefit from it.
 
 ## Memory Analysis

@@ -1,5 +1,3 @@
-import pytest
-from fastapi import HTTPException
 
 from app.api.routes_evidence import _resolve_requested_platform
 from app.core.evidence_platforms import build_evidence_platform_profile, build_platform_capabilities, infer_platform_from_categories
@@ -42,12 +40,11 @@ def test_linux_override_is_preserved_with_limited_parser_coverage() -> None:
     assert effective == "linux"
 
 
-def test_macos_direct_selection_is_rejected() -> None:
-    with pytest.raises(HTTPException) as exc_info:
-        _resolve_requested_platform("macos", filename="macos_artifacts.zip")
+def test_macos_direct_selection_is_accepted() -> None:
+    provided, _detected, effective = _resolve_requested_platform("macos", filename="uac-host-macos-20260101000000.tar.gz")
 
-    assert exc_info.value.status_code == 400
-    assert exc_info.value.detail == "macOS artifacts are not supported yet"
+    assert provided == "macos"
+    assert effective == "macos"
 
 
 def test_memory_evidence_resolves_to_memory_platform() -> None:

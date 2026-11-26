@@ -176,11 +176,12 @@ describe("EvidenceUpload", () => {
     expect(await screen.findByRole("button", { name: /Search evidence/i })).toBeInTheDocument();
   });
 
-  it("passes selected evidence platform and keeps macOS planned disabled", async () => {
+  it("passes selected evidence platform, offers macOS (UAC) and keeps BSD planned disabled", async () => {
     renderComponent();
     const platformSelect = screen.getByLabelText(/Evidence platform/i) as HTMLSelectElement;
     expect(platformSelect.value).toBe("auto");
-    expect(screen.getByRole("option", { name: /macOS planned/i })).toBeDisabled();
+    expect(screen.getByRole("option", { name: /macOS \(UAC\)/i })).not.toBeDisabled();
+    expect(screen.getByRole("option", { name: /BSD planned/i })).toBeDisabled();
 
     const options = Array.from(platformSelect.options).map((opt) => opt.text);
     expect(options.filter((t) => t === "Other").length).toBe(0);

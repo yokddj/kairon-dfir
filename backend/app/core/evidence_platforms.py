@@ -94,9 +94,8 @@ PLATFORM_REGISTRY: dict[str, dict[str, Any]] = {
     EvidencePlatform.macos.value: {
         "id": EvidencePlatform.macos.value,
         "label": "macOS",
-        "upload_label": "macOS planned",
-        "upload_description": "Visible for roadmap clarity. macOS artifacts are not supported yet.",
-        "disabled": True,
+        "upload_label": "macOS (UAC)",
+        "upload_description": "UAC collections of a Mac (uac -p full or -p ir_triage). Only a fixed list of macOS artifacts is parsed: launchd jobs, quarantine events, KnowledgeC, TCC, local accounts, install.log, shell histories, browsers and UAC live response.",
     },
     EvidencePlatform.bsd.value: {
         "id": EvidencePlatform.bsd.value,

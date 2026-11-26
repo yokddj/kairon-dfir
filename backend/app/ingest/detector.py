@@ -21,6 +21,7 @@ from app.ingest.usb.helpers import looks_like_usb_artifact
 from app.ingest.windows_ui.helpers import looks_like_windows_ui_artifact
 from app.ingest.wmi.helpers import looks_like_wmi_artifact
 from app.ingest.linux.helpers import looks_like_linux_artifact
+from app.ingest.uac.live_response import is_unparsed_uac_output, looks_like_uac_output
 from app.ingest.netscaler.helpers import looks_like_netscaler_artifact
 from app.disk_images.service import detect_disk_image_format
 from app.ingest.evidence_classifier import EvidenceCategory, get_evidence_classifier
@@ -304,6 +305,26 @@ def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
             "artifact_type": "windows_event",
             "profile": "account_usage",
             "parser": "evtx_raw",
+        }
+    # UAC's own outputs (live_response/, bodyfile, hash lists, find listings): parsed by their own
+    # module or kept unparsed -- never guessed at by the filename heuristics below.
+    uac_output = looks_like_uac_output(path)
+    if uac_output:
+        family, uac_type, parser = uac_output
+        return {
+            "artifact_type": family,
+            "artifact_family": family,
+            "uac_artifact_type": uac_type,
+            "profile": "host_activity",
+            "parser": parser,
+            "reason": "UAC live-response output",
+        }
+    if is_unparsed_uac_output(path):
+        return {
+            "artifact_type": "uac_output",
+            "profile": "collection_metadata",
+            "parser": "not_implemented",
+            "reason": "UAC collection output kept in the evidence; not parsed.",
         }
     if lower_name in {"readme.txt", "readme.md", "readme"}:
         return {

@@ -14,6 +14,18 @@ Kairon accepts Linux evidence collections as uploaded archives, folders, manual 
 
 Kairon does not require a fixed root layout. It scans paths such as `/etc`, `/var/log`, `/home`, `/root`, `/usr`, `/boot`, and nested equivalents inside archives.
 
+### UAC collections
+
+A [UAC](https://github.com/tclahr/uac) output (`uac -p ir_triage` or `uac -p full`) is recognised by its
+own `uac.log`: when it records `Operating system: linux`, the evidence is a Linux collection and its
+platform Linux whatever the file is called; the host name UAC recorded is a host candidate. The
+collected files under `[root]/` go through the Linux parsers below as for any collection. UAC's
+command output under `live_response/` (processes with start times, connections, login history,
+packages, kernel) is parsed by the UAC live-response parser shared with macOS — see
+[macOS Support](../macos/macos-support.md#uac-live-response-macos-and-linux); the rest of UAC's
+outputs (bodyfile, hash lists, find listings) are listed as detected, not parsed. A UAC collection
+that records `macos` is read as macOS instead.
+
 ### Expected Collection Layout
 
 Linux triage collections should preserve directory structure:
