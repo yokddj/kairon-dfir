@@ -18,7 +18,7 @@ def _parsers() -> dict[str, Callable[..., list[dict[str, Any]]]]:
     from app.ingest.macos.accounts import parse_dslocal_group, parse_dslocal_user
     from app.ingest.macos.knowledgec import parse_knowledgec
     from app.ingest.macos.launchd import parse_launchd_plist
-    from app.ingest.macos.logs import parse_install_log, parse_wifi_log
+    from app.ingest.macos.logs import parse_install_log, parse_launchd_log, parse_wifi_log
     from app.ingest.macos.quarantine import parse_quarantine_events
     from app.ingest.macos.system_info import parse_system_version
     from app.ingest.macos.tcc import parse_tcc
@@ -31,6 +31,8 @@ def _parsers() -> dict[str, Callable[..., list[dict[str, Any]]]]:
     def logs(path: Path, *, source_path: str, artifact_type: str) -> list[dict[str, Any]]:
         if artifact_type == "wifi_log":
             return parse_wifi_log(path, source_path=source_path)
+        if artifact_type == "launchd_log":
+            return parse_launchd_log(path, source_path=source_path)
         return parse_install_log(path, source_path=source_path)
 
     def simple(function: Callable[..., list[dict[str, Any]]]) -> Callable[..., list[dict[str, Any]]]:

@@ -11,10 +11,10 @@ The list:
 
 * macOS-specific: launchd jobs (LaunchAgents/LaunchDaemons outside the sealed system volume),
   QuarantineEventsV2, knowledgeC.db, TCC.db, dslocal users and groups, SystemVersion.plist,
-  install.log and wifi.log.
+  install.log, wifi.log and launchd.log.
 * Unix formats macOS shares with Linux, at their macOS locations, read by the Linux parsers:
   shell histories and shell start-up files in home directories, sudoers, PAM, cron tabs, SSH
-  configuration and keys lists, /etc/hosts, /etc/localtime, system.log and launchd.log.
+  configuration and keys lists, /etc/hosts, /etc/localtime and system.log.
 * Browser history databases (Chromium-based browsers, Firefox, Safari), read by the browser parsers.
 * UAC's own live-response output (see app.ingest.uac.live_response).
 """
@@ -53,7 +53,6 @@ _SHARED_UNIX_RES = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
     r"^/(?:private/)?var/at/tabs/[^/]+$",
     r"^/usr/lib/cron/tabs/[^/]+$",
     r"^/(?:private/)?var/log/system\.log(?:\.\d+)?(?:\.gz|\.bz2)?$",
-    r"^/(?:private/)?var/log/com\.apple\.xpc\.launchd/launchd\.log(?:\.\d+)?(?:\.gz|\.bz2)?$",
 ))
 _BROWSER_RES = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
     rf"^{_HOME}/Library/Application Support/(?:Google/Chrome(?: Beta| Canary)?|BraveSoftware/Brave-Browser|Microsoft Edge|Chromium|Vivaldi|Arc/User Data|com\.operasoftware\.Opera)/(?:[^/]+/)?History$",
