@@ -514,17 +514,66 @@ def _extract_zip(source: Path, dest_dir: Path, progress_cb: Callable[[dict], Non
         _raise_classified(_classify_zip_failure(exc, source), source, exc)
 
 
+_SEVEN_ZIP_DANGEROUS_LINK = "dangerous link path was ignored"
+_SEVEN_ZIP_ERROR_SUMMARY_PREFIXES = ("sub items errors", "archives with errors", "errors:")
+
+
+def skipped_dangerous_links(exc: subprocess.CalledProcessError) -> list[str] | None:
+    """The links 7-Zip refused to create, when that is the only thing it reported as an error.
+
+    7-Zip will not create a symbolic link whose target climbs out of its directory (``../..``); it
+    reports "Dangerous link path was ignored : <link> : <target>" for each, extracts everything
+    else and exits with 2. Collections of Unix systems are full of such links (UAC's tar of a Mac
+    holds hundreds), so that exit is a complete extraction minus those links -- not a corrupt
+    archive. Any other error keeps the archive failed. Returns None when there is another error.
+    """
+    if exc.returncode != 2:
+        return None
+    links: list[str] = []
+    for line in _decode_process_output(exc).splitlines():
+        lowered = line.strip().lower()
+        if not lowered.startswith("error"):
+            continue
+        if _SEVEN_ZIP_DANGEROUS_LINK in lowered:
+            parts = line.split(" : ")
+            links.append(parts[1].strip() if len(parts) >= 2 else "")
+            continue
+        if lowered.startswith(_SEVEN_ZIP_ERROR_SUMMARY_PREFIXES):
+            continue
+        return None
+    return links or None
+
+
 def _extract_seven_zip(source: Path, dest_dir: Path, progress_cb: Callable[[dict], None] | None) -> tuple[list[str], list[dict]]:
     manifest_entries: list[dict] = []
     try:
         with tempfile.TemporaryDirectory(dir=settings.backend_temp_dir) as tmp_dir:
             temp_extract_dir = Path(tmp_dir)
-            subprocess.run(
-                ["7z", "x", str(source), f"-o{temp_extract_dir}", "-y"],
-                check=True,
-                capture_output=True,
-                timeout=settings.archive_extraction_timeout_seconds,
-            )
+            skipped_links: list[str] = []
+            try:
+                subprocess.run(
+                    ["7z", "x", str(source), f"-o{temp_extract_dir}", "-y"],
+                    check=True,
+                    capture_output=True,
+                    timeout=settings.archive_extraction_timeout_seconds,
+                )
+            except subprocess.CalledProcessError as exc:
+                links = skipped_dangerous_links(exc)
+                if links is None:
+                    raise
+                skipped_links = links
+                logger.warning("7z skipped %d links pointing outside their directory in %s", len(links), source.name)
+            for link in skipped_links:
+                # 7-Zip leaves an empty file where it refused the link: it is not the linked file.
+                relative = link.removeprefix("./")
+                placeholder = temp_extract_dir / relative
+                try:
+                    ensure_within_directory(temp_extract_dir, placeholder)
+                    if placeholder.is_file() and not placeholder.is_symlink() and placeholder.stat().st_size == 0:
+                        placeholder.unlink()
+                except (OSError, ValueError):
+                    continue
+                manifest_entries.append({"path": relative, "ignored": True, "reason": "unsafe_link_not_followed", "size": 0, "status": "ignored", "local_path": None})
             paths = [path for path in temp_extract_dir.rglob("*") if path.is_file()]
             total_files = len(paths)
             total_bytes = sum(path.stat().st_size for path in paths)

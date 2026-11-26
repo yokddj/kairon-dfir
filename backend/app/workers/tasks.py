@@ -3947,6 +3947,8 @@ def _classify_and_dispatch_extracted(
                     rel_path,
                     exc,
                 )
+                # Kept on the entry so the evidence says so: nothing inside this archive was read.
+                entry = {**entry, "nested_extraction_error": str(getattr(exc, "message", None) or exc)[:500]}
                 result_entries.append(entry)
                 result_extracted.append(rel_path)
 
@@ -5674,6 +5676,12 @@ def ingest_evidence(evidence_id: str) -> None:
             artifacts = []
 
         extracted_files = [entry["path"] for entry in archive_entries if entry.get("status") == "extracted"]
+        for entry in archive_entries:
+            if entry.get("nested_extraction_error"):
+                detection_warnings.append({
+                    "artifact": entry.get("path") or "archive",
+                    "warning": f"nested_archive_not_extracted: {entry['nested_extraction_error']} Nothing inside it was processed.",
+                })
         disk_source_map = dict(((disk_image_materialization.source_map if disk_image_materialization else {}) or {}))
         if is_selected_velociraptor:
             manifest["stats"]["selected_files_total"] = selective_stats.get("selected_files_total", 0)
