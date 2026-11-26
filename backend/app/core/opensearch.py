@@ -1667,6 +1667,7 @@ def ensure_case_index(case_id: str) -> str:
                         "user_agent": {"properties": {"original": {"type": "keyword", "ignore_above": 2048}}},
                         "linux": {
                             "properties": {
+                                "mapped_hostname": {"type": "keyword"},
                                 "artifact_family": {"type": "keyword"},
                                 "artifact_type": {"type": "keyword"},
                                 "source_file": {"type": "keyword"},
@@ -2060,6 +2061,7 @@ def ensure_case_index(case_id: str) -> str:
                         "user_agent": {"properties": {"original": {"type": "keyword", "ignore_above": 2048}}},
                         "linux": {
                             "properties": {
+                                "mapped_hostname": {"type": "keyword"},
                                 "artifact_family": {"type": "keyword"},
                                 "artifact_type": {"type": "keyword"},
                                 "source_file": {"type": "keyword"},

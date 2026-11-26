@@ -201,6 +201,44 @@ _UAC_PLATFORMS = {"macos": EvidencePlatform.macos.value, "linux": EvidencePlatfo
 _UAC_OUTPUT_PREFIXES = ("[root]/", "live_response/", "bodyfile/", "hash_executables/")
 
 
+_TAR_PEEK_MAX_MEMBERS = 400
+_TAR_PEEK_MAX_SECONDS = 20.0
+
+
+def _uac_header_from_compressed_tar(path: Path, tmp_root: Path) -> dict[str, str]:
+    """The uac.log header of a UAC .tar.gz, read from the first members of the stream only.
+
+    The container listing of a .tar.gz shows only the tar inside it, and listing that tar would
+    mean decompressing all of it. UAC writes uac.log near the start of its tar, so the first few
+    hundred members are read (time-capped) and nothing else.
+    """
+    import tarfile
+    import time
+
+    from app.ingest.uac.collection import read_uac_log
+
+    deadline = time.monotonic() + _TAR_PEEK_MAX_SECONDS
+    try:
+        with tarfile.open(path, mode="r|*") as stream:
+            for index, member in enumerate(stream):
+                if index >= _TAR_PEEK_MAX_MEMBERS or time.monotonic() > deadline:
+                    break
+                name = member.name.lstrip("./")
+                if not member.isfile() or Path(name).name != "uac.log" or name.count("/") > 2 or member.size > 64 * 1024 * 1024:
+                    continue
+                handle = stream.extractfile(member)
+                if handle is None:
+                    return {}
+                tmp_root.mkdir(parents=True, exist_ok=True)
+                target = tmp_root / "uac.log"
+                # The header is within the first lines; the rest of the log is not needed.
+                target.write_bytes(handle.read(256 * 1024))
+                return read_uac_log(target)
+    except (tarfile.TarError, OSError, EOFError, ValueError):
+        return {}
+    return {}
+
+
 def _uac_header(container, entries: list[ContainerEntry], tmp_root: Path) -> dict[str, str]:
     """The header facts of a UAC collection's own uac.log, when the archive is one."""
     from app.ingest.uac.collection import read_uac_log
@@ -250,6 +288,8 @@ def _inspect_archive_or_folder(path: Path, *, declared_platform: str | None, tmp
 
     detected_platform = detect_evidence_platform(filename=path.name, paths=entry_paths)
     uac_facts = _uac_header(container, entries, tmp_dir / "uac")
+    if not uac_facts and path.is_file() and path.name.lower().endswith((".tar.gz", ".tgz")):
+        uac_facts = _uac_header_from_compressed_tar(path, tmp_dir / "uac")
     if uac_facts.get("operating_system") in _UAC_PLATFORMS:
         # UAC records the operating system it ran on: firsthand, unlike path markers.
         detected_platform = _UAC_PLATFORMS[uac_facts["operating_system"]]

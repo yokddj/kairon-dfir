@@ -56,7 +56,9 @@ def _parse_hosts(
                 "address": ip,
                 "gateway": None,
                 "dns": None,
-                "hostname": canonical,
+                # The name this line maps, not the host the file belongs to: kept out of "hostname"
+                # so it never becomes the event's host (broadcasthost, an internal server...).
+                "mapped_hostname": canonical,
                 "aliases": aliases,
                 "value": rest,
                 "message": f"{ip} {rest}",
