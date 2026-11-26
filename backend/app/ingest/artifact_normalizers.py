@@ -4385,7 +4385,8 @@ MACOS_ROW_FIELDS = (
     "intent_verb", "bluetooth_name", "bluetooth_address", "value", "value_text", "gmt_offset_seconds",
     "tcc_scope", "tcc_service", "tcc_service_label", "tcc_client", "tcc_client_type", "tcc_decision", "tcc_reason",
     "tcc_target", "sensitive_permission",
-    "process", "pid", "package", "package_version", "parse_status", "fact_type",
+    "process", "pid", "package", "package_version", "parse_status", "fact_type", "repeat_count", "last_seen",
+    "severity",
 )
 UAC_ROW_FIELDS = (
     "artifact_family", "artifact_type", "source_file", "line_number", "message", "event_action", "timestamp_status",
@@ -4508,6 +4509,8 @@ def normalize_macos_row(doc: dict, row: dict, *, source_path: str = "", artifact
     elif family == "macos_logs":
         doc["process"]["name"] = row.get("process") or None
         doc["process"]["pid"] = row.get("pid")
+        # The log's own level (launchd.log's <Warning>, <Error>...), as for Linux logs.
+        severity = _log_level_severity(row.get("severity")) or severity
         if row.get("package"):
             doc["package"] = {"name": row["package"], "version": row.get("package_version") or None}
     _attach_host_fact(doc, row, artifact_type, source_path)

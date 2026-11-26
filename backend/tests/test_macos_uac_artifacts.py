@@ -526,3 +526,52 @@ def test_archives_collected_by_uac_are_not_unpacked(uac_root: Path) -> None:
     nested = sorted(path.name for path in uac_root.iterdir() if path.name.startswith("_nested_"))
     assert nested == ["_nested_0_wtmp.1"]
     assert {entry["path"] for entry in result} >= {e["path"] for e in entries[:2]}
+
+
+def test_empty_blocks_are_not_indexed() -> None:
+    from app.core.opensearch import sanitize_document_for_index
+
+    document = {
+        "event_id": "e1", "search_text": "x", "tags": [], "data_quality": [],
+        "event": {"category": None}, "host": {"name": None}, "user": {"name": None}, "artifact": {"type": "t"},
+        "usb": {"vendor": None, "serials": []}, "lnk": {"target": {"path": None}},
+        "linux": {"command": "ls", "pid": None},
+    }
+    indexed = sanitize_document_for_index(document)
+    assert "usb" not in indexed and "lnk" not in indexed
+    # Present blocks stay whole (nulls included); required blocks and lists stay even when empty.
+    assert indexed["linux"] == {"command": "ls", "pid": None}
+    assert {"event", "host", "user", "artifact", "tags", "data_quality"} <= set(indexed)
+    assert "usb" in document  # the caller's document is untouched
+
+
+def test_repeated_log_lines_fold_within_the_hour(tmp_path: Path) -> None:
+    from app.ingest.macos.logs import collapse_repeats
+
+    rows = [
+        {"timestamp": "2026-01-01T10:00:01+00:00", "message": "denied lookup: requestor = app[100]"},
+        {"timestamp": "2026-01-01T10:20:00+00:00", "message": "denied lookup: requestor = app[205]"},
+        {"timestamp": "2026-01-01T10:59:00+00:00", "message": "denied lookup: requestor = other[7]"},
+        {"timestamp": "2026-01-01T11:00:00+00:00", "message": "denied lookup: requestor = app[300]"},
+        {"timestamp": None, "message": "no time"},
+        {"timestamp": None, "message": "no time"},
+    ]
+    folded = collapse_repeats(rows)
+    assert len(folded) == 5
+    assert folded[0]["repeat_count"] == 2 and folded[0]["last_seen"] == "2026-01-01T10:20:00+00:00"
+    assert folded[0]["message"].startswith("denied lookup: requestor = app[100] [repeated 2 times")
+    assert "repeat_count" not in folded[1] and "repeat_count" not in folded[2]
+
+
+def test_launchd_log_is_a_macos_log(tmp_path: Path) -> None:
+    root = tmp_path / "c"
+    _write(root / "uac.log", UAC_LOG)
+    log = _write(root / "[root]/private/var/log/com.apple.xpc.launchd/launchd.log", (
+        "2026-01-05 10:00:01.000001 (system) <Warning>: denied lookup: name = com.example, requestor = a[11]\n"
+        "2026-01-05 10:00:02.000001 (system) <Warning>: denied lookup: name = com.example, requestor = a[12]\n"
+        "2026-01-05 10:00:03.000001 (system) <Notice>: service state: running\n"
+    ))
+    assert looks_like_macos_artifact("[root]/private/var/log/com.apple.xpc.launchd/launchd.log")[1] == "launchd_log"
+    rows = parse_macos_artifact_file(log, parser="macos_logs_raw", artifact_type=None, source_path="[root]/private/var/log/com.apple.xpc.launchd/launchd.log")
+    assert len(rows) == 2 and rows[0]["repeat_count"] == 2
+    assert rows[0]["artifact_family"] == "macos_logs"

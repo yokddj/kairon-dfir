@@ -54,7 +54,15 @@ is counted (`macos_collection_summary.files_not_parsed` in the evidence metadata
 | Local accounts and groups | `/private/var/db/dslocal/nodes/Default/users/*.plist`, `groups/*.plist` | Name, UID, primary GID, home, shell, real name; creation, last password change and last failed login from `accountPolicyData`; group members (who is in `admin`). Password hashes (`ShadowHashData`) are never read. | `macos_accounts` |
 | System version | `/System/Library/CoreServices/SystemVersion.plist` | Product name, version and build, as Host Facts. | `macos_system_info` |
 | install.log | `/private/var/log/install.log` and rotated copies | Every line with its own UTC offset; finished installations (`Installed "Name" (version)`) and package receipts marked. | `macos_logs` |
-| wifi.log | `/private/var/log/wifi.log` and rotated `.bz2` copies | Lines with the year and time zone resolved from the host. | `macos_logs` |
+| wifi.log | `/private/var/log/wifi.log` and rotated `.bz2` copies | Lines with the year and time zone resolved from the host. Repeats folded (below). | `macos_logs` |
+| launchd.log | `/private/var/log/com.apple.xpc.launchd/launchd.log*` | launchd's own log with its levels. Repeats folded (below). | `macos_logs` |
+
+launchd.log and wifi.log are mostly the same few messages repeated thousands of times. Lines that
+differ only in their numbers (PIDs, counters, addresses) within the same hour are folded into the
+first one, which keeps its exact text and time and gains `macos.repeat_count` and
+`macos.last_seen` (and "[repeated N times until HH:MM:SS UTC]" in its message). Every distinct
+message stays; only the repeats' numbers are lost. On a test Mac this took 165,000 launchd lines
+to 56,000 rows and 100,000 wifi lines to 8,700.
 
 ### Unix artifacts at their macOS locations
 
@@ -71,7 +79,7 @@ macos`), and the user of a home-directory file comes from `/Users/<name>`.
 | SSH | `/etc/ssh/sshd_config`, `ssh_config`, `~/.ssh/known_hosts`, `authorized_keys`, `config` | `linux_ssh` |
 | Cron | `/private/var/at/tabs/*`, `/usr/lib/cron/tabs/*`, `/etc/crontab` | `linux_cron` |
 | Hosts and time zone | `/etc/hosts`, `/etc/localtime` | `linux_network`, `linux_timezone` |
-| system.log, launchd.log | `/private/var/log/system.log*`, `/private/var/log/com.apple.xpc.launchd/launchd.log*` | `linux_generic_log` |
+| system.log | `/private/var/log/system.log*` | `linux_generic_log` |
 
 `/etc`, `/var` and `/tmp` are links to `/private/...` on macOS; a file collected under both paths is
 read once.

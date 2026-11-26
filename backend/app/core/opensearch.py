@@ -51,8 +51,9 @@ MACOS_MAPPING_PROPERTIES = {
         "process", "package", "package_version", "parse_status", "fact_type",
     )},
     **{field: _TEXT_KW for field in ("message", "gecos", "command_line", "data_url", "origin_url", "origin_title", "sender_name", "url")},
-    **{field: _DATE for field in ("account_created", "password_last_set", "last_failed_login", "end_time")},
-    **{field: _LONG for field in ("line_number", "failed_login_count", "pid", "value", "gmt_offset_seconds")},
+    **{field: _DATE for field in ("account_created", "password_last_set", "last_failed_login", "end_time", "last_seen")},
+    **{field: _LONG for field in ("line_number", "failed_login_count", "pid", "value", "gmt_offset_seconds", "repeat_count")},
+    "severity": _KW,
     "duration_seconds": {"type": "double", "ignore_malformed": True},
     **{field: {"type": "boolean"} for field in ("hidden", "service_account", "system_account", "run_at_load", "keep_alive", "disabled", "sensitive_permission")},
 }
@@ -2260,8 +2261,39 @@ def sanitize_search_text(value: object, *, max_chars: int = SEARCH_TEXT_MAX_CHAR
     return cleaned, list(dict.fromkeys(flags))
 
 
+# Blocks every indexed event carries, even empty: code reading events back relies on them.
+ALWAYS_INDEXED_BLOCKS = frozenset({"artifact", "event", "host", "observed_host", "user", "os"})
+
+
+def _is_deep_empty(value: object) -> bool:
+    if value in (None, "", [], {}):
+        return True
+    if isinstance(value, dict):
+        return all(_is_deep_empty(item) for item in value.values())
+    if isinstance(value, list):
+        return all(_is_deep_empty(item) for item in value)
+    return False
+
+
+def drop_empty_blocks(document: dict) -> dict:
+    """The document without its top-level blocks that hold nothing (a shallow copy).
+
+    The generic normalizer starts every event from a skeleton of ~60 blocks (lnk, usb, wmi,
+    bits...) filled with nulls, about 18 KB per document whatever the event: a 130-character
+    log line was indexed as 22 KB. Events built compactly (EVTX) never had those blocks, so
+    every reader already copes with their absence. Blocks with any value are kept whole, nulls
+    included, since code reads fields of a present block directly.
+    """
+    return {
+        key: value
+        for key, value in document.items()
+        # Lists (tags, data_quality) stay even when empty: events always carried them.
+        if key in ALWAYS_INDEXED_BLOCKS or not isinstance(value, dict) or not _is_deep_empty(value)
+    }
+
+
 def sanitize_document_for_index(document: dict) -> dict:
-    sanitized = copy.deepcopy(document)
+    sanitized = copy.deepcopy(drop_empty_blocks(document))
     raw_value = sanitized.get("raw")
     if raw_value is not None:
         raw_value = _truncate_large_value(raw_value)
