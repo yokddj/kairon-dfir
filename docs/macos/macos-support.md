@@ -23,7 +23,9 @@ collection simply lacks them.
 Kairon looks for UAC's own `uac.log` beside its output folders (`[root]/`, `live_response/`,
 `bodyfile/`, `hash_executables/`) and reads the header UAC writes there: operating system, host
 name, time zone, architecture, UAC version and profile. The command line is not kept (it holds the
-output path of the machine that ran UAC).
+output path of the machine that ran UAC). The wizard's preflight reads the same header, also from a `.tar.gz`
+(only the first members of the stream, not the whole archive), and shows the platform before the
+upload.
 
 - `Operating system: macos` makes the evidence a macOS collection whatever its file name, and its
   platform macOS (a Mac's `/private/var/log/` looks like Linux's `/var/log/` to path markers).

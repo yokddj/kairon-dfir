@@ -575,3 +575,35 @@ def test_launchd_log_is_a_macos_log(tmp_path: Path) -> None:
     rows = parse_macos_artifact_file(log, parser="macos_logs_raw", artifact_type=None, source_path="[root]/private/var/log/com.apple.xpc.launchd/launchd.log")
     assert len(rows) == 2 and rows[0]["repeat_count"] == 2
     assert rows[0]["artifact_family"] == "macos_logs"
+
+
+def test_etc_hosts_entries_never_become_the_host(tmp_path: Path) -> None:
+    from app.ingest.linux.dispatch import parse_linux_artifact_file
+
+    hosts = _write(tmp_path / "etc/hosts", "127.0.0.1 localhost\n10.0.0.9 build-server.internal build\n")
+    rows = parse_linux_artifact_file(hosts, parser="linux_network_raw", artifact_type="etc_hosts", source_path="etc/hosts")
+    meta = {"artifact_type": "linux_network", "artifact_family": "linux_network", "parser": "linux_network_raw", "source_path": "etc/hosts", "name": "hosts", "detected_host": "real-host"}
+    from app.ingest.normalizer import normalize_row
+
+    document = normalize_row("case", "evidence", "artifact", rows[1], meta)
+    assert rows[1]["mapped_hostname"] == "build-server.internal" and "hostname" not in rows[1]
+    assert document["linux"]["mapped_hostname"] == "build-server.internal"
+    assert str(document["host"]["name"]).lower() == "real-host"
+
+
+def test_preflight_reads_the_uac_header_of_a_tar_gz(uac_root: Path, tmp_path: Path) -> None:
+    import tarfile
+
+    from app.services.evidence_preflight import _inspect_archive_or_folder
+
+    archive = tmp_path / "uac-host-macos-20260110080000.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(uac_root / "uac.log", arcname="uac.log")
+        for item in sorted(uac_root.rglob("*")):
+            if item.name != "uac.log":
+                handle.add(item, arcname=str(item.relative_to(uac_root)), recursive=False)
+    work = tmp_path / "preflight-gz"
+    work.mkdir()
+    result = _inspect_archive_or_folder(archive, declared_platform="auto", tmp_dir=work)
+    assert result["platform"] == "macos"
+    assert result["hostname"] == "test-mac.local"

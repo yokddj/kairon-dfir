@@ -3841,6 +3841,7 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["kernel_version"] = row.get("kernel_version") or linux_data.get("kernel_version") or ""
     linux_data["architecture"] = row.get("architecture") or linux_data.get("architecture") or ""
     linux_data["hostname"] = row.get("hostname") or linux_data.get("hostname") or detected_host or ""
+    linux_data["mapped_hostname"] = row.get("mapped_hostname") or ""
     linux_data["http_method"] = row.get("http_method", "")
     linux_data["url_path"] = row.get("url_path", "")
     # The request target split the way web-server rules (Sigma cs-uri-stem / cs-uri-query) see it:
