@@ -352,6 +352,34 @@ describe("HostInformationPage", () => {
       expect(rows.map((row) => row.dataset.username)).toEqual(["alice", "bob"]);
     });
 
+    it("folds system accounts away until asked, and shows review leads", async () => {
+      const user = userEvent.setup();
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([
+        userEntry({ username: "alice", account_class: "person", review_leads: ["hidden_user_account"] }),
+        userEntry({ username: "_spotlight", account_class: "system", shell_classification: "non_login" }),
+        userEntry({ username: "daemon", account_class: "system", shell_classification: "non_login" }),
+      ]));
+      renderPage();
+      const rows = await screen.findAllByTestId("user-row");
+      expect(rows.map((row) => row.dataset.username)).toEqual(["alice"]);
+      expect(screen.getByTestId("user-review-lead")).toHaveTextContent(/hidden account/i);
+      await user.click(screen.getByTestId("user-system-accounts-toggle"));
+      expect(screen.getAllByTestId("user-row")).toHaveLength(3);
+      expect(screen.getByTestId("user-system-accounts-toggle")).toHaveTextContent("Hide 2 system accounts");
+    });
+
+    it("finds a system account through the filter without unfolding the rest", async () => {
+      const user = userEvent.setup();
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([
+        userEntry({ username: "alice", account_class: "person" }),
+        userEntry({ username: "_www", account_class: "system" }),
+      ]));
+      renderPage();
+      await screen.findAllByTestId("user-row");
+      await user.type(screen.getByTestId("user-filter-input"), "_www");
+      expect(screen.getAllByTestId("user-row").map((row) => row.dataset.username)).toEqual(["_www"]);
+    });
+
     it("shows an unresolved lastlog uid as a synthetic, non-fabricated entry", async () => {
       getCaseHostUsersMock.mockResolvedValue(usersResponse([userEntry({ username: "uid:1234", is_synthetic_username: true })]));
       renderPage();

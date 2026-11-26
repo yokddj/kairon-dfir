@@ -76,6 +76,24 @@ Local Accounts is the local-account inventory: one resolved entry per username (
 | `lastlog` | Linux | last login timestamp, source IP, terminal |
 | `sam_account` | Windows | one account from the SAM hive: RID, account-control flags, full name/comment, last logon, last password set, bad-password count, logon count |
 | `profile_list` | Windows | one `ProfileList` entry from the SOFTWARE hive: SID and cached profile path — **corroborating evidence only**, see below |
+| `dslocal_account` | macOS | one user record from the directory service (`/private/var/db/dslocal/nodes/Default/users/*.plist`): UID, primary GID, home, shell, real name; creation, last password change and failed logins as attributes — never the password hash |
+
+### System accounts and review leads
+
+Every entry carries an `account_class`. An account is `system` when its UID is in its store's
+system range — below where the platform starts giving UIDs to people (macOS from 501, Linux's
+`login.defs` default `UID_MIN` 1000), Linux's overflow range from 60000 (`nobody` is 65534) or
+macOS's negative `nobody`/`nogroup` — **and** its shell cannot start a session (`nologin`,
+`false`...). `root` is never `system`. Anything else is `person`, or `unknown` when there is no
+UID store (Windows) or the shell does not settle it (an old distribution's `daemon` with
+`/bin/sh`). The Users table shows people first and folds system accounts behind **Show N system
+accounts**; the filter searches all of them. A Mac has about 130 accounts, almost all the OS's own
+(`_spotlight`, `_www`...).
+
+`review_leads` flags, for macOS accounts only (its conventions are strict enough), an account in
+the system range or named with a leading underscore that has an interactive shell, and a hidden
+account in the people's range. They are leads for review, never detections. Linux gets none:
+older distributions shipped system accounts with `/bin/sh`, which would flag healthy hosts.
 
 ### Cross-platform field reuse
 

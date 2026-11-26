@@ -2925,6 +2925,12 @@ export type HostUserLastLogin = {
 export type HostUserEntry = {
   username: string;
   is_synthetic_username: boolean;
+  // "system": in its store's system UID range with a shell that cannot start a session (folded
+  // away by default); "person"; "unknown" (no UID store, e.g. Windows). Optional for older payloads.
+  account_class?: "system" | "person" | "unknown";
+  account_class_reason?: string | null;
+  // Leads for review, never detections (macOS dslocal conventions).
+  review_leads?: string[];
   identity: {
     uid: HostUserFieldResolution;
     // "uid" (Linux) | "rid" (Windows) | null -- which local-identifier
