@@ -67,6 +67,17 @@ def _parse_started_at(stamp: str, offset: str) -> str | None:
         return None
 
 
+def collected_by_uac(path: Path) -> bool:
+    """A file UAC copied from the system (under ``[root]/``) or wrote as command output
+    (``live_response/``), as opposed to the files that make up the collection itself."""
+    text = str(path).replace("\\", "/")
+    for marker in (f"/{UAC_ROOT_DIRNAME}/", "/live_response/"):
+        index = text.find(marker)
+        if index > 0 and _is_uac_root(Path(text[:index])):
+            return True
+    return False
+
+
 def read_uac_log(path: Path) -> dict[str, str]:
     """The header facts of one uac.log, keyed by field name. Missing facts are left out."""
     facts: dict[str, str] = {}

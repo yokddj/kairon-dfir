@@ -498,3 +498,31 @@ def test_uac_log_gives_time_zone_and_host_name_facts(uac_root: Path) -> None:
     assert facts == {"host.timezone": "Europe/Madrid", "host.hostname": "test-mac", "host.fqdn": "test-mac.local"}
     stray = _write(uac_root.parent / "notes/uac.log", "not written by UAC\n")
     assert parse_uac_artifact_file(stray, artifact_type=None, source_path="notes/uac.log") == []
+
+
+def test_archives_collected_by_uac_are_not_unpacked(uac_root: Path) -> None:
+    import gzip
+    import zipfile
+
+    from app.ingest.uac.collection import collected_by_uac
+    from app.workers.tasks import _classify_and_dispatch_extracted
+
+    user_zip = uac_root / "[root]/Users/alice/Desktop/photos.zip"
+    with zipfile.ZipFile(user_zip, "w") as handle:
+        handle.writestr("a.txt", "x")
+    strings = uac_root / "live_response/process/strings/bin_ls.txt.gz"
+    strings.write_bytes(gzip.compress(b"strings"))
+    wtmp = uac_root / "[root]/var/log/wtmp.1.gz"
+    wtmp.parent.mkdir(parents=True, exist_ok=True)
+    wtmp.write_bytes(gzip.compress(b"\0" * 384))
+    assert collected_by_uac(user_zip) and collected_by_uac(strings)
+    assert not collected_by_uac(uac_root / "uac.log")
+
+    entries = [
+        {"path": str(path.relative_to(uac_root)), "status": "extracted", "ignored": False, "size": path.stat().st_size}
+        for path in (user_zip, strings, wtmp)
+    ]
+    _files, result, _ = _classify_and_dispatch_extracted(db=None, evidence=None, extract_dir=uac_root, extracted_files=[e["path"] for e in entries], archive_entries=entries)
+    nested = sorted(path.name for path in uac_root.iterdir() if path.name.startswith("_nested_"))
+    assert nested == ["_nested_0_wtmp.1"]
+    assert {entry["path"] for entry in result} >= {e["path"] for e in entries[:2]}

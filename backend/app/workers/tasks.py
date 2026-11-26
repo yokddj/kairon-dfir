@@ -55,7 +55,7 @@ from app.ingest.browser.cache import read_browser_cache
 from app.ingest.browser.sqlite_chromium import parse_chromium_history_sqlite
 from app.ingest.browser.sqlite_firefox import parse_firefox_places_sqlite
 from app.ingest.browser.sqlite_safari import parse_safari_history_sqlite
-from app.ingest.uac.collection import detect_uac_collection
+from app.ingest.uac.collection import collected_by_uac, detect_uac_collection
 from app.ingest.archive import ArchiveExtractionError, archive_truncation, copy_folder, extract_archive, inventory_folder, write_tree_metadata
 from app.ingest.csv_json import list_generic_artifacts
 from app.ingest.bundled_evidence import MAX_DEEP_SCANS_PER_COLLECTION, bundled_evidence, bundled_kind, wants_kernel_scan
@@ -3873,6 +3873,15 @@ def _classify_and_dispatch_extracted(
                 )
                 result_entries.append(entry)
                 result_extracted.append(rel_path)
+
+        elif result.category == EvidenceCategory.ARCHIVE and collected_by_uac(file_path) and not _BINARY_LINUX_NAMES_RE.search(rel_path):
+            # An archive UAC copied off the system (a user's ZIP, a rotated log, an app's packed
+            # database) or one of its own per-binary strings dumps is collected data, not part of
+            # the collection: the parsers read compressed logs as they are, and unpacking hundreds
+            # of these took minutes for nothing. Compressed binary login records (wtmp.1.gz) are
+            # still unpacked for the Linux parsers.
+            result_entries.append(entry)
+            result_extracted.append(rel_path)
 
         elif result.category == EvidenceCategory.ARCHIVE and _is_compressed_linux_log(rel_path):
             # A rotated log compressed on its own (sh.log.1.gz, auth.log.2.xz) is not a container:
