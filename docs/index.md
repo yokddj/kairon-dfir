@@ -190,6 +190,10 @@ Capabilities are labeled `stable`, `partial`, `experimental`, `planned`, `unsupp
 - Investigation Guide (in the app, under Docs; content in [data/investigation-guide.json](data/investigation-guide.json)): what to look for and where (execution, persistence, logons, lateral movement, Linux…), with searches that run on the active case.
 - [Linux Support](linux/linux-support.md): full Linux support — collection formats, auto-discovery, every parsed family (logs, journal, web servers, databases, mail, VPN, containers, Kubernetes, persistence, configuration), Sigma on Linux logs, and limitations.
 
+## macOS
+
+- [macOS Support](macos/macos-support.md): UAC collections of a Mac — how they are recognised, the closed list of parsed artifacts (launchd, quarantine, KnowledgeC, TCC, accounts, logs, shell histories, browsers), UAC live response (also for Linux), where results go, and what is not parsed.
+
 ## Memory
 
 - [Memory Analysis](memory/memory_analysis.md): status, plugins, and profiles of Memory Analysis.

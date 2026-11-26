@@ -29,6 +29,12 @@ Expected, standard capabilities of a serious DFIR platform. Installed by default
 - Linux memory: analysed with Volatility 3 under Memory Analysis (processes, network, open files, kernel modules, suspicious memory, bash history, page-cache files and a Linux Find Evil) once a symbol file for the exact kernel is provided (Volatility 3 ISF or Volatility 2 profile); see `docs/memory/linux_symbols.md`.
 - Linux's depth of coverage is not yet at parity with Windows within several supported artifact families.
 
+### macOS
+
+- Experimental (2026-11): UAC collections only, from a closed list of artifacts — launchd jobs, quarantine events, KnowledgeC, TCC, dslocal accounts and groups, SystemVersion.plist, install.log and wifi.log, the Unix artifacts macOS shares with Linux (shell histories, sudoers, PAM, SSH, cron), browsers including Safari, and UAC live response (also parsed for Linux UAC collections). See `docs/macos/macos-support.md`.
+- Not parsed yet: Unified Logs, FSEvents, ASL, Biome, recent-items lists, UAC's bodyfile; APFS disk images are not supported.
+- Validated on one real collection only (recent macOS on Apple silicon, UAC 3.4.0).
+
 ### Memory Analysis
 
 - **Status**: Stable (2026-10-25). Promoted from Experimental to Preview during the architecture review, and from Preview to Stable by maintainer decision: Memory is part of every Kairon deployment in use, so the Preview exit criteria written for running Kairon without it (a boundary checklist and a "Memory disabled" smoke test) were dropped rather than met.

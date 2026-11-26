@@ -263,7 +263,7 @@ def test_registry_static_architecture_consistency():
             assert capability["platform"] == "memory"
             assert capability["route"].startswith("/cases/:caseId/m")
         else:
-            assert capability["platform"] in {"windows", "linux"}
+            assert capability["platform"] in {"windows", "linux", "macos"}
 
 
 def test_surface_registry_consistency():

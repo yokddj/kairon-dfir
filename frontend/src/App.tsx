@@ -171,6 +171,7 @@ export default function App() {
                         <Route path="/cases/:caseId/l/execution/command-history" element={<CommandHistoryPage />} />
                         <Route path="/cases/:caseId/w/execution/stories" element={<CaseProcessGraphPage />} />
                         <Route path="/cases/:caseId/w/execution/command-history" element={<CommandHistoryPage />} />
+                        <Route path="/cases/:caseId/mac/execution/command-history" element={<CommandHistoryPage />} />
                         <Route path="/cases/:caseId/artifacts" element={<ArtifactExplorer />} />
                         <Route path="/cases/:caseId/tables" element={<SourceTablesPage />} />
                         <Route path="/cases/:caseId/tables/:tableId" element={<SourceTablesPage />} />
@@ -183,6 +184,7 @@ export default function App() {
                         <Route path="/cases/:caseId/reports" element={<CaseReportsPage />} />
                         <Route path="/cases/:caseId/w" element={<WorkbenchOverviewPage workbenchId="windows" />} />
                         <Route path="/cases/:caseId/l" element={<WorkbenchOverviewPage workbenchId="linux" />} />
+                        <Route path="/cases/:caseId/mac" element={<WorkbenchOverviewPage workbenchId="macos" />} />
                         <Route path="/cases/:caseId/m" element={<MemoryCapabilityGate><WorkbenchOverviewPage workbenchId="memory" /></MemoryCapabilityGate>} />
                         <Route path="/cases/:caseId/m/runs" element={<MemoryCapabilityGate><MemoryRunsPage /></MemoryCapabilityGate>} />
                         {/* A single parameterized route -- not one literal <Route> per

@@ -1,4 +1,4 @@
-import { Cpu, HardDrive, Home, Layers, ShieldCheck } from "lucide-react";
+import { Cpu, HardDrive, Home, Laptop, Layers, ShieldCheck } from "lucide-react";
 
 // Single frontend translation point for the semantic icon identifier the
 // backend Surface Registry declares on each workbench
@@ -11,6 +11,7 @@ export const SURFACE_ICONS: Record<string, typeof Home> = {
   "hard-drive": HardDrive,
   "shield-check": ShieldCheck,
   cpu: Cpu,
+  laptop: Laptop,
 };
 
 const FALLBACK_SURFACE_ICON = Layers;

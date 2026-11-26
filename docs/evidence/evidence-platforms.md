@@ -15,7 +15,7 @@ Kairon records three platform fields for evidence uploads:
 | Auto-detect | Default. Uses path and filename markers to infer Windows, Linux, macOS or unknown. |
 | Windows | Supported for current Windows artifact parsers. |
 | Linux | Accepted, but Linux parser coverage is limited. Unsupported artifacts may be preserved without parsed events. |
-| macOS | Planned. The UI shows it as disabled, and direct API selection is rejected with `400`. |
+| macOS (UAC) | Experimental: UAC collections of a Mac, parsed from a closed list of macOS artifacts. With Auto-detect, a UAC collection whose `uac.log` says `macos` is detected as macOS; see [macOS Support](../macos/macos-support.md). |
 | Unknown / Other | Accepted for unclear or non-OS-specific evidence. |
 
 ## Detection Scope
@@ -26,4 +26,6 @@ If the analyst selects a concrete platform, that selection becomes the effective
 
 ## Parser Coverage
 
-Platform selection does not imply full parser coverage. Windows has the broadest support today. Linux support is limited to accepted ingestion and future parser expansion. macOS support is planned but not enabled.
+Platform selection does not imply full parser coverage. Windows has the broadest support today; Linux is covered in [Linux Support](../linux/linux-support.md); macOS is limited to UAC collections and the artifacts listed in [macOS Support](../macos/macos-support.md).
+
+A UAC collection is recognised by its own `uac.log`, and the operating system UAC recorded there (`macos` or `linux`) decides the detected platform, ahead of path markers.

@@ -30,7 +30,7 @@
 
 ## What Kairon DFIR Is
 
-Kairon DFIR is a self-hosted, case-centric digital forensics and incident response platform. It ingests Windows, Linux, disk-image, and memory evidence into a single investigation workspace, normalizes it into a common searchable model, and supports the analyst through Search, Timeline, Artifact Views, detections, findings, and reporting — without replacing analyst judgment.
+Kairon DFIR is a self-hosted, case-centric digital forensics and incident response platform. It ingests Windows, Linux, macOS (UAC collections), disk-image, and memory evidence into a single investigation workspace, normalizes it into a common searchable model, and supports the analyst through Search, Timeline, Artifact Views, detections, findings, and reporting — without replacing analyst judgment.
 
 Kairon DFIR is intended for trusted labs and controlled, self-hosted deployments, not as a hosted SaaS. Evidence can contain highly sensitive data; see [SECURITY.md](SECURITY.md) before exposing any deployment beyond your own machine.
 
@@ -64,6 +64,17 @@ files, kernel modules, suspicious memory, bash history, page-cache files and a
 Linux Find Evil) once a symbol file for the exact kernel is provided.
 See [docs/linux/linux-support.md](docs/linux/linux-support.md) for exact
 coverage and known gaps.
+
+## macOS Support (experimental)
+
+Kairon reads macOS from UAC collections (`uac -p full` or `-p ir_triage`), and
+from them only a fixed list of artifacts: LaunchAgents and LaunchDaemons,
+quarantine events, KnowledgeC, TCC permissions, local accounts and groups,
+install.log, shell histories and the other Unix files macOS shares with Linux,
+browser history including Safari, and UAC's live-response output (processes,
+connections, logins, packages; also parsed for Linux UAC collections). Unified
+Logs, FSEvents and APFS disk images are not supported. See
+[docs/macos/macos-support.md](docs/macos/macos-support.md).
 
 ## Architecture
 

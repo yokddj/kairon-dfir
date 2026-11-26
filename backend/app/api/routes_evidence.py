@@ -217,8 +217,6 @@ def _resolve_requested_platform(value: str | None, *, filename: str | None = Non
         detect_evidence_platform(filename=filename, paths=paths, evidence_type=evidence_type),
         evidence_type=evidence_type,
     )
-    if provided == EvidencePlatform.macos.value:
-        raise HTTPException(status_code=400, detail="macOS artifacts are not supported yet")
     return provided, detected, effective
 
 

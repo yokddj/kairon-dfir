@@ -28,4 +28,16 @@ describe("artifactRegistry", () => {
     expect(linuxShortcuts).toContain("linux_systemd");
     expect(linuxShortcuts).not.toContain("browser");
   });
+
+  it("returns macOS shortcuts: its own families and the Unix ones it shares with Linux", () => {
+    const macosShortcuts = artifactOptionsForPlatforms(["macos"], { shortcutOnly: true });
+
+    expect(macosShortcuts).toContain("macos_launchd");
+    expect(macosShortcuts).toContain("macos_knowledgec");
+    expect(macosShortcuts).toContain("linux_shell_history");
+    expect(macosShortcuts).toContain("uac_live_response");
+    expect(macosShortcuts).not.toContain("linux_journal");
+    expect(artifactEventView("launch_daemon")).toBe("persistence");
+    expect(artifactLabel("macos_tcc")).toBe("TCC privacy permissions");
+  });
 });

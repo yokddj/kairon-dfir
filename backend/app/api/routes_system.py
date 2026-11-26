@@ -101,6 +101,7 @@ DOCS_CATALOG = [
     {"slug": "feature-map", "title": "Feature map", "summary": "Capacidades actuales, estado, rutas, backends, limitaciones y próximos pasos.", "filename": "feature_map.md"},
     {"slug": "parser-coverage", "title": "Parser coverage matrix", "summary": "Cobertura real por familia, formatos, campos normalizados, vistas y limitaciones.", "filename": "artifacts/parser-coverage.md"},
     {"slug": "evidence-platforms", "title": "Evidence platform selection", "summary": "Cómo se guardan provided/detected/effective platform y límites de Windows, Linux, macOS y Other.", "filename": "evidence/evidence-platforms.md"},
+    {"slug": "macos-support", "title": "macOS support", "summary": "Colecciones UAC de macOS: detección, lista cerrada de artefactos parseados, live response de UAC y límites.", "filename": "macos/macos-support.md"},
     {"slug": "linux-support", "title": "Linux support", "summary": "Colecciones Linux aceptadas, auto-discovery, inventario, cobertura, parsers y límites actuales.", "filename": "linux/linux-support.md"},
     {"slug": "disk-image-ingestion", "title": "Disk image ingestion", "summary": "Soporte actual de RAW/EWF, volúmenes, OS detection, read-only y trazabilidad.", "filename": "evidence/disk-image-ingestion.md"},
     {"slug": "unified-evidence-ingestion", "title": "Unified evidence ingestion", "summary": "Wizard guiado de 7 pasos (con Server Health Check) para añadir evidencia sin conocer el pipeline interno, con una sola subida de red.", "filename": "evidence/unified-evidence-ingestion.md"},

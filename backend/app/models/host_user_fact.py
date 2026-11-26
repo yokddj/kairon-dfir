@@ -24,10 +24,12 @@ from app.core.database import Base, JSONVariant, TimestampMixin, UUIDMixin
 # analogue (RID, SID, account flags, logon/bad-password counters) live in
 # ``attributes`` instead of new dedicated columns -- the same way
 # HostFact.provenance holds producer-specific extras without widening
-# HostFact's own schema.
+# HostFact's own schema. "dslocal_account" (macOS directory-service user
+# record, see app.ingest.macos.host_user_facts) is an account store of the
+# same standing as passwd and the SAM.
 HOST_USER_FACT_SOURCE_KINDS = (
     "passwd", "shadow", "lastlog", "group_membership", "group_definition", "sudoers_rule",
-    "sam_account", "profile_list",
+    "sam_account", "profile_list", "dslocal_account",
 )
 
 

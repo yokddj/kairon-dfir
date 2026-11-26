@@ -348,13 +348,13 @@ def resolve_host_users(
         query = query.filter(HostUserFact.evidence_id == evidence_id)
     rows = query.order_by(HostUserFact.created_at).all()
 
-    # "passwd" (Linux) and "sam_account" (Windows) are both direct,
+    # "passwd" (Linux), "sam_account" (Windows) and "dslocal_account" (macOS) are all direct,
     # authoritative account-store records that resolve through the exact
     # same identity fields -- this is the only place they're merged, and
     # only because both genuinely answer "what does this account's own
     # store say about it", the same way EVTX/Registry/Memory Host Facts
     # observations merge under one fact_type.
-    identity_rows = [r for r in rows if r.source_kind in ("passwd", "sam_account")]
+    identity_rows = [r for r in rows if r.source_kind in ("passwd", "sam_account", "dslocal_account")]
     shadow_rows = [r for r in rows if r.source_kind == "shadow"]
     status_rows = [r for r in rows if r.account_status]
     membership_rows = [r for r in rows if r.source_kind == "group_membership"]
