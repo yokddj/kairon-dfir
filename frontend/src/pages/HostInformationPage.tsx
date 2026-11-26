@@ -410,6 +410,16 @@ function UserRow({
                 sudo
               </span>
             ) : null}
+            {(entry.review_leads ?? []).map((lead) => (
+              <span
+                key={lead}
+                className="rounded-full border border-amber/40 bg-amber/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-amber"
+                title={REVIEW_LEAD_TITLE[lead] ?? lead}
+                data-testid="user-review-lead"
+              >
+                {REVIEW_LEAD_LABEL[lead] ?? lead.replaceAll("_", " ")}
+              </span>
+            ))}
           </div>
         </td>
         <td className="px-4 py-3 text-xs text-muted" data-testid="user-last-login">
@@ -494,8 +504,18 @@ function UserRow({
   );
 }
 
+const REVIEW_LEAD_LABEL: Record<string, string> = {
+  system_account_with_login_shell: "system account, login shell",
+  hidden_user_account: "hidden account",
+};
+const REVIEW_LEAD_TITLE: Record<string, string> = {
+  system_account_with_login_shell: "A lead for review: macOS system accounts (UID below 500 or a leading underscore) normally cannot start a session, this one has an interactive shell.",
+  hidden_user_account: "A lead for review: an account in the people's UID range marked hidden from the login window.",
+};
+
 function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostId: string; users: HostUserEntry[] }) {
   const [filterText, setFilterText] = useState("");
+  const [showSystemAccounts, setShowSystemAccounts] = useState(false);
   const [sortKey, setSortKey] = useState<UserSortKey>("username");
   const [sortDirection, setSortDirection] = useState<UserSortDirection>("asc");
   const [expandedUsernames, setExpandedUsernames] = useState<Set<string>>(new Set());
@@ -539,6 +559,11 @@ function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostI
     });
     return sorted;
   }, [users, filterText, sortKey, sortDirection]);
+  // System accounts (the OS's own, unable to log in) are folded away unless asked for or matched
+  // by the filter: on a Mac they are ~130 of ~133 entries and hide the accounts that matter.
+  const systemCount = filtered.filter((entry) => entry.account_class === "system").length;
+  const filtering = filterText.trim().length > 0;
+  const visible = showSystemAccounts || filtering ? filtered : filtered.filter((entry) => entry.account_class !== "system");
 
   const sortButton = (key: UserSortKey, label: string) => (
     <button type="button" onClick={() => toggleSort(key)} className="flex items-center gap-1 hover:text-ink" data-testid={`user-sort-${key}`}>
@@ -573,7 +598,7 @@ function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostI
       </div>
       {users.length === 0 ? (
         <p className="mt-4 text-sm text-muted" data-testid="user-inventory-empty">
-          No local accounts have been identified for this host yet. This is a gap in what was collected, not a finding: the inventory appears once evidence carrying a supported source (a Windows SAM hive, or Linux passwd/shadow) has been processed and assigned to this host. Use &ldquo;Complete host information&rdquo; above to check whether that evidence is present but not yet derived.
+          No local accounts have been identified for this host yet. This is a gap in what was collected, not a finding: the inventory appears once evidence carrying a supported source (a Windows SAM hive, Linux passwd/shadow, or macOS dslocal accounts) has been processed and assigned to this host. Use &ldquo;Complete host information&rdquo; above to check whether that evidence is present but not yet derived.
         </p>
       ) : (
         <div className="mt-4 overflow-x-auto">
@@ -591,7 +616,7 @@ function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostI
               </tr>
             </thead>
             <tbody className="divide-y divide-line/70">
-              {filtered.map((entry) => (
+              {visible.map((entry) => (
                 <UserRow
                   key={entry.username}
                   caseId={caseId}
@@ -606,6 +631,17 @@ function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostI
               ))}
             </tbody>
           </table>
+          {systemCount > 0 && !filtering ? (
+            <button
+              type="button"
+              onClick={() => setShowSystemAccounts((value) => !value)}
+              className="mt-3 rounded-xl border border-line px-3 py-1.5 text-xs text-muted hover:text-ink"
+              data-testid="user-system-accounts-toggle"
+              title="Accounts in the system UID range whose shell cannot start a session"
+            >
+              {showSystemAccounts ? `Hide ${systemCount} system accounts` : `Show ${systemCount} system accounts`}
+            </button>
+          ) : null}
           {filtered.length === 0 ? (
             <p className="px-4 py-6 text-sm text-muted" data-testid="user-filter-empty">
               No users match &ldquo;{filterText}&rdquo;.

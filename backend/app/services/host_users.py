@@ -278,6 +278,47 @@ def _effective_sudo(username: str, *, group_names: set[str], sudoers_rows: list[
     }
 
 
+# Where each account store starts giving UIDs to people (the platforms' own conventions: macOS
+# from 501, Linux's login.defs UID_MIN default 1000), and where Linux's overflow/"nobody" range
+# begins (login.defs UID_MAX default 60000; nobody is 65534).
+_FIRST_PERSON_UID = {"dslocal_account": 500, "passwd": 1000}
+_LINUX_OVERFLOW_UID = 60000
+
+
+def classify_account(*, username: str, uid: str | None, shell_classification: str, source_kinds: set[str], hidden: bool = False) -> dict:
+    """Whether an account belongs to a person or to the system, and what about it deserves a look.
+
+    A system account is one in the store's system UID range (below where people start, plus
+    Linux's overflow range and macOS's negative nobody/nogroup) whose shell cannot start a
+    session. root (UID 0) is never folded away. The class only decides what the inventory shows
+    first; every account stays listed.
+
+    Review leads -- never detections -- for macOS's directory service, whose conventions are
+    strict: an account in the system range or named with a leading underscore that has an
+    interactive shell, and a hidden account in the people's range. Linux gets none: older
+    distributions shipped system accounts with /bin/sh, which would flag healthy hosts.
+    """
+    store = "dslocal_account" if "dslocal_account" in source_kinds else ("passwd" if "passwd" in source_kinds else None)
+    try:
+        number = int(str(uid).strip()) if uid not in (None, "") else None
+    except ValueError:
+        number = None
+    if store is None or number is None:
+        return {"account_class": "unknown", "account_class_reason": None, "review_leads": []}
+    first_person = _FIRST_PERSON_UID[store]
+    in_system_range = number != 0 and (number < first_person or (store == "passwd" and number >= _LINUX_OVERFLOW_UID))
+    leads: list[str] = []
+    if store == "dslocal_account" and number != 0:
+        if (in_system_range or username.startswith("_")) and shell_classification == "login":
+            leads.append("system_account_with_login_shell")
+        if hidden and not in_system_range:
+            leads.append("hidden_user_account")
+    if in_system_range and shell_classification == "non_login":
+        reason = f"UID {number} is in the system range of this account store and its shell cannot start a session"
+        return {"account_class": "system", "account_class_reason": reason, "review_leads": leads}
+    return {"account_class": "person" if not in_system_range else "unknown", "account_class_reason": None, "review_leads": leads}
+
+
 def _resolve_user_entry(
     username: str, *, is_synthetic: bool,
     identity_rows: list[HostUserFact], home_rows: list[HostUserFact], status_rows: list[HostUserFact],
@@ -293,7 +334,17 @@ def _resolve_user_entry(
     group_names = {group["group_name"] for group in secondary_groups if group.get("group_name")}
     if primary_group_name:
         group_names.add(primary_group_name)
+    shell_classification = classify_shell(identity["shell"]["preferred_value"])
+    hidden_values = [str((row.attributes or {}).get("hidden")).lower() for row in identity_rows]
+    account_class = classify_account(
+        username=username,
+        uid=identity["uid"]["preferred_value"],
+        shell_classification=shell_classification,
+        source_kinds={row.source_kind for row in identity_rows},
+        hidden="true" in hidden_values,
+    )
     return {
+        **account_class,
         "username": username,
         "is_synthetic_username": is_synthetic,
         "identity": identity,

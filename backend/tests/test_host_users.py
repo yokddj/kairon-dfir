@@ -450,3 +450,50 @@ class TestApi:
         body = response.json()
         assert body["scope"] == "host"
         assert [item["label"] for item in body["profiles"]] == ["mshunter"]
+
+
+# -- system accounts --------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+from app.services.host_users import classify_account  # noqa: E402
+
+
+@pytest.mark.parametrize(("store", "username", "uid", "shell", "expected"), [
+    ("passwd", "www-data", "33", "non_login", "system"),
+    ("passwd", "nobody", "65534", "non_login", "system"),
+    ("passwd", "alice", "1000", "login", "person"),
+    ("passwd", "root", "0", "login", "person"),
+    # An old distribution's daemon with /bin/sh: not folded away, not flagged either.
+    ("passwd", "daemon", "1", "login", "unknown"),
+    ("dslocal_account", "_spotlight", "89", "non_login", "system"),
+    ("dslocal_account", "nobody", "-2", "non_login", "system"),
+    ("dslocal_account", "alice", "501", "login", "person"),
+    ("sam_account", "Administrator", "500", "unknown", "unknown"),
+])
+def test_account_class(store, username, uid, shell, expected) -> None:
+    assert classify_account(username=username, uid=uid, shell_classification=shell, source_kinds={store})["account_class"] == expected
+
+
+def test_macos_review_leads() -> None:
+    lead = classify_account(username="_backdoor", uid="510", shell_classification="login", source_kinds={"dslocal_account"})
+    assert lead["review_leads"] == ["system_account_with_login_shell"]
+    hidden = classify_account(username="svc", uid="502", shell_classification="login", source_kinds={"dslocal_account"}, hidden=True)
+    assert hidden["review_leads"] == ["hidden_user_account"]
+    root = classify_account(username="root", uid="0", shell_classification="login", source_kinds={"dslocal_account"})
+    assert root["review_leads"] == [] and root["account_class"] == "person"
+    # Linux gets no leads, whatever the shell.
+    assert classify_account(username="daemon", uid="1", shell_classification="login", source_kinds={"passwd"})["review_leads"] == []
+
+
+def test_resolved_entries_carry_the_class() -> None:
+    db = _db()
+    _case(db)
+    _evidence(db)
+    passwd = "root:x:0:0:root:/root:/bin/bash\nwww-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\nalice:x:1000:1000:Alice:/home/alice:/bin/bash\n"
+    rows = parse_identity(passwd, source_path="etc/passwd")
+    meta = {"artifact_type": "linux_identity", "artifact_family": "linux_identity", "parser": "linux_identity_raw", "source_path": "etc/passwd", "name": "passwd"}
+    documents = [normalize_row(CASE_ID, EVIDENCE_ID, ART1_ID, row, meta) for row in rows]
+    create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None, documents=extract_host_user_documents(documents))
+    classes = {entry["username"]: entry["account_class"] for entry in resolve_host_users(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID)}
+    assert classes == {"root": "person", "www-data": "system", "alice": "person"}
