@@ -293,10 +293,10 @@ def classify_account(*, username: str, uid: str | None, shell_classification: st
     session. root (UID 0) is never folded away. The class only decides what the inventory shows
     first; every account stays listed.
 
-    Review leads -- never detections -- for macOS's directory service, whose conventions are
-    strict: an account in the system range or named with a leading underscore that has an
-    interactive shell, and a hidden account in the people's range. Linux gets none: older
-    distributions shipped system accounts with /bin/sh, which would flag healthy hosts.
+    One review lead -- never a detection -- for macOS's directory service: a hidden account in the
+    people's range. A system account with an interactive shell is not flagged on either platform:
+    macOS ships _mbsetupuser with /bin/bash and older Linux distributions shipped daemon accounts
+    with /bin/sh, so it would flag healthy hosts.
     """
     store = "dslocal_account" if "dslocal_account" in source_kinds else ("passwd" if "passwd" in source_kinds else None)
     try:
@@ -308,11 +308,8 @@ def classify_account(*, username: str, uid: str | None, shell_classification: st
     first_person = _FIRST_PERSON_UID[store]
     in_system_range = number != 0 and (number < first_person or (store == "passwd" and number >= _LINUX_OVERFLOW_UID))
     leads: list[str] = []
-    if store == "dslocal_account" and number != 0:
-        if (in_system_range or username.startswith("_")) and shell_classification == "login":
-            leads.append("system_account_with_login_shell")
-        if hidden and not in_system_range:
-            leads.append("hidden_user_account")
+    if store == "dslocal_account" and number != 0 and hidden and not in_system_range:
+        leads.append("hidden_user_account")
     if in_system_range and shell_classification == "non_login":
         reason = f"UID {number} is in the system range of this account store and its shell cannot start a session"
         return {"account_class": "system", "account_class_reason": reason, "review_leads": leads}

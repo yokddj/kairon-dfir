@@ -476,8 +476,9 @@ def test_account_class(store, username, uid, shell, expected) -> None:
 
 
 def test_macos_review_leads() -> None:
-    lead = classify_account(username="_backdoor", uid="510", shell_classification="login", source_kinds={"dslocal_account"})
-    assert lead["review_leads"] == ["system_account_with_login_shell"]
+    # Apple's own setup account ships with /bin/bash on every Mac: never a lead.
+    setup = classify_account(username="_mbsetupuser", uid="248", shell_classification="login", source_kinds={"dslocal_account"})
+    assert setup["review_leads"] == [] and setup["account_class"] == "unknown"
     hidden = classify_account(username="svc", uid="502", shell_classification="login", source_kinds={"dslocal_account"}, hidden=True)
     assert hidden["review_leads"] == ["hidden_user_account"]
     root = classify_account(username="root", uid="0", shell_classification="login", source_kinds={"dslocal_account"})
