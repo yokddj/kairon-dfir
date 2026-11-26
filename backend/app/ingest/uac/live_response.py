@@ -54,9 +54,15 @@ _ARCHITECTURES = {"x86_64", "amd64", "arm64", "aarch64", "i386", "i686", "armv7l
 _MAX_LINES = 200_000
 
 
+_UAC_LOG_RE = re.compile(r"(?:^|/)uac\.log$")
+
+
 def looks_like_uac_output(path: str | Path) -> tuple[str, str, str] | None:
     """(family, artifact_type, parser) for a UAC live-response output this module parses."""
     normalized = str(path).replace("\\", "/")
+    if _UAC_LOG_RE.search(normalized) and "[root]/" not in normalized:
+        # UAC's own log: the host name and time zone it recorded become Host Facts.
+        return (ARTIFACT_FAMILY, "collection_log", PARSER)
     match = _LIVE_RESPONSE_RE.search(normalized)
     if not match or _IGNORED_RE.search(normalized):
         return None
@@ -533,7 +539,34 @@ def _parse_sw_vers(path: Path, source_path: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _parse_uac_log(path: Path, source_path: str) -> list[dict[str, Any]]:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    from app.ingest.uac.collection import read_uac_log
+
+    facts = read_uac_log(path)
+    if not facts.get("version"):
+        return []  # not written by UAC
+    rows = []
+    zone = facts.get("timezone")
+    if zone:
+        try:
+            ZoneInfo(zone)
+            rows.append(_fact_row(path, source_path, "collection_log", "host.timezone", zone, zone, "high", 1))
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
+    hostname = facts.get("hostname")
+    if hostname:
+        rows.append(_fact_row(path, source_path, "collection_log", "host.hostname", hostname, hostname.split(".", 1)[0], "high", 1))
+        if "." in hostname:
+            rows.append(_fact_row(path, source_path, "collection_log", "host.fqdn", hostname, hostname, "high", 1))
+    for row in rows:
+        row["collection_os"] = facts.get("operating_system")
+    return rows
+
+
 _PARSERS = {
+    "collection_log": _parse_uac_log,
     "process_list": _parse_process_list,
     "network_connections": _parse_netstat,
     "open_network_files": _parse_lsof_network,

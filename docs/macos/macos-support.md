@@ -99,6 +99,7 @@ find-based listings under `system/`, is kept in the evidence as *detected, not p
 | `packages/softwareupdate_--history*.txt` | macOS updates installed, with their date. |
 | `packages/brew_list_*.txt`, `pkgutil_--packages.txt` | Installed Homebrew formulae and casks, installer packages. |
 | `system/uname_-a.txt`, `system/sw_vers.txt` | Kernel, architecture, product name and version, as Host Facts. |
+| `uac.log` (UAC's own) | Host name, FQDN and time zone UAC recorded, as Host Facts (`/etc/localtime` is a link in UAC's tar, which is not followed). |
 
 All of it is a snapshot of the moment UAC ran. Connections, loaded jobs and installed packages are
 timed by the start of the collection (`timestamp_status: collection_time`) and stay off the
@@ -138,6 +139,7 @@ Flags are leads for an analyst, never detections:
 - LaunchAgents and LaunchDaemons under `/System/Library` and `/Library/Apple`: Apple's own, on the
   sealed system volume, not listed.
 - Disk images of a Mac (APFS) and collections from tools other than UAC.
+- Group membership (who is in `admin`) needs `/private/var/db/dslocal/nodes/Default/groups/`; UAC 3.4.0's `full` profile did not collect it on the collection tested, so the host's users may show no groups.
 
 ## Validation
 

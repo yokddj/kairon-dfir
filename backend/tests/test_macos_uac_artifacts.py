@@ -210,6 +210,7 @@ def test_macos_collection_reads_only_the_artifact_list(uac_root: Path) -> None:
     assert parsers["[root]/Users/alice/.zsh_history"] == "linux_shell_raw"
     assert parsers["[root]/private/etc/sudoers"] == "linux_sudoers_raw"
     assert parsers["live_response/process/ps_-eo_user_pid_ppid_pcpu_pmem_tty_stat_lstart_args.txt"] == "uac_live_response_raw"
+    assert parsers["uac.log"] == "uac_live_response_raw"
     # The sealed system volume, other tools' files and UAC outputs that are not parsed stay out.
     for absent in (
         "[root]/System/Library/LaunchDaemons/com.apple.sealed.plist",
@@ -218,7 +219,6 @@ def test_macos_collection_reads_only_the_artifact_list(uac_root: Path) -> None:
         "[root]/opt/homebrew/var/log/nginx/error.log",
         "live_response/system/df.txt",
         "bodyfile/bodyfile.txt",
-        "uac.log",
     ):
         assert absent not in by_path
     assert not any("process/strings" in path for path in by_path)
@@ -491,3 +491,10 @@ def test_macos_workbench_is_registered() -> None:
     routes = {item["id"]: item["route"] for item in CAPABILITY_REGISTRY if item["platform"] == "macos"}
     assert routes["macos.execution.command_history"] == "/cases/:caseId/mac/execution/command-history"
     assert routes["macos.persistence.launchd"] == "/cases/:caseId/artifacts?artifact_type=macos_launchd"
+
+
+def test_uac_log_gives_time_zone_and_host_name_facts(uac_root: Path) -> None:
+    facts = {row["fact_type"]: row["normalized_value"] for row in _rows(uac_root, "uac.log")}
+    assert facts == {"host.timezone": "Europe/Madrid", "host.hostname": "test-mac", "host.fqdn": "test-mac.local"}
+    stray = _write(uac_root.parent / "notes/uac.log", "not written by UAC\n")
+    assert parse_uac_artifact_file(stray, artifact_type=None, source_path="notes/uac.log") == []

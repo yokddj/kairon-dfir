@@ -3947,8 +3947,11 @@ def _classify_and_dispatch_extracted(
                     rel_path,
                     exc,
                 )
-                # Kept on the entry so the evidence says so: nothing inside this archive was read.
-                entry = {**entry, "nested_extraction_error": str(getattr(exc, "message", None) or exc)[:500]}
+                if len(archive_entries) == 1:
+                    # The archive was all there was at this level (a tar inside a tar.gz): nothing of
+                    # the evidence was read, and the evidence says so. A damaged archive among the
+                    # files a collection copied is not a problem of the evidence and is only logged.
+                    entry = {**entry, "nested_extraction_error": str(getattr(exc, "message", None) or exc)[:500]}
                 result_entries.append(entry)
                 result_extracted.append(rel_path)
 
