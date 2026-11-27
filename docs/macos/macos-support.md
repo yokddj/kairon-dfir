@@ -66,6 +66,24 @@ first one, which keeps its exact text and time and gains `macos.repeat_count` an
 message stays; only the repeats' numbers are lost. On a test Mac this took 165,000 launchd lines
 to 56,000 rows and 100,000 wifi lines to 8,700.
 
+### FSEvents (searched on demand)
+
+Each volume's change journal (`/.fseventsd`, `/System/Volumes/Data/.fseventsd`): files and folders
+created, removed, renamed or modified, including files that no longer exist. A Mac holds millions
+of records (17 million on the test Mac), so they are **not indexed**: the macOS workbench's
+**File System Events (FSEvents)** page searches them on demand by path text, change kind and item
+type, newest first (about 6-11 seconds over 17 million records). The evidence lists one
+`macos_fsevents` artifact per journal, as detected, not parsed.
+
+- Pages of versions 1, 2 and 3 (`1SLD`, `2SLD`, `3SLD`) are read.
+- Records have no time of their own. They are ordered by event id; the **page written** time is
+  the modification time of the page file, the latest moment the change can have happened.
+- Flags: the item-type bits were checked on a real Mac (every directory record had 0x01000000,
+  every file record 0x00800000); the change bits follow the on-disk order documented by
+  FSEventsParser. A bit outside that list is shown by its hex value, never named.
+- API: `GET /api/cases/{case}/evidences/{evidence}/macos/fsevents?path_contains=...&changes=removed&item_type=file`
+  and `.../macos/fsevents/summary`.
+
 ### Unix artifacts at their macOS locations
 
 These share their format with Linux and are read by the Linux parsers, so they appear in the same
@@ -120,7 +138,8 @@ Timeline; process start times and logins are real events and appear on it.
 - **Search and Timeline**, filterable by family (`macos_launchd`, `macos_knowledgec`...) and by
   `macos.*` / `uac.*` fields.
 - **macOS workbench** (`/cases/<id>/mac`): Command History, App & Device Usage (KnowledgeC),
-  LaunchAgents & LaunchDaemons, Downloads (Quarantine), Privacy Permissions (TCC), Live Response.
+  LaunchAgents & LaunchDaemons, Downloads (Quarantine), Privacy Permissions (TCC), File System
+  Events (FSEvents, searched on demand), Live Response.
 - **Host Information**: product name and version, kernel, architecture and time zone as Host Facts;
   local accounts from dslocal, with group membership (including `admin`), in the host's users.
 - **Sigma**: Linux rules run on the shared Unix families as they do on Linux. There are no macOS
@@ -142,8 +161,7 @@ Flags are leads for an analyst, never detections:
 
 ## Not parsed
 
-- **Unified Logs** (`/private/var/db/diagnostics/*.tracev3` with `uuidtext`), **FSEvents**
-  (`.fseventsd`), **ASL** binary logs, **Biome** and **SEGB** streams, `.sfl2/.sfl3/.sfl4`
+- **Unified Logs** (`/private/var/db/diagnostics/*.tracev3` with `uuidtext`), **ASL** binary logs, **Biome** and **SEGB** streams, `.sfl2/.sfl3/.sfl4`
   recent-items lists, Spotlight, Keychains, Mail and Messages: kept in the evidence, not read.
 - **UAC's bodyfile** (`bodyfile/bodyfile.txt`) and hash lists: kept, not indexed.
 - LaunchAgents and LaunchDaemons under `/System/Library` and `/Library/Apple`: Apple's own, on the

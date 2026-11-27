@@ -31,6 +31,7 @@ const HostInformationPage = lazy(() => import("./pages/HostInformationPage"));
 const LateralMovementPage = lazy(() => import("./pages/LateralMovementPage"));
 const CaseProcessGraphPage = lazy(() => import("./pages/CaseProcessGraphPage"));
 const CommandHistoryPage = lazy(() => import("./pages/CommandHistoryPage"));
+const FseventsPage = lazy(() => import("./pages/FseventsPage"));
 const LinuxAuthenticationPage = lazy(() => import("./pages/LinuxAuthenticationPage"));
 const DiskFilesPage = lazy(() => import("./pages/DiskFilesPage"));
 const CaseFilesPage = lazy(() => import("./pages/CaseFilesPage"));
@@ -172,6 +173,7 @@ export default function App() {
                         <Route path="/cases/:caseId/w/execution/stories" element={<CaseProcessGraphPage />} />
                         <Route path="/cases/:caseId/w/execution/command-history" element={<CommandHistoryPage />} />
                         <Route path="/cases/:caseId/mac/execution/command-history" element={<CommandHistoryPage />} />
+                        <Route path="/cases/:caseId/mac/filesystem/fsevents" element={<FseventsPage />} />
                         <Route path="/cases/:caseId/artifacts" element={<ArtifactExplorer />} />
                         <Route path="/cases/:caseId/tables" element={<SourceTablesPage />} />
                         <Route path="/cases/:caseId/tables/:tableId" element={<SourceTablesPage />} />

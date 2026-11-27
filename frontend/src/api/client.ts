@@ -101,7 +101,35 @@ export type EvidencePlatform = "auto" | "windows" | "linux" | "macos" | "bsd" | 
 
 export type CaseCapabilityPlatform = "windows" | "linux" | "macos" | "unknown" | string;
 export type CaseCapabilityEvidenceDomain = "filesystem" | "memory" | string;
-export type CaseCapabilityReadiness = "not_applicable" | "not_collected" | "empty" | "has_data" | "degraded" | string;
+export type CaseCapabilityReadiness = "not_applicable" | "not_collected" | "empty" | "has_data" | "degraded" | "on_demand" | string;
+
+export type FseventsRecord = {
+  path: string;
+  event_id: number;
+  flags: string;
+  changes: string[];
+  item_type: "file" | "folder" | null;
+  unknown_flags: string[];
+  node_id: number | null;
+  page_file: string;
+  page_written: string | null;
+  version: number;
+  volume: string;
+};
+
+export type FseventsSearchResponse = {
+  evidence_id: string;
+  path_contains: string;
+  changes: string[];
+  item_type: string | null;
+  records: FseventsRecord[];
+  total_matches: number;
+  truncated: boolean;
+  records_scanned_in_matching_pages: number;
+  elapsed_seconds: number;
+};
+
+export type FseventsSummary = { evidence_id: string; available: boolean; volumes: { volume: string; page_files: number }[] };
 
 export type CaseCapability = {
   id: string;
@@ -6448,6 +6476,14 @@ export const api = {
       }>;
       warnings: string[];
     }>(`/cases/${caseId}/host-information/rebuild`, { method: "POST" }),
+  getFseventsSummary: (caseId: string, evidenceId: string) => request<FseventsSummary>(`/cases/${caseId}/evidences/${evidenceId}/macos/fsevents/summary`),
+  searchFsevents: (caseId: string, evidenceId: string, params: { path_contains: string; changes?: string[]; item_type?: string; limit?: number }) => {
+    const query = new URLSearchParams({ path_contains: params.path_contains });
+    for (const change of params.changes ?? []) query.append("changes", change);
+    if (params.item_type) query.set("item_type", params.item_type);
+    if (params.limit) query.set("limit", String(params.limit));
+    return request<FseventsSearchResponse>(`/cases/${caseId}/evidences/${evidenceId}/macos/fsevents?${query.toString()}`);
+  },
   getCaseHostUsers: (caseId: string, params: { host_id?: string; evidence_id?: string }) => {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {

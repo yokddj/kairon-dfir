@@ -165,6 +165,21 @@ def list_macos_artifacts(root: Path) -> tuple[list[dict[str, Any]], dict[str, in
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames.sort()
         current = Path(dirpath)
+        if current.name == ".fseventsd" and "[root]" in str(current):
+            # FSEvents: millions of records, searched on demand, never indexed. One artifact row
+            # stands for the volume's journal so the evidence shows it was collected.
+            dirnames[:] = []
+            marker = next((current / name for name in ("fseventsd-uuid", *sorted(filenames)) if (current / name).is_file()), None)
+            if marker is not None:
+                artifacts.append(_artifact_entry(marker, root, {
+                    "artifact_type": "macos_fsevents",
+                    "artifact_family": "macos_fsevents",
+                    "parser": "not_implemented",
+                    "profile": "macos_activity",
+                    "status": "detected_not_parsed",
+                    "reason": "FSEvents journal: searched on demand from the macOS workbench, not indexed.",
+                }))
+            continue
         for filename in sorted(filenames):
             path = current / filename
             if path.is_symlink() or not path.is_file():
