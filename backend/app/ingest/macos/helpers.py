@@ -126,11 +126,11 @@ def _dedupe_key(source_path: str) -> str:
 
 def _artifact_entry(path: Path, root: Path, classification: dict[str, Any]) -> dict[str, Any]:
     return {
-        "name": path.name,
         "source_path": str(path.relative_to(root)),
         "path": path,
         "os_type": MACOS_OS_TYPE,
         **classification,
+        "name": classification.get("name") or path.name,
     }
 
 
@@ -169,6 +169,22 @@ def list_macos_artifacts(root: Path) -> tuple[list[dict[str, Any]], dict[str, in
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames.sort()
         current = Path(dirpath)
+        if current.name in {"diagnostics", "uuidtext"} and current.parent.name == "db" and "[root]" in str(current):
+            # Unified Logs: thousands of tracev3/uuidtext files read together by one parser run.
+            dirnames[:] = []
+            if current.name == "diagnostics" and (current.parent / "uuidtext").is_dir():
+                marker = next((path for path in sorted(current.rglob("*.tracev3")) if path.is_file()), None)
+                if marker is not None:
+                    artifacts.append(_artifact_entry(marker, root, {
+                        "artifact_type": "macos_unified_logs",
+                        "artifact_family": "macos_unified_logs",
+                        "macos_artifact_type": "unified_logs",
+                        "parser": "macos_unified_logs_raw",
+                        "profile": "macos_activity",
+                        "name": "Unified Logs",
+                        "reason": "macOS Unified Logs (diagnostics + uuidtext), decoded by unifiedlog_iterator.",
+                    }))
+            continue
         if current.name == ".fseventsd" and "[root]" in str(current):
             # FSEvents: millions of records, searched on demand, never indexed. One artifact row
             # stands for the volume's journal so the evidence shows it was collected.

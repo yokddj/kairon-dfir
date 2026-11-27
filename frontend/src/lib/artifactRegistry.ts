@@ -83,6 +83,7 @@ const ARTIFACT_REGISTRY: UiArtifactDefinition[] = [
   { id: "macos_tcc", label: "TCC privacy permissions", platforms: ["macos"], view: "auto", platformShortcut: true },
   { id: "macos_logs", label: "install.log & wifi.log", platforms: ["macos"], view: "auto", platformShortcut: true },
   { id: "macos_accounts", label: "Local accounts (dslocal)", platforms: ["macos"], view: "auto", platformShortcut: true },
+  { id: "macos_unified_logs", label: "Unified Logs", platforms: ["macos"], view: "auto", platformShortcut: true },
   { id: "macos_recent_items", label: "Recent items & favourites", platforms: ["macos"], view: "auto", platformShortcut: true },
   { id: "macos_fsevents", label: "FSEvents (searched on demand)", platforms: ["macos"], view: "auto" },
   { id: "macos_system_info", label: "System version", platforms: ["macos"], view: "auto", platformShortcut: true },

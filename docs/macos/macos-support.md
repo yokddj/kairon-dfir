@@ -67,6 +67,31 @@ first one, which keeps its exact text and time and gains `macos.repeat_count` an
 message stays; only the repeats' numbers are lost. On a test Mac this took 165,000 launchd lines
 to 56,000 rows and 100,000 wifi lines to 8,700.
 
+### Unified Logs
+
+The main log of a modern Mac (`/private/var/db/diagnostics/*.tracev3` with
+`/private/var/db/uuidtext`), decoded by Mandiant's
+[`unifiedlog_iterator`](https://github.com/mandiant/macos-UnifiedLogs) (Apache-2.0, a pinned
+release binary in the worker image). A Mac writes tens of millions of entries, so by default only
+the subsystems and processes of forensic value are indexed (`macos_unified_logs`):
+
+- subsystems: `com.apple.loginwindow*`, `com.apple.authd*`, `com.apple.Authorization*`,
+  `com.apple.opendirectoryd*`, `com.apple.syspolicy*` (Gatekeeper), `com.apple.xprotect*`,
+  `com.apple.XProtectFramework*`, `com.apple.MRT*`, `com.apple.DiskArbitration*`,
+  `com.apple.install*`, `com.apple.packagekit*`, `com.apple.screensharing*`, `com.apple.kext*`;
+- processes, for their lines without a subsystem (a process's lines under another subsystem are
+  its libraries talking): `sudo`, `su`, `sshd`, `sshd-session`, `screensharingd`, `loginwindow`, `authd`,
+  `opendirectoryd`, `installer`, `installd`, `system_installd`, `syspolicyd`, `XProtect`,
+  `XprotectService`, `MRT`, `kextload`, `kmutil`, `diskarbitrationd`.
+
+On the test Mac, decoding its 42.5 million entries took about 12 minutes of the ingest. Each row
+keeps the time (UTC), subsystem, category, process and its path, PID, effective UID,
+log type (Fault entries are medium severity, Error low) and the tracev3 file. Repeats are folded as
+in launchd.log. TCC's own log is left out (it is very verbose; `TCC.db` already gives the
+decisions). `MACOS_UNIFIED_LOGS_MODE=all` indexes every entry instead, held in memory while
+parsed -- only on a worker with memory to spare. The tool's own warnings ("Unknown number size
+support", "Failed to read UUIDText") are expected on real data.
+
 ### FSEvents (searched on demand)
 
 Each volume's change journal (`/.fseventsd`, `/System/Volumes/Data/.fseventsd`): files and folders
@@ -164,7 +189,7 @@ Flags are leads for an analyst, never detections:
 
 ## Not parsed
 
-- **Unified Logs** (`/private/var/db/diagnostics/*.tracev3` with `uuidtext`), **ASL** binary logs, **Biome** and **SEGB** streams, Spotlight, Keychains, Mail and Messages: kept in the evidence, not read.
+- **ASL** binary logs, **Biome** and **SEGB** streams, Spotlight, Keychains, Mail and Messages: kept in the evidence, not read.
 - **UAC's bodyfile** (`bodyfile/bodyfile.txt`) and hash lists: kept, not indexed.
 - LaunchAgents and LaunchDaemons under `/System/Library` and `/Library/Apple`: Apple's own, on the
   sealed system volume, not listed.

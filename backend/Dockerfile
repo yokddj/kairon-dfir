@@ -44,6 +44,27 @@ RUN set -eux; \
         rm -f "/tmp/${tool}.zip"; \
     done
 
+# macOS Unified Logs: Mandiant's unifiedlog_iterator (Apache-2.0), a prebuilt release binary per
+# architecture, pinned by version and SHA-256 (tooling/tooling.lock.yaml).
+ARG UNIFIEDLOG_VERSION=0.7.0
+ARG UNIFIEDLOG_SHA256_AMD64=7192a187f93c6fb8eafdad9885522e73dc2ae7a9a5000f5957edd4fcd0ca1c82
+ARG UNIFIEDLOG_SHA256_ARM64=ab40daf464376a2e52c4b51fd82b003b7f360a4e2726501ba853889fa3a959f4
+ENV UNIFIEDLOG_ITERATOR=/opt/unifiedlog/unifiedlog_iterator
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        amd64) target=x86_64-unknown-linux-gnu; sha="${UNIFIEDLOG_SHA256_AMD64}" ;; \
+        arm64) target=aarch64-unknown-linux-gnu; sha="${UNIFIEDLOG_SHA256_ARM64}" ;; \
+        *) echo "unifiedlog_iterator: no release binary for $arch"; exit 1 ;; \
+    esac; \
+    name="unifiedlog_iterator-v${UNIFIEDLOG_VERSION}-${target}"; \
+    curl -fsSL --retry 3 --retry-delay 5 "https://github.com/mandiant/macos-UnifiedLogs/releases/download/v${UNIFIEDLOG_VERSION}/${name}.tar.gz" -o /tmp/unifiedlog.tar.gz; \
+    echo "${sha}  /tmp/unifiedlog.tar.gz" | sha256sum -c -; \
+    mkdir -p /opt/unifiedlog; \
+    tar -xzf /tmp/unifiedlog.tar.gz -C /opt/unifiedlog --strip-components=1; \
+    test -x /opt/unifiedlog/unifiedlog_iterator; \
+    rm -f /tmp/unifiedlog.tar.gz
+
 # The pinned dependency set first, so a code change does not reinstall every package.
 COPY backend/requirements.lock /app/requirements.lock
 RUN pip install --no-cache-dir -r requirements.lock

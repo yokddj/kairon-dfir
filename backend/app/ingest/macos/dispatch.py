@@ -21,6 +21,7 @@ def _parsers() -> dict[str, Callable[..., list[dict[str, Any]]]]:
     from app.ingest.macos.logs import parse_install_log, parse_launchd_log, parse_wifi_log
     from app.ingest.macos.quarantine import parse_quarantine_events
     from app.ingest.macos.shared_file_lists import parse_shared_file_list
+    from app.ingest.macos.unified_logs import parse_unified_logs
     from app.ingest.macos.system_info import parse_system_version
     from app.ingest.macos.tcc import parse_tcc
 
@@ -48,12 +49,14 @@ def _parsers() -> dict[str, Callable[..., list[dict[str, Any]]]]:
         "macos_system_info_raw": simple(parse_system_version),
         "macos_logs_raw": logs,
         "macos_recent_items_raw": simple(parse_shared_file_list),
+        "macos_unified_logs_raw": simple(parse_unified_logs),
     }
 
 
 MACOS_PARSERS = frozenset({
     "macos_launchd_raw", "macos_quarantine_raw", "macos_knowledgec_raw", "macos_tcc_raw",
     "macos_accounts_raw", "macos_system_info_raw", "macos_logs_raw", "macos_recent_items_raw",
+    "macos_unified_logs_raw",
 })
 
 
