@@ -116,3 +116,6 @@ CLAUDE.md
 # MkDocs build output
 /site/
 /.venv-docs/
+
+# Host agent requests, status and logs (scripts/kairon-agent.sh)
+/agent/

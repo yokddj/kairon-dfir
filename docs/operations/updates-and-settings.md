@@ -43,8 +43,7 @@ were built from.
 | `UPDATE_CHECK_BRANCH` | `main` | Branch the instance follows. |
 | `UPDATE_CHECK_INTERVAL_HOURS` | `6` | Hours between checks. |
 
-Updating from the UI (a button that backs up and runs `upgrade.sh`) is not available: the containers
-have no access to Docker on the host, on purpose.
+With the [host agent](#host-agent) enabled, **Update now** on this page does it for you.
 
 ## Instance settings
 
@@ -81,6 +80,37 @@ Not on the page, and changed only in `.env` (then `docker compose up -d`):
 The tuning values of **Performance** (batch sizes, parallelism, page sizes, Sigma limits) were
 already set from the UI and stay there.
 
+## Host agent
+
+The containers have no access to Docker on the host, on purpose. To restart or upgrade Kairon from the
+web UI, a small optional agent runs on the host (`scripts/kairon-agent.sh`) as the user that owns the
+Kairon directory: a launchd agent on macOS, a systemd service on Linux (a user unit, or a system unit
+when installed as root).
+
+- **Enabling it**: `scripts/setup.sh` asks "Enable the host agent?" next to the deployment mode and
+  memory analysis (`--host-agent` without prompts) and keeps the answer in `.env`
+  (`KAIRON_HOST_AGENT`); `upgrade.sh` installs or removes the agent as it says. On an existing
+  installation: `./scripts/host-agent.sh enable` (or `disable`, `status`).
+- **What it does**: only two actions, chosen in the UI:
+  - **Update now** (System > Updates): `./scripts/dfir-backup.sh --db-only`, then
+    `./scripts/upgrade.sh`. Kairon is unavailable for a few minutes; the page reconnects and shows
+    the result and the log. On macOS the Mac is kept awake meanwhile (`caffeinate`).
+  - **Restart now** (System > Instance settings, when saved settings wait for a restart):
+    `docker compose restart` of backend, worker and memory-worker as needed.
+- **When it refuses**: while any job is queued or running in Kairon's queues (ingest, retries,
+  rules, memory, symbols), since a restart or upgrade would kill it; when the running jobs cannot be
+  checked; for an upgrade, when the Kairon directory has local changes; and while another request is
+  waiting or running. The backend checks before accepting the request and the agent checks again
+  before acting.
+- **How it talks to Kairon**: through files in `./agent/` (requests, status, logs and a heartbeat),
+  mounted by the backend only, at `/app/agent`: the workers, which read untrusted evidence, cannot ask
+  for anything. A request names an action and services from fixed lists; the agent rejects anything
+  else. Every request is written to the activity log with who made it.
+- The buttons appear only while the agent's heartbeat is recent; without the agent the pages show the
+  commands to run instead.
+- Validated on macOS (launchd). On Linux the systemd units are written by `host-agent.sh`; with a
+  user unit, run `sudo loginctl enable-linger <user>` so it keeps running after logout.
+
 ## API
 
 | Endpoint | Purpose |
@@ -89,5 +119,7 @@ already set from the UI and stay there.
 | `POST /api/system/update-status/check` | Checks now. |
 | `GET /api/admin/instance-settings` | Each setting with its `.env` value, saved value, running value and whether it waits for a restart; the read-only list; the restart command. |
 | `PATCH /api/admin/instance-settings` | `{"settings": {"KEY": value}}`; `null` removes the saved value. |
+| `GET /api/admin/host-agent` | Whether the host agent is running, the jobs in Kairon's queues and the latest requests with their status and log. |
+| `POST /api/admin/host-agent/requests` | `{"action": "upgrade"}` or `{"action": "restart", "services": [...]}`; 409 with the reason when refused. |
 
-All four are for administrators.
+All of them are for administrators.

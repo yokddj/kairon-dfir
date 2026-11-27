@@ -447,6 +447,38 @@ def patch_instance_settings(payload: dict, db: Session = Depends(get_db), actor:
     return describe(db)
 
 
+@router.get("/api/admin/host-agent")
+def get_host_agent(_admin: None = Depends(require_settings_admin)) -> dict:
+    from app.services.host_agent import state
+
+    return state()
+
+
+@router.post("/api/admin/host-agent/requests", status_code=202)
+def post_host_agent_request(payload: dict, db: Session = Depends(get_db), actor: str = Depends(settings_admin_name)) -> dict:
+    """{"action": "restart", "services": [...]} or {"action": "upgrade"}: carried out by the host agent."""
+    from app.core.activity import log_activity
+    from app.services.host_agent import HostAgentError, create_request
+
+    action = str(payload.get("action") or "")
+    services = payload.get("services")
+    if services is not None and not (isinstance(services, list) and all(isinstance(item, str) for item in services)):
+        raise HTTPException(status_code=400, detail="services must be a list of names")
+    try:
+        request = create_request(action, services, actor)
+    except HostAgentError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    log_activity(
+        db,
+        activity_type=f"host_agent_{action}_requested",
+        title="Upgrade requested" if action == "upgrade" else "Restart requested",
+        message=f"{action} {' '.join(request.get('services') or [])}".strip() + f" (request {request['id']})",
+        actor=actor,
+        metadata={"request_id": request["id"]},
+    )
+    return request
+
+
 @router.post("/api/system/settings/reset")
 def reset_system_settings(db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
     reset = reset_settings(db)
