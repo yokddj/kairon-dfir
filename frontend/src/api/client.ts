@@ -5638,6 +5638,29 @@ export type InstanceSettingsResponse = {
   restart_command: string | null;
 };
 
+export type HostAgentRequest = {
+  id: string;
+  action: "restart" | "upgrade" | null;
+  services: string[];
+  requested_by?: string | null;
+  requested_at?: string | null;
+  state: "queued" | "running" | "done" | "failed" | "refused" | string;
+  step?: string | null;
+  message?: string | null;
+  exit_code?: number | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  log_tail?: string;
+};
+
+export type HostAgentState = {
+  available: boolean;
+  seen_seconds_ago?: number | null;
+  busy?: string | null;
+  active_jobs: { total: number; queues: Record<string, number> } | null;
+  requests: HostAgentRequest[];
+};
+
 export type SystemVersionInfo = {
   app_version: string;
   vendor_id: string;
@@ -9140,6 +9163,9 @@ export const api = {
   getSystemSettings: () => request<SystemSettingsResponse>("/system/settings"),
   getUpdateStatus: () => request<UpdateStatus>("/system/update-status"),
   checkForUpdates: () => request<UpdateStatus>("/system/update-status/check", { method: "POST" }),
+  getHostAgent: () => request<HostAgentState>("/admin/host-agent"),
+  requestHostAgentAction: (payload: { action: "restart" | "upgrade"; services?: string[] }) =>
+    request<HostAgentRequest>("/admin/host-agent/requests", { method: "POST", body: JSON.stringify(payload) }),
   getInstanceSettings: () => request<InstanceSettingsResponse>("/admin/instance-settings"),
   updateInstanceSettings: (settings: Record<string, InstanceSettingValue | null>) =>
     request<InstanceSettingsResponse>("/admin/instance-settings", { method: "PATCH", body: JSON.stringify({ settings }) }),

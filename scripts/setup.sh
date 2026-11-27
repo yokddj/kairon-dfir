@@ -72,6 +72,9 @@ ENABLE_MEMORY="${KAIRON_ENABLE_MEMORY:-false}"
 # the Elastic License 2.0 on the operator's behalf -- a separate, non-OSI license from Kairon's
 # and MemProcFS's own AGPL-3.0. Only meaningful (and only asked) when memory analysis is enabled.
 MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE="${KAIRON_MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE:-false}"
+# Host agent (scripts/kairon-agent.sh): lets an administrator restart or upgrade Kairon from the web
+# UI. Asked like memory analysis; installed by scripts/host-agent.sh after the services start.
+HOST_AGENT="${KAIRON_HOST_AGENT:-false}"
 BOOTSTRAP_ADMIN_USERNAME=""
 BOOTSTRAP_ADMIN_EMAIL=""
 INTERACTIVE=true
@@ -95,6 +98,7 @@ Options:
   --mode MODE              Deployment mode: localhost, lan, https.
   --url URL                Public URL (e.g. http://localhost:5173).
   --memory                 Enable memory analysis feature.
+  --host-agent             Install the host agent (restart/upgrade from the web UI).
   --admin-user USERNAME    Bootstrap admin username.
   --admin-email EMAIL      Bootstrap admin email.
   --no-build               Skip Docker image build (warns about stale images).
@@ -253,6 +257,7 @@ preserve_secrets_from_env() {
   # Read existing feature flags
   ENABLE_MEMORY_EXISTING=$(grep '^KAIRON_ENABLE_MEMORY=' "$env_file" | sed 's/^KAIRON_ENABLE_MEMORY=//' || echo "false")
   MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE_EXISTING=$(grep '^MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE=' "$env_file" | sed 's/^MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE=//' || echo "false")
+  HOST_AGENT_EXISTING=$(grep '^KAIRON_HOST_AGENT=' "$env_file" | sed 's/^KAIRON_HOST_AGENT=//' || echo "")
 
   # Preserved so a machine that needed a non-default API port (e.g. 8000
   # already taken by something else) keeps using it on every re-run, without
@@ -271,6 +276,7 @@ preserve_secrets_from_env() {
   export MEMORY_EVIDENCE_SHARED_GID_EXISTING
   [[ -n "$ENABLE_MEMORY_EXISTING" ]] && ENABLE_MEMORY="$ENABLE_MEMORY_EXISTING"
   [[ -n "$MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE_EXISTING" ]] && MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE="$MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE_EXISTING"
+  [[ -n "$HOST_AGENT_EXISTING" ]] && HOST_AGENT="$HOST_AGENT_EXISTING" || true
   # An explicit KAIRON_API_PORT in the environment always wins (so a caller
   # fixing a port conflict on this run is never silently overridden by an
   # older value from a previous .env); otherwise reuse the preserved one.
@@ -354,6 +360,7 @@ KAIRON_BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL}
 KAIRON_BOOTSTRAP_ADMIN_PASSWORD=
 
 # ---- Optional features ----
+KAIRON_HOST_AGENT=${HOST_AGENT}
 KAIRON_ENABLE_MEMORY=${ENABLE_MEMORY}
 MEMORY_ANALYSIS_ENABLED=${ENABLE_MEMORY}
 MEMORY_ALLOW_EXTERNAL_TOOL_EXECUTION=${ENABLE_MEMORY}
@@ -430,6 +437,9 @@ build_and_start() {
   fi
   BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
   export KAIRON_COMMIT BUILD_DATE
+  # Mounted by the backend only (docker-compose.yml); created here so it belongs to this user and
+  # not to root, which docker would use for a missing bind-mount source.
+  mkdir -p "$ROOT_DIR/agent/requests" "$ROOT_DIR/agent/status" "$ROOT_DIR/agent/logs"
   local build_args=(--pull)
   docker compose ${compose_args[@]+"${compose_args[@]}"} build "${build_args[@]}"
   echo "Build complete."
@@ -448,6 +458,9 @@ build_and_start() {
   docker compose ${compose_args[@]+"${compose_args[@]}"} up "${up_args[@]}"
 
   wait_for_health
+  # Installs or removes the host agent as KAIRON_HOST_AGENT in .env says (a no-op inside an upgrade
+  # the agent itself runs). A failure here never fails the deployment.
+  bash "$SCRIPT_DIR/host-agent.sh" configure || echo "WARNING: the host agent could not be configured; see above. Kairon itself is running."
 }
 
 wait_for_health() {
@@ -621,11 +634,25 @@ interactive_mode() {
     echo ""
   fi
 
+  echo "The host agent is a small service on this machine that lets an administrator restart"
+  echo "Kairon or upgrade it (database backup, then upgrade.sh) from the web UI. It only does those"
+  echo "two things, never while jobs are running. Without it, the UI shows the commands to run."
+  local agent_default="N"
+  [[ "$HOST_AGENT" == true ]] && agent_default="Y"
+  read -r -p "Enable the host agent? [$( [[ $agent_default == Y ]] && echo 'Y/n' || echo 'y/N')]: " agent_input
+  case "${agent_input:-$agent_default}" in
+    [Yy]*) HOST_AGENT="true" ;;
+    *)    HOST_AGENT="false" ;;
+  esac
+  echo "  Host agent: $HOST_AGENT"
+  echo ""
+
   echo "=== Configuration summary ==="
   echo "  Mode:  $DEPLOYMENT_MODE"
   echo "  URL:   $PUBLIC_URL"
   echo "  Auth:  $AUTH_ENABLED"
   echo "  Memory: $ENABLE_MEMORY"
+  echo "  Host agent: $HOST_AGENT"
   if [[ "$ENABLE_MEMORY" == true ]]; then
     echo "  MemProcFS YARA (Elastic License 2.0): $MEMPROCFS_YARA_ACCEPT_ELASTIC_LICENSE"
   fi
@@ -770,6 +797,7 @@ while [[ $# -gt 0 ]]; do
       exit 2
       ;;
     --memory) ENABLE_MEMORY="true"; shift ;;
+    --host-agent) HOST_AGENT="true"; shift ;;
     --admin-user) BOOTSTRAP_ADMIN_USERNAME="$2"; shift 2 ;;
     --admin-email) BOOTSTRAP_ADMIN_EMAIL="$2"; shift 2 ;;
     --no-build) DO_BUILD=false; shift ;;

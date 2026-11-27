@@ -1,5 +1,7 @@
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type UpdateStatus } from "../../api/client";
+import { api, type HostAgentRequest, type UpdateStatus } from "../../api/client";
+import { AgentActionButton, AgentRequestStatus, latestRequest, useHostAgent } from "./HostAgent";
 
 export const UPDATE_STATUS_QUERY_KEY = ["system-update-status"];
 
@@ -56,8 +58,22 @@ function Summary({ status }: { status: UpdateStatus }) {
   }
 }
 
+/** A finished request stays on the page for a day; one waiting or running, until it ends. */
+export function recentRequest(request: HostAgentRequest | undefined, now = Date.now()) {
+  if (!request) return undefined;
+  if (!request.finished_at) return request;
+  const finished = Date.parse(request.finished_at);
+  return Number.isNaN(finished) || now - finished < 24 * 3600 * 1000 ? request : undefined;
+}
+
 export default function UpdatesSection() {
   const queryClient = useQueryClient();
+  const agent = useHostAgent();
+  const upgrade = recentRequest(latestRequest(agent.data, "upgrade"));
+  useEffect(() => {
+    // After an upgrade the running commit changed: read the update status again.
+    if (upgrade?.state === "done") void queryClient.invalidateQueries({ queryKey: UPDATE_STATUS_QUERY_KEY });
+  }, [upgrade?.id, upgrade?.state, queryClient]);
   const statusQuery = useQuery({ queryKey: UPDATE_STATUS_QUERY_KEY, queryFn: api.getUpdateStatus, retry: false });
   const checkMutation = useMutation({
     mutationFn: api.checkForUpdates,
@@ -116,10 +132,30 @@ export default function UpdatesSection() {
           </div>
           <div className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
             <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">How to update</p>
-            <p className="mt-2 text-sm text-muted">On the server, from the Kairon DFIR directory: back up the database, then upgrade (pull, rebuild and restart; cases and evidence are kept).</p>
-            <pre className="mt-3 overflow-x-auto rounded-xl bg-abyss/90 p-3 text-sm text-slate-200">{"./scripts/dfir-backup.sh --db-only\n./scripts/upgrade.sh"}</pre>
+            {agent.data?.available ? (
+              <>
+                <p className="mt-2 text-sm text-muted">The host agent backs up the database, then pulls, rebuilds and restarts Kairon. Cases and evidence are kept.</p>
+                <AgentActionButton
+                  label="Update now"
+                  confirmText="Kairon will be unavailable for a few minutes while it rebuilds and restarts. This page reconnects by itself."
+                  payload={{ action: "upgrade" }}
+                />
+              </>
+            ) : (
+              <>
+                <p className="mt-2 text-sm text-muted">On the server, from the Kairon DFIR directory: back up the database, then upgrade (pull, rebuild and restart; cases and evidence are kept).</p>
+                <pre className="mt-3 overflow-x-auto rounded-xl bg-abyss/90 p-3 text-sm text-slate-200">{"./scripts/dfir-backup.sh --db-only\n./scripts/upgrade.sh"}</pre>
+                <p className="mt-2 text-xs text-slate-400">To update from this page instead, enable the host agent on the server: ./scripts/host-agent.sh enable</p>
+              </>
+            )}
           </div>
         </>
+      ) : null}
+      {upgrade ? (
+        <div className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
+          <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Latest update</p>
+          <AgentRequestStatus request={upgrade} />
+        </div>
       ) : null}
     </section>
   );

@@ -10,6 +10,8 @@ const getUpdateStatusMock = vi.fn();
 const checkForUpdatesMock = vi.fn();
 const getInstanceSettingsMock = vi.fn();
 const updateInstanceSettingsMock = vi.fn();
+const getHostAgentMock = vi.fn();
+const requestHostAgentActionMock = vi.fn();
 
 vi.mock("../../api/client", () => ({
   api: {
@@ -17,6 +19,8 @@ vi.mock("../../api/client", () => ({
     checkForUpdates: () => checkForUpdatesMock(),
     getInstanceSettings: () => getInstanceSettingsMock(),
     updateInstanceSettings: (settings: unknown) => updateInstanceSettingsMock(settings),
+    getHostAgent: () => getHostAgentMock(),
+    requestHostAgentAction: (payload: unknown) => requestHostAgentActionMock(payload),
   },
 }));
 
@@ -55,10 +59,59 @@ function settingsResponse(settings: InstanceSettingEntry[], restart: string | nu
   };
 }
 
+const NO_AGENT = { available: false, active_jobs: { total: 0, queues: {} }, requests: [] };
+const UPDATE_AVAILABLE = {
+  enabled: true,
+  repository: "example/kairon",
+  branch: "main",
+  running_commit: "aaaaaaaaaaaa",
+  interval_hours: 6,
+  state: "update_available",
+  commits_behind: 1,
+  commits: [{ sha: "111111111111", title: "Change" }],
+};
+
+beforeEach(() => {
+  getHostAgentMock.mockReset();
+  getHostAgentMock.mockResolvedValue(NO_AGENT);
+  requestHostAgentActionMock.mockReset();
+});
+
 describe("UpdatesSection", () => {
   beforeEach(() => {
     getUpdateStatusMock.mockReset();
     checkForUpdatesMock.mockReset();
+  });
+
+  it("updates from the page through the host agent, after confirming", async () => {
+    getUpdateStatusMock.mockResolvedValue(UPDATE_AVAILABLE);
+    getHostAgentMock.mockResolvedValue({ available: true, active_jobs: { total: 0, queues: {} }, requests: [] });
+    requestHostAgentActionMock.mockResolvedValue({ id: "r1", action: "upgrade", services: [], state: "queued" });
+    renderWithClient(<UpdatesSection />);
+    fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
+    expect(requestHostAgentActionMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm: update now" }));
+    await waitFor(() => expect(requestHostAgentActionMock).toHaveBeenCalledWith({ action: "upgrade" }));
+  });
+
+  it("does not offer the update while jobs run, and shows the agent's progress", async () => {
+    getUpdateStatusMock.mockResolvedValue(UPDATE_AVAILABLE);
+    getHostAgentMock.mockResolvedValue({
+      available: true,
+      active_jobs: { total: 2, queues: { "dfir-ingest": 2 } },
+      requests: [{ id: "r0", action: "upgrade", services: [], state: "running", step: "backup", message: "Backing up the database.", log_tail: "$ dfir-backup.sh" }],
+    });
+    renderWithClient(<UpdatesSection />);
+    expect(await screen.findByRole("button", { name: "Update now" })).toBeDisabled();
+    expect(screen.getByText(/2 job\(s\) are queued or running/)).toBeInTheDocument();
+    expect(screen.getByTestId("host-agent-request-upgrade")).toHaveTextContent("Running · backup");
+  });
+
+  it("without the agent shows the commands and how to enable it", async () => {
+    getUpdateStatusMock.mockResolvedValue(UPDATE_AVAILABLE);
+    renderWithClient(<UpdatesSection />);
+    expect(await screen.findByText(/host-agent\.sh enable/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Update now" })).not.toBeInTheDocument();
   });
 
   it("lists the new commits and how to update", async () => {

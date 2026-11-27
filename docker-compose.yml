@@ -87,6 +87,9 @@ services:
       - ./data/local-mounts/cases:/cases:ro
       - memory-symbol-cache:/volatility-cache:ro
       - ./operator-symbol-import:/operator-symbol-import:ro
+      # Requests to the optional host agent (scripts/kairon-agent.sh) and its answers. Mounted by the
+      # backend only: the workers, which read untrusted evidence, cannot ask for a restart or upgrade.
+      - ./agent:/app/agent
     environment:
       MEMORY_SYMBOL_CACHE_ROOT: /volatility-cache/volatility3
       KAIRON_CLI_OPERATOR_ROOTS: /operator-symbol-import

@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type InstanceSettingEntry, type InstanceSettingValue, type InstanceSettingsResponse } from "../../api/client";
-import { UPDATE_STATUS_QUERY_KEY } from "./UpdatesSection";
+import { AgentActionButton, AgentRequestStatus, latestRequest, useHostAgent } from "./HostAgent";
+import { UPDATE_STATUS_QUERY_KEY, recentRequest } from "./UpdatesSection";
 
 const QUERY_KEY = ["admin-instance-settings"];
 
@@ -90,6 +91,12 @@ export default function InstanceSettingsSection() {
   const [draft, setDraft] = useState<Record<string, InstanceSettingValue | null>>({});
   const [message, setMessage] = useState("");
   const [copied, setCopied] = useState(false);
+  const agent = useHostAgent();
+  const restart = recentRequest(latestRequest(agent.data, "restart"));
+  useEffect(() => {
+    // After a restart the services run with the saved values: read which still wait.
+    if (restart?.state === "done") void queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+  }, [restart?.id, restart?.state, queryClient]);
 
   const saveMutation = useMutation({
     mutationFn: (changes: Record<string, InstanceSettingValue | null>) => api.updateInstanceSettings(changes),
@@ -148,8 +155,14 @@ export default function InstanceSettingsSection() {
           <button type="button" onClick={() => void copyRestart(data.restart_command as string)} className="mt-3 rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">
             {copied ? "Copied" : "Copy command"}
           </button>
+          <AgentActionButton
+            label="Restart now"
+            confirmText={`Restart ${data.restart_services.join(", ")}? Kairon is unavailable for a few seconds.`}
+            payload={{ action: "restart", services: data.restart_services }}
+          />
         </div>
       ) : null}
+      {restart ? <AgentRequestStatus request={restart} /> : null}
 
       {groups.map((group) => (
         <div key={group} className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
