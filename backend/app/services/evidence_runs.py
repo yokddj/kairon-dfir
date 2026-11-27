@@ -286,6 +286,10 @@ def sync_ingest_run_from_metadata(metadata: dict | None, *, run_id: str, ingest_
         metadata_started_at = _not_before(next_metadata.get("started_at"), merged.get("created_at"))
         run_started_at = metadata_started_at or _not_before(merged.get("started_at"), merged.get("created_at"))
         metadata_is_this_run = metadata_started_at is not None or not merged.get("created_at")
+        if run_started_at is None and status_value in {"running", "processing"}:
+            # Not every pipeline writes started_at; the worker's first progress
+            # update for a running run stamps it, and later syncs keep it.
+            run_started_at = datetime.now(timezone.utc).isoformat()
         phase = str(next_metadata.get("current_phase") or merged.get("phase") or "")
         progress = next_metadata.get("progress_pct")
         fatal_error = ((next_metadata.get("error_log") or {}).get("fatal") if isinstance(next_metadata.get("error_log"), dict) else None)
