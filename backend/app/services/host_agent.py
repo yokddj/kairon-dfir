@@ -66,17 +66,24 @@ def _queue_names() -> list[str]:
 
 
 def active_jobs() -> dict[str, Any]:
-    """Jobs queued or running, per queue. Raises when Redis cannot be read: unknown is not none."""
+    """Jobs running, and jobs queued where a worker will pick them up, per queue. A restart or an
+    upgrade kills the first and could catch the second as it starts; a job queued where no worker
+    listens never runs and is not counted. Running jobs are read after RQ's cleanup, which moves
+    those a dead worker abandoned to the failed jobs. Raises when Redis cannot be read: unknown is
+    not none."""
     from redis import Redis
-    from rq import Queue
+    from rq import Queue, Worker
     from rq.registry import StartedJobRegistry
 
     from app.core.config import get_settings
 
     connection = Redis.from_url(get_settings().redis_url, socket_connect_timeout=3, socket_timeout=5)
+    served = {queue.name for worker in Worker.all(connection=connection) for queue in worker.queues}
     queues: dict[str, int] = {}
     for name in _queue_names():
-        count = Queue(name, connection=connection).count + len(StartedJobRegistry(name, connection=connection))
+        count = len(StartedJobRegistry(name, connection=connection).get_job_ids())
+        if name in served:
+            count += Queue(name, connection=connection).count
         if count:
             queues[name] = count
     return {"total": sum(queues.values()), "queues": queues}

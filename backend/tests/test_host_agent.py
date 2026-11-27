@@ -111,6 +111,20 @@ def test_only_administrators(client, monkeypatch, is_admin, expected) -> None:
     assert http.get("/api/admin/host-agent").status_code == expected
 
 
+def test_jobs_count_running_ones_and_queued_ones_a_worker_will_run(monkeypatch) -> None:
+    import rq
+    import rq.registry
+
+    queued = {"dfir-ingest": 2, "memory-native-probe": 278}
+    running = {"dfir-ingest": ["job-1"], "memory": ["job-2"]}
+    monkeypatch.setattr(host_agent, "_queue_names", lambda: ["dfir-ingest", "memory", "memory-native-probe"])
+    monkeypatch.setattr(rq, "Worker", SimpleNamespace(all=lambda connection: [SimpleNamespace(queues=[SimpleNamespace(name="dfir-ingest"), SimpleNamespace(name="memory")])]))
+    monkeypatch.setattr(rq, "Queue", lambda name, connection: SimpleNamespace(count=queued.get(name, 0)))
+    monkeypatch.setattr(rq.registry, "StartedJobRegistry", lambda name, connection: SimpleNamespace(get_job_ids=lambda: running.get(name, [])))
+    # No worker listens to memory-native-probe: its 278 queued jobs never run.
+    assert host_agent.active_jobs() == {"total": 4, "queues": {"dfir-ingest": 3, "memory": 1}}
+
+
 # ---- The agent script itself -------------------------------------------------------------------
 
 FAKE_DOCKER = """#!/usr/bin/env bash
