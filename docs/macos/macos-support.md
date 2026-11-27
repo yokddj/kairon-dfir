@@ -84,6 +84,22 @@ the subsystems and processes of forensic value are indexed (`macos_unified_logs`
   `opendirectoryd`, `installer`, `installd`, `system_installd`, `syspolicyd`, `XProtect`,
   `XprotectService`, `MRT`, `kextload`, `kmutil`, `diskarbitrationd`.
 
+Kept entries are split by topic, each its own family, view in Artifact Views (the "macOS
+Artifacts" panel) and type in Search and the Timeline:
+
+| Family | View | From |
+| --- | --- | --- |
+| `macos_ul_sessions` | Sessions & screen | loginwindow: logins, logouts, screen lock and unlock |
+| `macos_ul_app_execution` | App execution (Gatekeeper, XProtect) | syspolicy, XProtect, MRT |
+| `macos_ul_installs` | Installations | install*, packagekit, installer/installd |
+| `macos_ul_disks` | Disks & USB | DiskArbitration: mounts and unmounts |
+| `macos_ul_accounts` | Accounts & authorization | authd, Authorization, opendirectoryd |
+| `macos_ul_remote_access` | sudo, SSH & screen sharing | sudo, su, sshd, screensharing |
+| `macos_ul_kernel_extensions` | Kernel extensions | kext, kextload, kmutil |
+
+`macos_ul_other` holds everything else, only in mode `all`. The evidence's artifact row stays
+`macos_unified_logs` (the source).
+
 On the test Mac, decoding its 42.5 million entries took about 12 minutes of the ingest. Each row
 keeps the time (UTC), subsystem, category, process and its path, PID, effective UID,
 log type (Fault entries are medium severity, Error low) and the tracev3 file. Repeats are folded as

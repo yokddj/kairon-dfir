@@ -8,6 +8,11 @@ uuidtext, all in one directory. It does not follow symbolic links to directories
 directory is rebuilt with hard links (a copy when the temporary directory is on another file
 system).
 
+Kept entries are split by topic into their own families (macos_ul_sessions, macos_ul_app_execution,
+macos_ul_installs, macos_ul_disks, macos_ul_accounts, macos_ul_remote_access,
+macos_ul_kernel_extensions; anything else in mode "all" goes to macos_ul_other), so each is its own
+view instead of one mixed log.
+
 A Mac writes tens of millions of entries (a test Mac's output passed 12 GB in 11 minutes), so the
 tool's JSONL is read from its standard output and filtered as it streams -- never written out
 whole. By default only the subsystems and processes of forensic value are kept (logins and
@@ -31,27 +36,32 @@ from app.ingest.macos.logs import collapse_repeats
 
 ARTIFACT_FAMILY = "macos_unified_logs"
 DIAGNOSTICS_PARTS = ("Persist", "Special", "Signpost", "timesync", "HighVolume")
-FORENSIC_SUBSYSTEM_PREFIXES = (
-    "com.apple.loginwindow",
-    "com.apple.authd",
-    "com.apple.Authorization",
-    "com.apple.opendirectoryd",
-    "com.apple.syspolicy",
-    "com.apple.xprotect",
-    "com.apple.XProtectFramework",
-    "com.apple.MRT",
-    "com.apple.DiskArbitration",
-    "com.apple.install",
-    "com.apple.packagekit",
-    "com.apple.screensharing",
-    "com.apple.kext",
+# Each kept entry goes to the view of its topic, by Apple subsystem prefix or, for lines without a
+# subsystem, by process. Order matters only where prefixes overlap (none do today).
+TOPICS: tuple[tuple[str, str, tuple[str, ...], frozenset[str]], ...] = (
+    ("macos_ul_sessions", "Sessions & screen", ("com.apple.loginwindow",), frozenset({"loginwindow"})),
+    ("macos_ul_app_execution", "App execution (Gatekeeper, XProtect)", ("com.apple.syspolicy", "com.apple.xprotect", "com.apple.XProtectFramework", "com.apple.MRT"), frozenset({"syspolicyd", "XProtect", "XprotectService", "MRT"})),
+    ("macos_ul_installs", "Installations", ("com.apple.install", "com.apple.packagekit"), frozenset({"installer", "installd", "system_installd"})),
+    ("macos_ul_disks", "Disks & USB", ("com.apple.DiskArbitration",), frozenset({"diskarbitrationd"})),
+    ("macos_ul_accounts", "Accounts & authorization", ("com.apple.authd", "com.apple.Authorization", "com.apple.opendirectoryd"), frozenset({"authd", "opendirectoryd"})),
+    ("macos_ul_remote_access", "sudo, SSH & screen sharing", ("com.apple.screensharing",), frozenset({"sudo", "su", "sshd", "sshd-session", "sshd-keygen-wrapper", "screensharingd"})),
+    ("macos_ul_kernel_extensions", "Kernel extensions", ("com.apple.kext",), frozenset({"kextload", "kmutil"})),
 )
-FORENSIC_PROCESSES = {
-    "sudo", "su", "sshd", "sshd-session", "sshd-keygen-wrapper", "screensharingd", "loginwindow", "authd",
-    "opendirectoryd", "installer", "installd", "system_installd", "syspolicyd", "XProtect", "XprotectService",
-    "MRT", "kextload", "kmutil", "diskarbitrationd",
-}
+TOPIC_FAMILIES = frozenset(topic[0] for topic in TOPICS)
+# What is kept by default: every topic's subsystems, and its processes for lines without one.
+FORENSIC_SUBSYSTEM_PREFIXES = tuple(prefix for topic in TOPICS for prefix in topic[2])
+FORENSIC_PROCESSES = frozenset(process for topic in TOPICS for process in topic[3])
+_OTHER_FAMILY = "macos_ul_other"
 _MAX_MESSAGE = 4000
+
+
+def topic_family(subsystem: str, process: str) -> str:
+    for family, _label, prefixes, processes in TOPICS:
+        if subsystem and subsystem.startswith(prefixes):
+            return family
+        if not subsystem and process in processes:
+            return family
+    return _OTHER_FAMILY
 _DEFAULT_TIMEOUT_SECONDS = 4 * 3600
 
 
@@ -120,13 +130,14 @@ def entry_row(entry: dict[str, Any], *, source_path: str) -> dict[str, Any]:
     process_path = str(entry.get("process") or "")
     message = str(entry.get("message") or "")[:_MAX_MESSAGE]
     subsystem = str(entry.get("subsystem") or "")
+    clean_subsystem = subsystem if subsystem not in {"Unknown subsystem"} else ""
     return {
-        "artifact_family": ARTIFACT_FAMILY,
+        "artifact_family": topic_family(clean_subsystem, process_path.rsplit("/", 1)[-1]),
         "artifact_type": "unified_log_entry",
         "source_file": source_path,
         "timestamp": entry.get("timestamp") or None,
         "timestamp_status": "ok" if entry.get("timestamp") else "missing",
-        "subsystem": subsystem if subsystem not in {"Unknown subsystem"} else "",
+        "subsystem": clean_subsystem,
         "category": str(entry.get("category") or ""),
         "process": process_path.rsplit("/", 1)[-1],
         "process_path": process_path,

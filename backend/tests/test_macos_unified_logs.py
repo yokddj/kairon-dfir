@@ -68,6 +68,17 @@ def test_forensic_entries_are_kept_and_folded(collection: Path, fake_tool: Path)
     assert rows[1]["repeat_count"] == 2
     assert rows[0]["subsystem"] == "com.apple.loginwindow.logging" and rows[0]["tracev3_file"] == "0000000000000001.tracev3"
     assert rows[2]["log_type"] == "Fault"
+    # Each entry lands in the view of its topic.
+    assert [row["artifact_family"] for row in rows] == ["macos_ul_sessions", "macos_ul_remote_access", "macos_ul_app_execution"]
+
+
+def test_topics_and_the_default_filter_agree() -> None:
+    assert unified_logs.topic_family("com.apple.DiskArbitration.diskarbitrationd", "diskarbitrationd") == "macos_ul_disks"
+    assert unified_logs.topic_family("", "sshd") == "macos_ul_remote_access"
+    assert unified_logs.topic_family("com.apple.TCC", "tccd") == "macos_ul_other"
+    for _family, _label, prefixes, processes in unified_logs.TOPICS:
+        assert all(unified_logs.is_forensic({"subsystem": prefix + ".x"}) for prefix in prefixes)
+        assert all(unified_logs.is_forensic({"subsystem": "", "process": "/usr/bin/" + process}) for process in processes)
 
 
 def test_every_entry_with_mode_all(collection: Path, fake_tool: Path, monkeypatch) -> None:
@@ -75,6 +86,7 @@ def test_every_entry_with_mode_all(collection: Path, fake_tool: Path, monkeypatc
     marker = collection / "[root]/private/var/db/diagnostics/Persist/0000000000000001.tracev3"
     rows = unified_logs.parse_unified_logs(marker, source_path="x")
     assert "tccd" in [row["process"] for row in rows]
+    assert {row["artifact_family"] for row in rows if row["process"] == "tccd"} == {"macos_ul_other"}
 
 
 def test_missing_tool_is_reported(collection: Path, monkeypatch) -> None:
