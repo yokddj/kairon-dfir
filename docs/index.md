@@ -241,6 +241,7 @@ Capabilities are labeled `stable`, `partial`, `experimental`, `planned`, `unsupp
 - [AI assistant](operations/ai-assistant.md): optional AI case assistant and provider configuration.
 - [MCP server](operations/mcp-server.md): optional MCP server for external read-only case access.
 - [Performance](operations/performance.md): performance profiles.
+- [Updates and instance settings](operations/updates-and-settings.md): new commits on the followed branch, and settings changed from the UI instead of `.env`.
 - [OpenSearch in Kairon DFIR](operations/opensearch.md): OpenSearch mapping and behavior.
 - [API Summary](operations/api_summary.md): high-level endpoint map.
 - [Testing](operations/testing.md): backend/frontend test suite.

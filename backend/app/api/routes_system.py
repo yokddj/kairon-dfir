@@ -107,6 +107,7 @@ DOCS_CATALOG = [
     {"slug": "unified-evidence-ingestion", "title": "Unified evidence ingestion", "summary": "Wizard guiado de 7 pasos (con Server Health Check) para añadir evidencia sin conocer el pipeline interno, con una sola subida de red.", "filename": "evidence/unified-evidence-ingestion.md"},
     {"slug": "preflight-inspection", "title": "Preflight inspection", "summary": "Inspección de solo lectura antes de procesar: clasificación, pipeline preview, chequeo de recursos y diagnósticos accionables.", "filename": "evidence/preflight-inspection.md"},
     {"slug": "investigation-workflow", "title": "Investigation workflow", "summary": "Flujo recomendado para pivotar entre caso, host, evidencia, búsqueda, artefactos, memoria y hallazgos.", "filename": "search-and-investigation/investigation-workflow.md"},
+    {"slug": "updates-and-settings", "title": "Updates and instance settings", "summary": "Aviso de commits nuevos en la rama que sigue la instancia y ajustes que se cambian desde la UI en vez de .env.", "filename": "operations/updates-and-settings.md"},
     {"slug": "api-summary", "title": "API summary", "summary": "Mapa de endpoints y workflows principales.", "filename": "operations/api_summary.md"},
     {"slug": "user-guide", "title": "User guide", "summary": "Flujo de analista desde upload hasta reporte.", "filename": "getting-started/user_guide.md"},
     {"slug": "search", "title": "Search workspace", "summary": "Búsqueda principal, frases de comandos, filtros, timeline y Artifact Views.", "filename": "search-and-investigation/search.md"},
@@ -367,6 +368,83 @@ def patch_system_settings(payload: dict, db: Session = Depends(get_db), _admin: 
         "warnings": warnings,
         "settings": effective,
     }
+
+
+def settings_admin_name(request: Request, db: Session = Depends(get_db)) -> str:
+    """Like require_settings_admin, and returns who it is for the activity log."""
+    if not get_settings().auth_enabled:
+        return "system"
+    from app.services.auth_dependencies import get_current_user
+
+    user = get_current_user(request, db)
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin required")
+    return str(getattr(user, "username", None) or "admin")
+
+
+@router.get("/api/system/update-status")
+def get_update_status(db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
+    from app.services.update_check import update_status
+
+    return update_status(db)
+
+
+@router.post("/api/system/update-status/check")
+def check_update_status(db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
+    from app.services.update_check import update_status
+
+    return update_status(db, force=True)
+
+
+@router.get("/api/admin/instance-settings")
+def get_instance_settings(db: Session = Depends(get_db), _admin: None = Depends(require_settings_admin)) -> dict:
+    from app.core.instance_settings import describe
+
+    return describe(db)
+
+
+@router.patch("/api/admin/instance-settings")
+def patch_instance_settings(payload: dict, db: Session = Depends(get_db), actor: str = Depends(settings_admin_name)) -> dict:
+    """{"settings": {"KEY": value}}; a null value removes the one saved from the UI (back to .env).
+    All or nothing: one invalid value rejects the whole request."""
+    from app.core.activity import log_activity
+    from app.core.config import Settings
+    from app.core.instance_settings import BY_KEY, describe, stored_overrides, store_override, validate_value
+
+    changed = payload.get("settings")
+    if not isinstance(changed, dict) or not changed:
+        raise HTTPException(status_code=400, detail="settings must be a non-empty object")
+    unknown = sorted(str(key) for key in changed if key not in BY_KEY)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Not an instance setting: {', '.join(unknown)}")
+    values: dict = {}
+    for key, value in changed.items():
+        try:
+            values[key] = None if value is None else validate_value(BY_KEY[key], value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Settings' own validators (e.g. memory upload limits that depend on each other), with every
+    # value saved after this request.
+    after = {**stored_overrides(db), **values}
+    try:
+        Settings(**{BY_KEY[key].field: value for key, value in after.items() if value is not None})
+    except Exception as exc:  # pydantic ValidationError
+        raise HTTPException(status_code=400, detail=f"Invalid combination of settings: {exc}") from exc
+    before = stored_overrides(db)
+    for key, value in values.items():
+        store_override(db, key, value)
+    db.commit()
+    changes = [f"{key}: {before.get(key, '.env')} -> {'.env' if value is None else value}" for key, value in values.items() if before.get(key) != value]
+    if changes:
+        log_activity(
+            db,
+            activity_type="instance_settings_changed",
+            title="Instance settings changed",
+            message="; ".join(changes),
+            actor=actor,
+            metadata={"keys": sorted(values)},
+        )
+    return describe(db)
 
 
 @router.post("/api/system/settings/reset")

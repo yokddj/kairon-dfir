@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     s3_source_enabled: bool = False
     # Same for Azure Blob Storage (AZURE_BLOB_SOURCE_ENABLED=true); credentials are set in the UI.
     azure_blob_source_enabled: bool = False
+    # Update check (app.services.update_check): asks GitHub's public API whether the branch the
+    # instance follows has commits newer than the running build. Only the commit ids are sent.
+    update_check_enabled: bool = True
+    update_check_repository: str = "yokddj/kairon-dfir"
+    update_check_branch: str = "main"
+    update_check_interval_hours: int = 6
     # 256 GiB: memory captures of 32/64 GB machines and full disk images routinely exceed 32 GiB. The
     # real guard is the free-space check every upload runs before it starts.
     backend_max_upload_size: int = Field(default=274877906944)
@@ -875,6 +881,12 @@ def _with_new_defaults(values: list[str], upgrades: tuple[tuple[tuple[str, ...],
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
+    # Values an administrator saved from the UI (System > Instance settings) over the environment;
+    # off in the test suite, which has no database to read them from.
+    if os.getenv("KAIRON_INSTANCE_SETTINGS_FROM_DB", "true").strip().lower() not in {"0", "false", "no"}:
+        from app.core.instance_settings import apply_overrides
+
+        settings = apply_overrides(settings, Settings)
     settings.backend_data_dir.mkdir(parents=True, exist_ok=True)
     settings.backend_temp_dir.mkdir(parents=True, exist_ok=True)
     (settings.backend_data_dir / "evidence").mkdir(parents=True, exist_ok=True)

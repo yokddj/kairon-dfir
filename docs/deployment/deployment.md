@@ -94,7 +94,9 @@ the existing `.env` and offers to keep its secrets), but `upgrade.sh` is the mor
 scriptable path for a deployment that is already configured the way you want it. To change a
 single setting (e.g. a port) without going through either wizard, edit `.env` directly and run
 `docker compose up -d --build`, or use `./scripts/upgrade.sh` to also pick up any new upstream
-settings at the same time.
+settings at the same time. Many settings can also be changed from **System > Instance settings**,
+and **System > Updates** says when the followed branch has new commits; see
+[Updates and instance settings](../operations/updates-and-settings.md).
 
 ## Environment Variables Reference
 

@@ -423,6 +423,13 @@ build_and_start() {
   # when truly nothing relevant changed (verified manually), while still rebuilding exactly the
   # affected layers (and everything after them) when something does -- e.g. a new Dockerfile
   # line, an updated requirements.lock, or a genuinely new base image digest.
+  # The images record the commit they are built from (System > Updates compares it with the
+  # branch on GitHub); docker-compose.yml passes these as build arguments.
+  if [[ -z "${KAIRON_COMMIT:-}" || "${KAIRON_COMMIT}" == unknown ]]; then
+    KAIRON_COMMIT="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
+  fi
+  BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  export KAIRON_COMMIT BUILD_DATE
   local build_args=(--pull)
   docker compose ${compose_args[@]+"${compose_args[@]}"} build "${build_args[@]}"
   echo "Build complete."

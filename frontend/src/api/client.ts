@@ -5591,6 +5591,53 @@ export type SystemCapabilities = {
   memory: { enabled: boolean };
 };
 
+export type UpdateCommitSummary = { sha: string; title: string; date?: string | null; is_merge?: boolean };
+
+export type UpdateStatus = {
+  enabled: boolean;
+  repository: string;
+  branch: string;
+  running_commit: string | null;
+  interval_hours: number;
+  state: "disabled" | "not_configured" | "unknown_commit" | "unreachable" | "not_comparable" | "update_available" | "up_to_date";
+  checked_at?: string;
+  last_good_check_at?: string;
+  last_error?: string;
+  error?: string;
+  commits_behind?: number;
+  commits_ahead?: number;
+  latest_commit?: UpdateCommitSummary | null;
+  commits?: UpdateCommitSummary[];
+  compare_url?: string;
+};
+
+export type InstanceSettingValue = boolean | number | string;
+
+export type InstanceSettingEntry = {
+  key: string;
+  group: "general" | "ingest" | "disk" | "memory" | string;
+  label: string;
+  description: string;
+  value_type: "bool" | "int" | "choice";
+  unit: "bytes" | "seconds" | "minutes" | null;
+  min: number | null;
+  max: number | null;
+  choices: string[];
+  env_value: InstanceSettingValue;
+  override: InstanceSettingValue | null;
+  running_value: InstanceSettingValue;
+  applies: "live" | "restart";
+  services: string[];
+  pending_restart: boolean;
+};
+
+export type InstanceSettingsResponse = {
+  settings: InstanceSettingEntry[];
+  read_only: Array<{ key: string; value: InstanceSettingValue | null; reason: string }>;
+  restart_services: string[];
+  restart_command: string | null;
+};
+
 export type SystemVersionInfo = {
   app_version: string;
   vendor_id: string;
@@ -9091,6 +9138,11 @@ export const api = {
   getSystemVersion: () => request<SystemVersionInfo>("/system/version"),
   getSystemCapabilities: () => request<SystemCapabilities>("/system/capabilities"),
   getSystemSettings: () => request<SystemSettingsResponse>("/system/settings"),
+  getUpdateStatus: () => request<UpdateStatus>("/system/update-status"),
+  checkForUpdates: () => request<UpdateStatus>("/system/update-status/check", { method: "POST" }),
+  getInstanceSettings: () => request<InstanceSettingsResponse>("/admin/instance-settings"),
+  updateInstanceSettings: (settings: Record<string, InstanceSettingValue | null>) =>
+    request<InstanceSettingsResponse>("/admin/instance-settings", { method: "PATCH", body: JSON.stringify({ settings }) }),
   updateSystemSettings: (settings: Record<string, unknown>) =>
     request<SystemSettingsPatchResponse>("/system/settings", { method: "PATCH", body: JSON.stringify({ settings }) }),
   resetSystemSettings: () => request<SystemSettingsPatchResponse>("/system/settings/reset", { method: "POST" }),
