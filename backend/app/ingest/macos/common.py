@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import plistlib
+from xml.parsers.expat import ExpatError
 import re
 import shutil
 import sqlite3
@@ -60,15 +61,28 @@ def file_mtime_iso(path: Path) -> str | None:
         return None
 
 
+_BARE_AMPERSAND_RE = re.compile(rb"&(?!(?:[A-Za-z][A-Za-z0-9]*|#[0-9]+|#x[0-9A-Fa-f]+);)")
+
+
 def load_plist(path: Path) -> Any:
-    """A binary or XML property list. Raises ValueError when the file is not one."""
+    """A binary or XML property list. Raises ValueError when the file is not one.
+
+    An XML plist with a bare "&" (not written as &amp;), which some vendors ship, is read again with
+    those escaped; any other malformed XML stays unreadable. The XML parser's own error is not a
+    ValueError, and escaped every caller's handling of unreadable plists."""
     if path.stat().st_size > _MAX_PLIST_BYTES:
         raise ValueError("property list larger than 16 MiB")
-    with path.open("rb") as handle:
+    data = path.read_bytes()
+    try:
+        return plistlib.loads(data)
+    except (plistlib.InvalidFileException, ValueError, TypeError, OverflowError, ExpatError) as exc:
+        first_error = exc
+    if not data.startswith(b"bplist") and b"&" in data:
         try:
-            return plistlib.load(handle)
-        except (plistlib.InvalidFileException, ValueError, TypeError, OverflowError) as exc:
-            raise ValueError(f"not a readable property list: {exc}") from exc
+            return plistlib.loads(_BARE_AMPERSAND_RE.sub(b"&amp;", data))
+        except (plistlib.InvalidFileException, ValueError, TypeError, OverflowError, ExpatError):
+            pass
+    raise ValueError(f"not a readable property list: {first_error}") from first_error
 
 
 def user_from_path(source_path: str) -> str:
