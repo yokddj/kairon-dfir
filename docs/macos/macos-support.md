@@ -138,6 +138,8 @@ Timeline; process start times and logins are real events and appear on it.
 
 - **Search and Timeline**, filterable by family (`macos_launchd`, `macos_knowledgec`...) and by
   `macos.*` / `uac.*` fields.
+- **Artifact Views**: a "macOS Artifacts" panel with one button per macOS family present in the
+  case (and the shared Unix families), besides the artifact-type selector.
 - **macOS workbench** (`/cases/<id>/mac`): Command History, App & Device Usage (KnowledgeC),
   LaunchAgents & LaunchDaemons, Downloads (Quarantine), Recent Items, Privacy Permissions (TCC),
   File System Events (FSEvents, searched on demand), Live Response.

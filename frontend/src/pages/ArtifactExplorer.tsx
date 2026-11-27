@@ -746,10 +746,29 @@ export default function ArtifactExplorer() {
     );
   }, [artifactTypeOptions, startupPersistencePresenceQuery.data?.total, facetsQuery.data?.derived?.dns, artifactTypeFilter]);
   const artifactNameOptions = Object.keys(facetsQuery.data?.["artifact.name"] ?? {});
-  const linuxShortcutOptions = useMemo(() => {
+  // One shortcut panel per platform the case holds. The Unix families macOS shares with Linux
+  // (shell history, sudoers, SSH...) would otherwise make a Mac-only case show "Linux Artifacts".
+  const caseEvidencesQuery = useQuery({
+    queryKey: ["artifact-explorer-case-evidences", caseId],
+    queryFn: () => api.listEvidences(caseId!),
+    enabled: Boolean(caseId),
+    staleTime: 60_000,
+  });
+  const evidencePlatforms = useMemo(
+    () => new Set((caseEvidencesQuery.data ?? []).map((item) => String((item as { effective_platform?: string }).effective_platform || "").toLowerCase())),
+    [caseEvidencesQuery.data],
+  );
+  const platformShortcutPanels = useMemo(() => {
     const present = new Set(artifactTypeOptions);
-    return artifactOptionsForPlatforms(["linux"], { shortcutOnly: true }).filter((viewName) => present.has(viewName));
-  }, [artifactTypeOptions]);
+    const panels: { platform: string; title: string; options: string[] }[] = [];
+    if (!evidencePlatforms.has("macos") || evidencePlatforms.has("linux")) {
+      panels.push({ platform: "linux", title: "Linux Artifacts", options: artifactOptionsForPlatforms(["linux"], { shortcutOnly: true }).filter((viewName) => present.has(viewName)) });
+    }
+    if (evidencePlatforms.has("macos")) {
+      panels.push({ platform: "macos", title: "macOS Artifacts", options: artifactOptionsForPlatforms(["macos"], { shortcutOnly: true }).filter((viewName) => present.has(viewName)) });
+    }
+    return panels.filter((panel) => panel.options.length);
+  }, [artifactTypeOptions, evidencePlatforms]);
   const view = artifactEventView(artifactType) as EventView;
   const payload = useMemo(
     () => ({
@@ -1060,24 +1079,24 @@ export default function ArtifactExplorer() {
             .
           </p>
         </div>
-        {linuxShortcutOptions.length ? (
-          <div className="mt-4 rounded-2xl border border-mint/25 bg-mint/10 p-4" data-testid="linux-artifacts-view">
+        {platformShortcutPanels.map((panel) => (
+          <div key={panel.platform} className="mt-4 rounded-2xl border border-mint/25 bg-mint/10 p-4" data-testid={`${panel.platform}-artifacts-view`}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mint">Linux Artifacts</p>
-                <p className="mt-1 text-sm text-muted">Jump to Linux artifact families actually present in this case.</p>
+                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mint">{panel.title}</p>
+                <p className="mt-1 text-sm text-muted">Jump to the {panel.platform === "macos" ? "macOS" : "Linux"} artifact families actually present in this case.</p>
               </div>
               <span className="rounded-full border border-mint/30 bg-abyss/60 px-3 py-1 text-xs text-mint">Auto-discovery aware</span>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
-              {linuxShortcutOptions.map((viewName) => (
+              {panel.options.map((viewName) => (
                 <button key={viewName} type="button" onClick={() => setArtifactTypeFilter(viewName)} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted hover:border-mint/40 hover:text-mint">
                   {artifactViewLabel(viewName)}
                 </button>
               ))}
             </div>
           </div>
-        ) : null}
+        ))}
         {!caseId ? <p className="mt-2 text-sm text-amber-300">Artifact Views are available after selecting a case.</p> : null}
           {hostFilter || evidenceIdFilter || Object.keys(fieldFilters).length ? (
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted">

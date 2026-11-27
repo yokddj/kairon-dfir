@@ -14,6 +14,7 @@ const getMotwMock = vi.fn();
 const getEmailArtifactsMock = vi.fn();
 const resolveIndicatorsMock = vi.fn();
 const createTimelineKeyEventMock = vi.fn();
+const listEvidencesMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -27,6 +28,7 @@ vi.mock("../api/client", () => ({
     getEmailArtifacts: (...args: unknown[]) => getEmailArtifactsMock(...args),
     resolveIndicators: (...args: unknown[]) => resolveIndicatorsMock(...args),
     createTimelineKeyEvent: (...args: unknown[]) => createTimelineKeyEventMock(...args),
+    listEvidences: (...args: unknown[]) => listEvidencesMock(...args),
   },
 }));
 
@@ -77,6 +79,7 @@ function renderPage(path = "/cases/case-1/artifact-search") {
 
 describe("ArtifactExplorer", () => {
   beforeEach(() => {
+    listEvidencesMock.mockResolvedValue([]);
     listCasesMock.mockResolvedValue([{ id: "case-1", name: "Case Alpha" }]);
     searchFacetsMock.mockResolvedValue({
       "artifact.type": ["evtx", "prefetch"],
@@ -456,6 +459,21 @@ describe("ArtifactExplorer", () => {
     expect(screen.getByRole("button", { name: "Journal" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Auth Logs" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Syslog" })).not.toBeInTheDocument();
+  });
+
+  it("shows macOS shortcuts, not Linux ones, for a case whose evidence is macOS", async () => {
+    searchFacetsMock.mockResolvedValueOnce({
+      "artifact.type": { macos_launchd: 3, macos_knowledgec: 9, linux_shell_history: 4, uac_live_response: 2 },
+      "artifact.name": {},
+    });
+    listEvidencesMock.mockResolvedValueOnce([{ id: "ev-mac", case_id: "case-1", original_filename: "uac.tar.gz", effective_platform: "macos" }]);
+
+    renderPage();
+
+    const panel = await screen.findByTestId("macos-artifacts-view");
+    expect(panel).toHaveTextContent("LaunchAgents & LaunchDaemons");
+    expect(panel).toHaveTextContent("Shell History");
+    expect(screen.queryByTestId("linux-artifacts-view")).not.toBeInTheDocument();
   });
 
   it("regression: selecting a facet-derived artifact type sends the literal indexed value, not its canonicalized display id", async () => {
