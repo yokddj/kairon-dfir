@@ -16,6 +16,8 @@ def _uuid_as_text_on_sqlite(type_, compiler, **kw):
 
 def pytest_configure():
     os.environ.setdefault("KAIRON_AUTH_ENABLED", "false")
+    # get_settings() would otherwise try to read the values saved from the UI from PostgreSQL.
+    os.environ.setdefault("KAIRON_INSTANCE_SETTINGS_FROM_DB", "false")
     # The suite's Windows memory tests were written for Volatility's plugins; the MemProcFS engine
     # (the deployment default) has its own tests, which set it explicitly.
     os.environ.setdefault("MEMORY_WINDOWS_DEFAULT_ENGINE", "volatility")

@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
+import InstanceSettingsSection from "../components/system/InstanceSettingsSection";
+import UpdatesSection from "../components/system/UpdatesSection";
 import { API_BASE_URL, api, type PerformanceSettingEntry, type PerformanceState, type StorageCapabilities, type SystemVersionInfo } from "../api/client";
 
 type ProfileName = "safe" | "balanced" | "performance" | "max" | "custom";
-type SectionKey = "overview" | "performance" | "evidence" | "branding" | "opensearch" | "deployment" | "advanced";
+type SectionKey = "overview" | "updates" | "instance" | "performance" | "evidence" | "branding" | "opensearch" | "deployment" | "advanced";
 type PerformanceGroupKey = "ingest" | "opensearch_bulk" | "search_timeline" | "graph_correlation" | "other";
 type DeploymentDiagnostic = NonNullable<NonNullable<PerformanceState["deployment"]>["pending_changes"][number]["diagnostic"]>;
 
 const SECTION_LABELS: Array<{ key: SectionKey; label: string }> = [
   { key: "overview", label: "Overview" },
+  { key: "updates", label: "Updates" },
+  { key: "instance", label: "Instance settings" },
   { key: "performance", label: "Performance" },
   { key: "evidence", label: "Evidence storage" },
   { key: "branding", label: "Report branding" },
@@ -20,6 +24,8 @@ const SECTION_LABELS: Array<{ key: SectionKey; label: string }> = [
 
 const SECTION_TO_PARAM: Record<SectionKey, string> = {
   overview: "overview",
+  updates: "updates",
+  instance: "instance-settings",
   performance: "performance",
   evidence: "evidence-storage",
   branding: "report-branding",
@@ -30,6 +36,8 @@ const SECTION_TO_PARAM: Record<SectionKey, string> = {
 
 const PARAM_TO_SECTION: Record<string, SectionKey> = {
   overview: "overview",
+  updates: "updates",
+  "instance-settings": "instance",
   performance: "performance",
   "evidence-storage": "evidence",
   "report-branding": "branding",
@@ -625,6 +633,9 @@ export default function SystemPage() {
           {copyStatus ? <p className="mt-3 text-sm text-accent">{copyStatus}</p> : null}
         </section>
       ) : null}
+
+      {activeSection === "updates" ? <UpdatesSection /> : null}
+      {activeSection === "instance" ? <InstanceSettingsSection /> : null}
 
       {activeSection === "overview" ? (
         <section className="space-y-6">

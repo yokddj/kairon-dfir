@@ -9,6 +9,7 @@ import type { CaseCapabilitiesResponse } from "../api/client";
 const getCaseCapabilitiesMock = vi.fn();
 const getSystemCapabilitiesMock = vi.fn();
 const listEvidencesMock = vi.fn();
+const getUpdateStatusMock = vi.fn();
 const logoutMock = vi.fn();
 
 const activeCaseState: any = {
@@ -33,6 +34,7 @@ vi.mock("../api/client", () => ({
     getCaseCapabilities: (...args: unknown[]) => getCaseCapabilitiesMock(...args),
     getSystemCapabilities: () => getSystemCapabilitiesMock(),
     listEvidences: (...args: unknown[]) => listEvidencesMock(...args),
+    getUpdateStatus: () => getUpdateStatusMock(),
   },
 }));
 
@@ -86,6 +88,21 @@ describe("registry-driven sidebar", () => {
     logoutMock.mockReset();
     listEvidencesMock.mockReset();
     listEvidencesMock.mockResolvedValue([]);
+    getUpdateStatusMock.mockReset();
+    getUpdateStatusMock.mockResolvedValue({ state: "up_to_date", branch: "main" });
+  });
+
+  it("marks System for administrators only when the followed branch has new commits", async () => {
+    getCaseCapabilitiesMock.mockResolvedValue(registry());
+    const { unmount } = renderSidebar();
+    expect(await screen.findByRole("link", { name: "System" })).toHaveAttribute("href", "/system");
+    expect(screen.queryByTestId("sidebar-update-available")).not.toBeInTheDocument();
+    unmount();
+
+    getUpdateStatusMock.mockResolvedValue({ state: "update_available", branch: "main", commits_behind: 4 });
+    renderSidebar();
+    expect(await screen.findByTestId("sidebar-update-available")).toHaveTextContent("Update");
+    expect(screen.getByRole("link", { name: /System/ })).toHaveAttribute("href", "/system?tab=updates");
   });
 
   it("lists Files only when the case has a disk image or a collection", async () => {

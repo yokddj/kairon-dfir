@@ -92,5 +92,8 @@ ENV KAIRON_COMMIT=${KAIRON_COMMIT} \
     BUILD_DATE=${BUILD_DATE}
 LABEL org.opencontainers.image.revision="${KAIRON_COMMIT}" \
       org.opencontainers.image.created="${BUILD_DATE}"
+# The update check reads the commit from here: docker compose sets KAIRON_COMMIT=unknown in the
+# environment when it is started without the variable exported.
+RUN printf '%s\n' "${KAIRON_COMMIT}" > /app/.kairon-commit
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -18,6 +18,7 @@ import {
   Network,
   ShieldCheck,
   Search,
+  Settings2,
   ShieldAlert,
   SquareTerminal,
   Table2,
@@ -219,6 +220,18 @@ export default function Sidebar() {
     staleTime: 15_000,
     refetchOnWindowFocus: false,
   });
+  // Administrators see a dot on System when the branch the instance follows has new commits. The
+  // backend asks GitHub at most every few hours; this only reads its stored answer.
+  const updateQuery = useQuery({
+    queryKey: ["system-update-status"],
+    queryFn: api.getUpdateStatus,
+    enabled: Boolean(user?.is_admin),
+    staleTime: 30 * 60_000,
+    refetchInterval: 60 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const updateAvailable = updateQuery.data?.state === "update_available";
   const hasBrowsable = evidencesQuery.isError || (evidencesQuery.data ?? []).some((item) => isBrowsableEvidence(item));
   const memoryEnabled = useMemoryEnabled();
   // Views that exist only for some evidence (Memory, Execution Stories, Linux Authentication) are
@@ -268,6 +281,24 @@ export default function Sidebar() {
             <p className="truncate text-[11px] text-muted">{user?.is_admin ? "Admin" : "User"}</p>
           </div>
         </div>
+        {user?.is_admin && (
+          <NavLink
+            to={updateAvailable ? "/system?tab=updates" : "/system"}
+            className={({ isActive }) =>
+              `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${
+                isActive ? "bg-accent/10 text-accent shadow-panel" : "text-muted hover:bg-white/5 hover:text-ink"
+              }`
+            }
+          >
+            <Settings2 size={16} />
+            System
+            {updateAvailable ? (
+              <span className="ml-auto rounded-full bg-accent/15 px-2 py-0.5 text-[11px] text-accent" data-testid="sidebar-update-available" title={`${updateQuery.data?.commits_behind ?? ""} new commits on ${updateQuery.data?.branch ?? "main"}`}>
+                Update
+              </span>
+            ) : null}
+          </NavLink>
+        )}
         {user?.is_admin && (
           <NavLink
             to="/admin/users"
