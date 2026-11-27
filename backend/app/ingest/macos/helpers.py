@@ -11,7 +11,7 @@ The list:
 
 * macOS-specific: launchd jobs (LaunchAgents/LaunchDaemons outside the sealed system volume),
   QuarantineEventsV2, knowledgeC.db, TCC.db, dslocal users and groups, SystemVersion.plist,
-  install.log, wifi.log and launchd.log.
+  install.log, wifi.log, launchd.log and shared file lists (recent items, favourites).
 * Unix formats macOS shares with Linux, at their macOS locations, read by the Linux parsers:
   shell histories and shell start-up files in home directories, sudoers, PAM, cron tabs, SSH
   configuration and keys lists, /etc/hosts, /etc/localtime and system.log.
@@ -28,6 +28,7 @@ from typing import Any
 from app.ingest.macos.common import original_path
 from app.ingest.macos.launchd import launchd_kind
 from app.ingest.macos.logs import log_kind
+from app.ingest.macos.shared_file_lists import is_shared_file_list
 from app.ingest.uac.live_response import is_ignored_uac_output, looks_like_uac_output
 
 MACOS_OS_TYPE = "macos"
@@ -67,6 +68,7 @@ _PARSER_FOR_FAMILY = {
     "macos_accounts": "macos_accounts_raw",
     "macos_system_info": "macos_system_info_raw",
     "macos_logs": "macos_logs_raw",
+    "macos_recent_items": "macos_recent_items_raw",
 }
 
 
@@ -91,6 +93,8 @@ def looks_like_macos_artifact(source_path: str | Path) -> tuple[str, str, str] |
         result = ("macos_knowledgec", "knowledgec")
     elif _TCC_RE.search(original):
         result = ("macos_tcc", "tcc_permission")
+    elif is_shared_file_list(original):
+        result = ("macos_recent_items", "recent_item")
     else:
         kind = log_kind(original)
         if kind:
