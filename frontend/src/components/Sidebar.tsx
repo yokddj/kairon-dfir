@@ -41,7 +41,7 @@ type NavItem = {
   description?: string;
   // Shown only when the case has evidence of this kind (a workbench id of the capability
   // registry: "windows", "linux", "macos", "memory"). Every view is one click away, with no submenus.
-  workbench?: string;
+  workbench?: string | string[];
   // Shown only when the case has a disk image or collection whose files can be browsed.
   browsable?: boolean;
 };
@@ -97,6 +97,14 @@ const INVESTIGATION_ITEMS: NavItem[] = [
     requiresCase: true,
     workbench: "macos",
     description: "macOS's file system change journal: files and folders created, removed, renamed or modified, also those no longer on disk. Searched on demand by path.",
+  },
+  {
+    to: "/cases/:caseId/files/bodyfile",
+    label: "File Listing (bodyfile)",
+    icon: FolderTree,
+    requiresCase: true,
+    workbench: ["macos", "linux"],
+    description: "Every file of a UAC collection with its access, modification, change and creation times (the MFT's counterpart). Searched on demand by path.",
   },
   {
     to: "/cases/:caseId/lateral-movement",
@@ -220,7 +228,7 @@ export default function Sidebar() {
   const investigationItems = INVESTIGATION_ITEMS.filter(
     (item) =>
       (item.workbench !== "memory" || memoryEnabled) &&
-      (!item.workbench || capabilitiesQuery.isError || presentWorkbenches.has(item.workbench)) &&
+      (!item.workbench || capabilitiesQuery.isError || (Array.isArray(item.workbench) ? item.workbench.some((id) => presentWorkbenches.has(id)) : presentWorkbenches.has(item.workbench))) &&
       (!item.browsable || hasBrowsable),
   );
 

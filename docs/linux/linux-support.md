@@ -23,7 +23,8 @@ collected files under `[root]/` go through the Linux parsers below as for any co
 command output under `live_response/` (processes with start times, connections, login history,
 packages, kernel) is parsed by the UAC live-response parser shared with macOS — see
 [macOS Support](../macos/macos-support.md#uac-live-response-macos-and-linux); the rest of UAC's
-outputs (bodyfile, hash lists, find listings) are listed as detected, not parsed. A UAC collection
+outputs (hash lists, find listings) are listed as detected, not parsed; the bodyfile (every file with
+its MAC times) is searched on demand from **File Listing (bodyfile)** in the side menu. A UAC collection
 that records `macos` is read as macOS instead.
 
 ### Expected Collection Layout

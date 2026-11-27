@@ -126,6 +126,17 @@ type, newest first (about 6-11 seconds over 17 million records). The evidence li
 - API: `GET /api/cases/{case}/evidences/{evidence}/macos/fsevents?path_contains=...&changes=removed&item_type=file`
   and `.../macos/fsevents/summary`.
 
+### File listing (UAC bodyfile, searched on demand)
+
+UAC's `bodyfile/bodyfile.txt` lists every file and folder of the collected system with its
+access, modification, metadata change and creation times (mactime format): the counterpart of an
+NTFS MFT listing, for macOS **and Linux** UAC collections. It has millions of lines (3.1 million on
+the test Mac), so it is not indexed: **File Listing (bodyfile)** in the side menu (shown when the
+case has macOS or Linux evidence) searches it by path text, newest first by the time chosen
+(about 2 seconds for 3.1 million lines). Times are UTC; a time the file system does not record
+(0) is left empty. Names containing `|` are read correctly (the last nine fields are fixed).
+API: `GET /api/cases/{case}/evidences/{evidence}/uac/bodyfile?path_contains=...&sort=mtime`.
+
 ### Unix artifacts at their macOS locations
 
 These share their format with Linux and are read by the Linux parsers, so they appear in the same
@@ -157,7 +168,8 @@ and password stores are never parsed.
 UAC saves the output of the commands it runs under `live_response/`, named after each command. The
 outputs below are parsed on every UAC collection, macOS or Linux, into the `uac_live_response`
 family; everything else under `live_response/`, plus `bodyfile/`, `hash_executables/` and the
-find-based listings under `system/`, is kept in the evidence as *detected, not parsed*.
+find-based listings under `system/`, is kept in the evidence as *detected, not parsed*; the
+bodyfile is searched on demand (see File listing).
 
 | Output | What you get |
 | --- | --- |
@@ -206,7 +218,7 @@ Flags are leads for an analyst, never detections:
 ## Not parsed
 
 - **ASL** binary logs, **Biome** and **SEGB** streams, Spotlight, Keychains, Mail and Messages: kept in the evidence, not read.
-- **UAC's bodyfile** (`bodyfile/bodyfile.txt`) and hash lists: kept, not indexed.
+- UAC's hash lists: kept, not indexed (the bodyfile is searched on demand, above).
 - LaunchAgents and LaunchDaemons under `/System/Library` and `/Library/Apple`: Apple's own, on the
   sealed system volume, not listed.
 - Disk images of a Mac (APFS) and collections from tools other than UAC.

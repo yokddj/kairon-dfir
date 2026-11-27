@@ -129,6 +129,32 @@ export type FseventsSearchResponse = {
   elapsed_seconds: number;
 };
 
+export type BodyfileRecord = {
+  path: string;
+  link_target: string | null;
+  md5: string | null;
+  inode: string;
+  mode: string;
+  uid: string;
+  gid: string;
+  size: number | null;
+  atime: string | null;
+  mtime: string | null;
+  ctime: string | null;
+  crtime: string | null;
+};
+
+export type BodyfileSearchResponse = {
+  evidence_id: string;
+  available: boolean;
+  path_contains?: string;
+  sort?: string;
+  records: BodyfileRecord[];
+  total_matches: number;
+  truncated: boolean;
+  elapsed_seconds: number;
+};
+
 export type FseventsSummary = { evidence_id: string; available: boolean; volumes: { volume: string; page_files: number }[] };
 
 export type CaseCapability = {
@@ -6476,6 +6502,12 @@ export const api = {
       }>;
       warnings: string[];
     }>(`/cases/${caseId}/host-information/rebuild`, { method: "POST" }),
+  getBodyfileSummary: (caseId: string, evidenceId: string) => request<{ evidence_id: string; available: boolean; size_bytes: number | null }>(`/cases/${caseId}/evidences/${evidenceId}/uac/bodyfile/summary`),
+  searchBodyfile: (caseId: string, evidenceId: string, params: { path_contains: string; sort?: string; limit?: number }) => {
+    const query = new URLSearchParams({ path_contains: params.path_contains, sort: params.sort || "mtime" });
+    if (params.limit) query.set("limit", String(params.limit));
+    return request<BodyfileSearchResponse>(`/cases/${caseId}/evidences/${evidenceId}/uac/bodyfile?${query.toString()}`);
+  },
   getFseventsSummary: (caseId: string, evidenceId: string) => request<FseventsSummary>(`/cases/${caseId}/evidences/${evidenceId}/macos/fsevents/summary`),
   searchFsevents: (caseId: string, evidenceId: string, params: { path_contains: string; changes?: string[]; item_type?: string; limit?: number }) => {
     const query = new URLSearchParams({ path_contains: params.path_contains });

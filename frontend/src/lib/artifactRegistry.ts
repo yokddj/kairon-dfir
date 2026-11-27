@@ -93,6 +93,7 @@ const ARTIFACT_REGISTRY: UiArtifactDefinition[] = [
   { id: "macos_ul_other", label: "Unified Logs: other (all mode)", platforms: ["macos"], view: "auto", platformShortcut: false },
   { id: "macos_unified_logs", label: "Unified Logs (source)", platforms: ["macos"], view: "auto" },
   { id: "macos_recent_items", label: "Recent items & favourites", platforms: ["macos"], view: "auto", platformShortcut: true },
+  { id: "uac_bodyfile", label: "File listing (UAC bodyfile)", platforms: ["linux", "macos"], view: "auto" },
   { id: "macos_fsevents", label: "FSEvents (searched on demand)", platforms: ["macos"], view: "auto" },
   { id: "macos_system_info", label: "System version", platforms: ["macos"], view: "auto", platformShortcut: true },
   { id: "uac_live_response", label: "UAC live response", platforms: ["linux", "macos"], view: "auto", platformShortcut: true },

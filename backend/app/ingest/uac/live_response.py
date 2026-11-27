@@ -73,6 +73,24 @@ def looks_like_uac_output(path: str | Path) -> tuple[str, str, str] | None:
     return None
 
 
+_BODYFILE_RE = re.compile(r"(?:^|/)bodyfile/bodyfile\.txt$")
+
+
+def is_uac_bodyfile(path: str | Path) -> bool:
+    """UAC's file system listing: searched on demand (app.services.uac_bodyfile), not indexed."""
+    return bool(_BODYFILE_RE.search(str(path).replace("\\", "/")))
+
+
+BODYFILE_CLASSIFICATION = {
+    "artifact_type": "uac_bodyfile",
+    "artifact_family": "uac_bodyfile",
+    "profile": "filesystem",
+    "parser": "not_implemented",
+    "status": "detected_not_parsed",
+    "reason": "UAC bodyfile (file listing with MAC times): searched on demand from File Listing, not indexed.",
+}
+
+
 def is_ignored_uac_output(path: str | Path) -> bool:
     return bool(_IGNORED_RE.search(str(path).replace("\\", "/")))
 

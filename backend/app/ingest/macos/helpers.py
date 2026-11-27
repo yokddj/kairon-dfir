@@ -29,7 +29,7 @@ from app.ingest.macos.common import original_path
 from app.ingest.macos.launchd import launchd_kind
 from app.ingest.macos.logs import log_kind
 from app.ingest.macos.shared_file_lists import is_shared_file_list
-from app.ingest.uac.live_response import is_ignored_uac_output, looks_like_uac_output
+from app.ingest.uac.live_response import BODYFILE_CLASSIFICATION, is_ignored_uac_output, is_uac_bodyfile, looks_like_uac_output
 
 MACOS_OS_TYPE = "macos"
 _DSLOCAL_RE = re.compile(r"^/(?:private/)?var/db/dslocal/nodes/Default/(?P<kind>users|groups)/[^/]+\.plist$", re.IGNORECASE)
@@ -140,6 +140,8 @@ def classify_macos_path(path: Path, root: Path) -> dict[str, Any] | None:
     from app.ingest.linux.helpers import looks_like_linux_artifact
 
     relative = str(path.relative_to(root))
+    if is_uac_bodyfile(relative):
+        return dict(BODYFILE_CLASSIFICATION)
     uac_output = looks_like_uac_output(relative)
     if uac_output:
         family, artifact_type, parser = uac_output

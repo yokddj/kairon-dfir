@@ -325,7 +325,7 @@ def test_workbench_payload_contract_is_unchanged_except_for_icon():
     assert linux["id"] == "linux"
     assert linux["label"] == "Linux"
     assert linux["kind"] == "platform"
-    assert linux["capability_ids"] == ["linux.access.authentication", "linux.execution.command_history", "linux.software.packages"]
+    assert linux["capability_ids"] == ["linux.access.authentication", "linux.execution.command_history", "linux.filesystem.bodyfile", "linux.software.packages"]
     assert linux["overview_route"] == f"/cases/{CASE_ID}/l"
     assert linux["icon"] == "shield-check"
 
