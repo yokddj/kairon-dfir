@@ -17,6 +17,20 @@ dotnet:
   note: "For full reproducibility, migrate to official .NET runtime Docker image instead of installer."
 
 tools:
+  unifiedlog_iterator:
+    version: "0.7.0"
+    source: "https://github.com/mandiant/macos-UnifiedLogs/releases/tag/v0.7.0"
+    artifacts:
+      amd64:
+        artifact: "unifiedlog_iterator-v0.7.0-x86_64-unknown-linux-gnu.tar.gz"
+        sha256: "7192a187f93c6fb8eafdad9885522e73dc2ae7a9a5000f5957edd4fcd0ca1c82"
+      arm64:
+        artifact: "unifiedlog_iterator-v0.7.0-aarch64-unknown-linux-gnu.tar.gz"
+        sha256: "ab40daf464376a2e52c4b51fd82b003b7f360a4e2726501ba853889fa3a959f4"
+    install_path: "/opt/unifiedlog/unifiedlog_iterator"
+    license: "Apache-2.0"
+    redistribution: "not-redistributed"
+    use: "macOS Unified Logs (tracev3 + uuidtext) to JSONL; see backend/app/ingest/macos/unified_logs.py"
   EvtxECmd:
     version: "net10-latest"
     artifact: "EvtxECmd.zip"
