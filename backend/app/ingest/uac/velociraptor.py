@@ -107,6 +107,14 @@ def uac_archives_in_velociraptor_collection(container, entry_paths: list[str]) -
     return found
 
 
+def _beside_an_archive(extract_dir: Path, log: Path) -> bool:
+    """The .log UAC writes beside its archive: the archive is still there, or was expanded (and
+    removed) into ``_nested_<depth>_<archive stem>`` by the ingest."""
+    if any((log.parent / f"{log.stem}{suffix}").is_file() for suffix in _ARCHIVE_SUFFIXES):
+        return True
+    return any(extract_dir.glob(f"_nested_*_{log.stem}.tar"))
+
+
 def velociraptor_files_beside_uac(extract_dir: Path, uac_root: Path) -> list[str]:
     """Velociraptor's own files of an extracted collection whose UAC output sits in a nested archive,
     and the .log copy of uac.log beside that archive: relative paths, to leave out of the ingest."""
@@ -124,7 +132,7 @@ def velociraptor_files_beside_uac(extract_dir: Path, uac_root: Path) -> list[str
             continue
         if is_velociraptor_collection_file(relative):
             found.append(relative)
-        elif relative.startswith("uploads/") and relative.endswith(".log") and any((path.parent / f"{path.stem}{suffix}").is_file() for suffix in _ARCHIVE_SUFFIXES):
+        elif relative.startswith("uploads/") and relative.endswith(".log") and _beside_an_archive(extract_dir, path):
             found.append(relative)
     return sorted(found)
 

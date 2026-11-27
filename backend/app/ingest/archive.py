@@ -2,6 +2,7 @@ import errno
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 import shutil
 import struct
@@ -544,6 +545,68 @@ def skipped_dangerous_links(exc: subprocess.CalledProcessError) -> list[str] | N
     return links or None
 
 
+_SEVEN_ZIP_PERCENT_RE = re.compile(r"^\s*(\d{1,3})%")
+
+
+def _run_seven_zip_with_progress(args: list[str], *, timeout: int, on_percent: Callable[[int], None]) -> None:
+    """Runs 7-Zip like ``subprocess.run(..., check=True, capture_output=True)`` while reporting the
+    percentage it prints (``-bsp1``). Extracting a multi-gigabyte tar takes minutes, and nothing else
+    tells how far it is. Raises CalledProcessError (with the output, progress removed) or
+    TimeoutExpired as subprocess.run would."""
+    import threading
+
+    process = subprocess.Popen([*args, "-bsp1"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    kept: list[bytes] = []
+    errors: list[bytes] = []
+    last = [-1]
+
+    def read_stdout() -> None:
+        assert process.stdout is not None
+        buffer = b""
+        while True:
+            chunk = process.stdout.read(4096)
+            if not chunk:
+                break
+            buffer += chunk
+            # Progress is rewritten in place with backspaces; real output ends in newlines.
+            parts = re.split(rb"[\b\r\n]", buffer)
+            buffer = parts.pop()
+            for part in parts:
+                text = part.decode("utf-8", "ignore")
+                match = _SEVEN_ZIP_PERCENT_RE.match(text)
+                if match:
+                    percent = min(int(match.group(1)), 100)
+                    if percent != last[0]:
+                        last[0] = percent
+                        try:
+                            on_percent(percent)
+                        except Exception:  # noqa: BLE001 - progress must never break extraction
+                            logger.debug("extraction progress callback failed", exc_info=True)
+                elif part.strip():
+                    kept.append(part + b"\n")
+        if buffer.strip() and not _SEVEN_ZIP_PERCENT_RE.match(buffer.decode("utf-8", "ignore")):
+            kept.append(buffer)
+
+    def read_stderr() -> None:
+        assert process.stderr is not None
+        errors.append(process.stderr.read())
+
+    readers = [threading.Thread(target=read_stdout, daemon=True), threading.Thread(target=read_stderr, daemon=True)]
+    for reader in readers:
+        reader.start()
+    try:
+        returncode = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        for reader in readers:
+            reader.join(timeout=5)
+    if returncode != 0:
+        raise subprocess.CalledProcessError(returncode, args, output=b"".join(kept), stderr=b"".join(errors))
+
+
 def _extract_seven_zip(source: Path, dest_dir: Path, progress_cb: Callable[[dict], None] | None) -> tuple[list[str], list[dict]]:
     manifest_entries: list[dict] = []
     try:
@@ -551,12 +614,15 @@ def _extract_seven_zip(source: Path, dest_dir: Path, progress_cb: Callable[[dict
             temp_extract_dir = Path(tmp_dir)
             skipped_links: list[str] = []
             try:
-                subprocess.run(
-                    ["7z", "x", str(source), f"-o{temp_extract_dir}", "-y"],
-                    check=True,
-                    capture_output=True,
-                    timeout=settings.archive_extraction_timeout_seconds,
-                )
+                command = ["7z", "x", str(source), f"-o{temp_extract_dir}", "-y"]
+                if progress_cb is None:
+                    subprocess.run(command, check=True, capture_output=True, timeout=settings.archive_extraction_timeout_seconds)
+                else:
+                    _run_seven_zip_with_progress(
+                        command,
+                        timeout=settings.archive_extraction_timeout_seconds,
+                        on_percent=lambda percent: progress_cb({"current_action": "extracting_archive", "archive_percent": percent, "current_path": source.name}),
+                    )
             except subprocess.CalledProcessError as exc:
                 links = skipped_dangerous_links(exc)
                 if links is None:

@@ -97,3 +97,17 @@ def test_velociraptor_files_beside_the_extracted_uac_are_left_out(tmp_path: Path
     )
     # Without Velociraptor's files, or with the UAC output at the top, nothing is left out.
     assert velociraptor_files_beside_uac(root, root) == []
+
+
+def test_the_log_beside_an_archive_already_expanded_is_left_out(tmp_path: Path) -> None:
+    extract = tmp_path / "extracted"
+    log = extract / ARCHIVE.replace(".tar.gz", ".log")
+    log.parent.mkdir(parents=True)
+    log.write_text("x")
+    (extract / "client_info.json").write_text("{}")
+    # The ingest removed the .tar.gz after expanding it into _nested_0_<name>.tar.
+    root = extract / "_nested_0_uac-testhost-linux-20260102030405.tar"
+    (root / "live_response").mkdir(parents=True)
+    (root / "uac.log").write_text(UAC_LOG)
+    assert velociraptor_files_beside_uac(extract, root) == ["client_info.json", ARCHIVE.replace(".tar.gz", ".log")]
+

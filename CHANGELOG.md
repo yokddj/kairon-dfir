@@ -59,6 +59,8 @@
 
 ### Changed
 
+- **Extraction of large archives shows its progress and takes half the space**: while 7-Zip unpacks an archive (minutes for a multi-gigabyte collection, before its files can be counted) the progress bar now follows 7-Zip's own percentage instead of standing still; each nested archive starts again. An archive inside the evidence that has been expanded (a `.tar.gz` and the `.tar` inside it) is removed from the working copy once its contents are out, since the original evidence still holds it: a UAC collection of a Mac (1.9 GB `.tar.gz`, 6.4 GB `.tar`) kept about 16 GB on disk and now keeps about 8 GB. Reprocessing still works, from the original.
+
 - **MCP server documentation** rewritten as a setup guide: creating the service token with `curl`, choosing stdio or HTTP, client configuration examples (Claude Code, Claude Desktop, VS Code), a check that it works, the tool list and a troubleshooting table.
 - **Time inputs use the display timezone**: From/To are read and shown in the timezone selected in the top bar (user, case or UTC). Before, Timeline sent the typed time without a zone (taken as UTC) and Search/Artifact Views used the browser's zone, so the same window filtered differently per screen and differed from the timestamps shown.
 - **One text engine**: Artifact Views' smart mode now matches like Search (a bare stem such as `comsvcs` finds `comsvcs.dll`), and Command History's text search, which only matched whole tokens, uses the same engine. Artifact Views' former `ioc` mode is the `Exact` mode.
