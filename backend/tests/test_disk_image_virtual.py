@@ -743,3 +743,21 @@ def test_vmdk_materialize_provenance_has_source_fields(sqlite_session, tmp_path:
         assert "acquisition_method" in src
         assert src["disk_image_id"] is not None
         assert src["disk_volume_id"] is not None
+
+
+def test_detectors_probe_qemu_img_once_and_never_for_small_files(monkeypatch, tmp_path: Path) -> None:
+    from app.disk_images import qemu as qemu_module
+    from app.disk_images.registry import get_image_format_registry
+
+    calls: list[str] = []
+    monkeypatch.setattr(qemu_module, "qemu_img_info", lambda path: calls.append(str(path)) or None)
+    qemu_module._probe_cached.cache_clear()
+    small = tmp_path / "Info.plist"
+    small.write_bytes(b"<plist>" + b"\0" * 700)
+    large = tmp_path / "blob.bin"
+    large.write_bytes(b"\0" * (2 * 1024 * 1024))
+    registry = get_image_format_registry()
+    registry.detect(small)
+    assert calls == []
+    registry.detect(large)
+    assert calls == [str(large)]

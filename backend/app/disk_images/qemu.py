@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,34 @@ def qemu_img_info(path: Path) -> dict[str, Any] | None:
         return json.loads(completed.stdout)
     except json.JSONDecodeError:
         return None
+
+
+# No virtual disk format is smaller than this; the small VMDK descriptor files are text whose
+# magic ("# Disk DescriptorFile") the detectors match without qemu-img.
+_PROBE_MIN_BYTES = 1024 * 1024
+
+
+@lru_cache(maxsize=4096)
+def _probe_cached(path: str, size: int, mtime_ns: int) -> dict[str, Any] | None:
+    return qemu_img_info(Path(path))
+
+
+def qemu_img_probe(path: Path) -> dict[str, Any] | None:
+    """qemu-img's view of a file for format *detection*: run once per file, not per detector.
+
+    Classifying a collection asks every disk-image detector about every file. Each fell back to
+    its own ``qemu-img info`` run when the file's magic did not match, so a 34,000-file
+    collection started about 136,000 processes (12 minutes of a 4.7 GB macOS collection's
+    ingest). The result is now shared by the detectors, and files too small to be a disk image
+    are not probed at all.
+    """
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    if not path.is_file() or stat.st_size < _PROBE_MIN_BYTES:
+        return None
+    return _probe_cached(str(path), stat.st_size, stat.st_mtime_ns)
 
 
 def _format_from_info(info: dict[str, Any] | None, path: Path) -> str | None:

@@ -15,6 +15,7 @@ from app.disk_images.qemu import (
     qemu_img_check,
     qemu_img_convert_to_raw,
     qemu_img_info,
+    qemu_img_probe,
 )
 
 _VHD_SIGNATURES = (b"conectix", b"vhdxfile")
@@ -45,7 +46,7 @@ class VhdImageAdapter:
         header = _read_header(path, 65536)
         if header and any(sig in header for sig in _VHD_SIGNATURES):
             return {"format": self.key, "confidence": "magic", "supported": self.readiness()["ready"]}
-        info = qemu_img_info(path)
+        info = qemu_img_probe(path)
         fmt = _format_from_info(info, path)
         if fmt in {"vhd", "vhdx"}:
             return {"format": self.key, "confidence": "qemu_img_format", "variant": fmt, "supported": self.readiness()["ready"]}

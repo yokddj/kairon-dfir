@@ -13,6 +13,7 @@ from app.disk_images.qemu import (
     qemu_img_check,
     qemu_img_convert_to_raw,
     qemu_img_info,
+    qemu_img_probe,
 )
 
 _VDI_SIGNATURE = b"<<< Oracle VM VirtualBox Disk Image >>>"
@@ -28,7 +29,7 @@ class VdiImageAdapter:
         header = _read_header(path, 65536)
         if header and _VDI_SIGNATURE in header:
             return {"format": self.key, "confidence": "magic", "supported": self.readiness()["ready"]}
-        info = qemu_img_info(path)
+        info = qemu_img_probe(path)
         fmt = _format_from_info(info, path)
         if fmt == "vdi":
             return {"format": self.key, "confidence": "qemu_img_format", "supported": self.readiness()["ready"]}
