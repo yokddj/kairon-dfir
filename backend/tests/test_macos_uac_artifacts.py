@@ -211,6 +211,7 @@ def test_macos_collection_reads_only_the_artifact_list(uac_root: Path) -> None:
     assert parsers["[root]/private/etc/sudoers"] == "linux_sudoers_raw"
     assert parsers["live_response/process/ps_-eo_user_pid_ppid_pcpu_pmem_tty_stat_lstart_args.txt"] == "uac_live_response_raw"
     assert parsers["uac.log"] == "uac_live_response_raw"
+    assert by_path["bodyfile/bodyfile.txt"]["artifact_type"] == "uac_bodyfile" and parsers["bodyfile/bodyfile.txt"] == "not_implemented"
     # The sealed system volume, other tools' files and UAC outputs that are not parsed stay out.
     for absent in (
         "[root]/System/Library/LaunchDaemons/com.apple.sealed.plist",
@@ -218,7 +219,6 @@ def test_macos_collection_reads_only_the_artifact_list(uac_root: Path) -> None:
         "[root]/Users/alice/Documents/report.csv",
         "[root]/opt/homebrew/var/log/nginx/error.log",
         "live_response/system/df.txt",
-        "bodyfile/bodyfile.txt",
     ):
         assert absent not in by_path
     assert not any("process/strings" in path for path in by_path)

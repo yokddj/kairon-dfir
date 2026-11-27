@@ -21,7 +21,7 @@ from app.ingest.usb.helpers import looks_like_usb_artifact
 from app.ingest.windows_ui.helpers import looks_like_windows_ui_artifact
 from app.ingest.wmi.helpers import looks_like_wmi_artifact
 from app.ingest.linux.helpers import looks_like_linux_artifact
-from app.ingest.uac.live_response import is_unparsed_uac_output, looks_like_uac_output
+from app.ingest.uac.live_response import BODYFILE_CLASSIFICATION, is_uac_bodyfile, is_unparsed_uac_output, looks_like_uac_output
 from app.ingest.netscaler.helpers import looks_like_netscaler_artifact
 from app.disk_images.service import detect_disk_image_format
 from app.ingest.evidence_classifier import EvidenceCategory, get_evidence_classifier
@@ -319,6 +319,8 @@ def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
             "parser": parser,
             "reason": "UAC live-response output",
         }
+    if is_uac_bodyfile(path):
+        return dict(BODYFILE_CLASSIFICATION)
     if is_unparsed_uac_output(path):
         return {
             "artifact_type": "uac_output",

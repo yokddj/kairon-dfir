@@ -127,7 +127,7 @@ describe("registry-driven sidebar", () => {
     const labels = within(investigation).getAllByRole("link").map((link) => link.textContent);
     expect(labels).toEqual([
       "Overview", "Evidence", "Host Information", "Search", "Artifact Views", "Source Tables", "Command History", "Execution Stories",
-      "Linux Authentication", "Lateral Movement", "Memory", "Timeline", "Incident Timeline", "Detections", "Findings", "Reports",
+      "Linux Authentication", "File Listing (bodyfile)", "Lateral Movement", "Memory", "Timeline", "Incident Timeline", "Detections", "Findings", "Reports",
     ]);
     expect(screen.queryByText("Investigation Surfaces")).not.toBeInTheDocument();
     expect(screen.queryByTestId(/^surface-/)).not.toBeInTheDocument();
@@ -151,6 +151,7 @@ describe("registry-driven sidebar", () => {
     renderSidebar();
 
     expect(await screen.findByRole("link", { name: "File Changes (FSEvents)" })).toHaveAttribute("href", "/cases/case-1/mac/filesystem/fsevents");
+    expect(screen.getByRole("link", { name: "File Listing (bodyfile)" })).toHaveAttribute("href", "/cases/case-1/files/bodyfile");
     expect(screen.queryByRole("link", { name: "Linux Authentication" })).not.toBeInTheDocument();
   });
 
