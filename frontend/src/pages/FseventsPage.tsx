@@ -56,11 +56,15 @@ export default function FseventsPage() {
     <div className="space-y-6" data-testid="fsevents-page">
       <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
         <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">macOS &middot; File System Events</p>
-        <h1 className="mt-2 text-2xl font-semibold text-ink">FSEvents</h1>
+        <h1 className="mt-2 text-2xl font-semibold text-ink">File Changes (FSEvents)</h1>
         <p className="mt-2 max-w-3xl text-sm text-muted">
-          The change journal macOS keeps per volume: files and folders created, removed, renamed or modified, also for files that no longer exist.
-          Searched on demand from the evidence (not indexed). Records carry no time of their own: they are ordered by event id, newest first, and the
-          page time is when their page was written &mdash; the latest the change can have happened.
+          macOS&apos;s change journal, the counterpart of NTFS&apos;s USN journal: files and folders created, removed, renamed or modified, including
+          files that no longer exist. Type part of a path (a folder, a file name, an extension) and search: the journal is read from the evidence on
+          demand, it is not in Search or the Timeline.
+        </p>
+        <p className="mt-2 max-w-3xl text-xs text-muted/80">
+          Records carry no time of their own. They are listed newest first by event id; &ldquo;page written&rdquo; is the latest moment the change can
+          have happened.
         </p>
         <form className="mt-5 flex flex-wrap items-end gap-3" onSubmit={submit}>
           {macosEvidences.length > 1 ? (

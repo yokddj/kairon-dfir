@@ -6,6 +6,7 @@ import {
   Cpu,
   Database,
   FileArchive,
+  FileClock,
   Fingerprint,
   Flag,
   FolderSearch2,
@@ -39,7 +40,7 @@ type NavItem = {
   requiresCase?: boolean;
   description?: string;
   // Shown only when the case has evidence of this kind (a workbench id of the capability
-  // registry: "windows", "linux", "memory"). Every view is one click away, with no submenus.
+  // registry: "windows", "linux", "macos", "memory"). Every view is one click away, with no submenus.
   workbench?: string;
   // Shown only when the case has a disk image or collection whose files can be browsed.
   browsable?: boolean;
@@ -88,6 +89,14 @@ const INVESTIGATION_ITEMS: NavItem[] = [
     requiresCase: true,
     workbench: "linux",
     description: "Logins, failed attempts, sudo and SSH activity from Linux authentication logs.",
+  },
+  {
+    to: "/cases/:caseId/mac/filesystem/fsevents",
+    label: "File Changes (FSEvents)",
+    icon: FileClock,
+    requiresCase: true,
+    workbench: "macos",
+    description: "macOS's file system change journal: files and folders created, removed, renamed or modified, also those no longer on disk. Searched on demand by path.",
   },
   {
     to: "/cases/:caseId/lateral-movement",
