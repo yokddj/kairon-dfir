@@ -1443,10 +1443,24 @@ def _has_recognized_raw_artifacts(container) -> bool:
         return True
 
 
+def _is_velociraptor_uac_collection(path: Path, entries: list[str] | None) -> bool:
+    """A Velociraptor collection that only ran UAC: read as an archive holding a UAC collection,
+    since Velociraptor's discovery knows Windows artifacts only (app.ingest.uac.velociraptor)."""
+    if not entries or not is_supported_archive_container(path):
+        return False
+    from app.ingest.uac.velociraptor import uac_archives_in_velociraptor_collection
+
+    try:
+        return bool(uac_archives_in_velociraptor_collection(open_evidence_container(path), entries))
+    except Exception:  # noqa: BLE001 - routing falls back to discovery
+        logger.warning("Could not check a Velociraptor collection for UAC output", exc_info=True)
+        return False
+
+
 def _should_route_to_raw_collection_discovery(path: Path, entries: list[str] | None = None) -> bool:
     evidence_type = detect_evidence_type(path, entries)
     if evidence_type == EvidenceType.velociraptor_zip:
-        return True
+        return not _is_velociraptor_uac_collection(path, entries)
     if entries and _looks_like_raw_collection_entries(entries):
         return True
     return False

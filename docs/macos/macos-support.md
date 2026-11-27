@@ -37,6 +37,20 @@ upload.
 Selecting **macOS (UAC)** as the evidence platform in the wizard has the same effect on a collection
 whose `uac.log` is missing.
 
+#### UAC run by Velociraptor
+
+Velociraptor's UAC artifacts (`Generic.Collection.UAC` and custom variants) run UAC on the client
+and upload its archive, so the collection ZIP holds `uploads/.../uac-<host>-<os>-<time>.tar.gz`
+(and the `.log` UAC writes beside it) plus Velociraptor's own files: the artifact's `results/`
+(UAC's console output), `log.json`, `uploads.json`, `requests.json`, `client_info.json` and
+`collection_context.json`. When the ZIP holds nothing else and the archive is UAC's (its `uac.log`
+and output folders among its first members; the name is not trusted), it is not sent to
+Velociraptor's artifact selection, which knows Windows artifacts only: it is read as an archive
+holding a UAC collection, extracted, and its `uac.log` decides the platform as above. Velociraptor's
+own files and the `.log` copy of `uac.log` are left out of the ingest; the evidence lists them under
+`velociraptor_uac_collection`. A Velociraptor collection with other artifacts as well keeps
+Velociraptor's selection.
+
 ## What is parsed: a closed list
 
 UAC's `full` profile also copies every `*.log`, `*.csv`, `*.json`... it finds on the disk —

@@ -5762,6 +5762,24 @@ def ingest_evidence(evidence_id: str) -> None:
             # UAC names the operating system it ran on in its own log: firsthand, unlike path markers
             # (a Mac's /private/var/log/ also looks like Linux's /var/log/).
             metadata["uac_collection"] = uac_collection.as_metadata()
+            if not is_selected_velociraptor and extract_dir.resolve() != stored_path.resolve():
+                # A UAC collection run by Velociraptor: the collection's own files (the artifact's
+                # results, which are UAC's console output, its logs and request) and the .log copy of
+                # uac.log are not evidence of the host. Removed from the managed copy only.
+                from app.ingest.uac.velociraptor import velociraptor_files_beside_uac
+
+                dropped = set(velociraptor_files_beside_uac(extract_dir, Path(uac_collection.root)))
+                if dropped:
+                    for relative in dropped:
+                        (extract_dir / relative).unlink(missing_ok=True)
+                    archive_entries = [
+                        {**entry, "ignored": True, "reason": "velociraptor_collection_file", "status": "ignored", "local_path": None}
+                        if str(entry.get("path") or "").replace("\\", "/") in dropped
+                        else entry
+                        for entry in archive_entries
+                    ]
+                    extracted_files = [entry["path"] for entry in archive_entries if entry.get("status") == "extracted"]
+                    metadata["velociraptor_uac_collection"] = {"files_left_out": sorted(dropped)}
             if uac_collection.operating_system in UAC_PLATFORM_BY_OS:
                 path_detected_platform = UAC_PLATFORM_BY_OS[uac_collection.operating_system]
         # For disk images, the path-marker heuristic above only sees whatever
