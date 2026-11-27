@@ -2,6 +2,7 @@ import csv
 import json
 import re
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -2220,6 +2221,27 @@ def normalize_user_activity_raw_hive(case_id: str, evidence_id: str, artifact_id
     return [document]
 
 
+class NormalizedRows(Sequence):
+    """A read-only sequence of documents normalized from a sequence of rows as they are read: the
+    ingest slices it into batches like a list, without holding every document in memory."""
+
+    def __init__(self, rows: Sequence[dict], normalize):
+        self._rows = rows
+        self._normalize = normalize
+
+    def __len__(self) -> int:
+        return len(self._rows)
+
+    def __getitem__(self, index):  # type: ignore[override]
+        if isinstance(index, slice):
+            return [self._normalize(row) for row in self._rows[index]]
+        return self._normalize(self._rows[index])
+
+    def __iter__(self):
+        for row in self._rows:
+            yield self._normalize(row)
+
+
 def _normalize_macos_or_uac_file(case_id: str, evidence_id: str, artifact_id: str, path: Path, artifact_meta: dict, artifact_family: str) -> list[dict]:
     parser = str(artifact_meta.get("parser") or "").lower()
     source_path_value = str(artifact_meta.get("source_path") or path)
@@ -2244,7 +2266,13 @@ def _normalize_macos_or_uac_file(case_id: str, evidence_id: str, artifact_id: st
             "bulk_index_errors": 0,
         }
         raise
-    documents = [normalize_row(case_id, evidence_id, artifact_id, row, artifact_meta) for row in rows]
+    from app.ingest.macos.row_store import CollapsedRows
+
+    if isinstance(rows, CollapsedRows):
+        # Too many to hold normalized at once (Unified Logs): normalized a batch at a time.
+        documents: Sequence[dict] = NormalizedRows(rows, lambda row: normalize_row(case_id, evidence_id, artifact_id, row, artifact_meta))
+    else:
+        documents = [normalize_row(case_id, evidence_id, artifact_id, row, artifact_meta) for row in rows]
     parser_status = "parsed" if documents else "parsed_empty"
     artifact_meta["raw_parser_status"] = parser_status
     artifact_meta["raw_parser_errors"] = []

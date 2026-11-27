@@ -28,11 +28,11 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Sequence, Iterator
 from pathlib import Path
 from typing import Any
 
-from app.ingest.macos.logs import collapse_repeats
+from app.ingest.macos.row_store import collapse_to_disk
 
 ARTIFACT_FAMILY = "macos_unified_logs"
 DIAGNOSTICS_PARTS = ("Persist", "Special", "Signpost", "timesync", "HighVolume")
@@ -183,7 +183,9 @@ def iter_entries(archive: Path, *, binary: str, timeout_seconds: int = _DEFAULT_
             process.wait()
 
 
-def parse_unified_logs(path: Path, *, source_path: str) -> list[dict[str, Any]]:
+def parse_unified_logs(path: Path, *, source_path: str) -> "Sequence[dict[str, Any]]":
+    """The kept entries, folded and in time order. Returned as a sequence backed by a temporary
+    SQLite file (app.ingest.macos.row_store): a Mac's logs do not fit in the worker's memory."""
     from app.core.config import get_settings
 
     located = diagnostics_and_uuidtext(path)
@@ -198,8 +200,7 @@ def parse_unified_logs(path: Path, *, source_path: str) -> list[dict[str, Any]]:
     work_dir = Path(tempfile.mkdtemp(prefix="unifiedlogs-", dir=str(temp_root)))
     try:
         archive = build_logarchive(*located, work_dir)
-        rows = [entry_row(entry, source_path=source_path) for entry in iter_entries(archive, binary=binary) if keep_all or is_forensic(entry)]
+        kept = (entry_row(entry, source_path=source_path) for entry in iter_entries(archive, binary=binary) if keep_all or is_forensic(entry))
+        return collapse_to_disk(kept, temp_dir=temp_root)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
-    rows.sort(key=lambda row: str(row.get("timestamp") or ""))
-    return collapse_repeats(rows)
