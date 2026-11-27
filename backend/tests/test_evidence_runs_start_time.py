@@ -26,3 +26,12 @@ def test_run_takes_its_own_start_once_the_worker_sets_it_and_keeps_it():
     run = list_evidence_runs(synced)[0]
     assert run["started_at"] == created_at
     assert run["elapsed_seconds"] == 12.0
+
+
+def test_running_run_without_any_start_time_is_stamped_and_keeps_it():
+    metadata = _queued_reprocess("2020-01-01T10:00:00+00:00", 3720.0)
+    synced = sync_ingest_run_from_metadata(metadata, run_id="run-2", ingest_status="processing")
+    stamped = list_evidence_runs(synced)[0]["started_at"]
+    assert stamped is not None and stamped >= list_evidence_runs(synced)[0]["created_at"]
+    again = sync_ingest_run_from_metadata(synced, run_id="run-2", ingest_status="processing")
+    assert list_evidence_runs(again)[0]["started_at"] == stamped
