@@ -5221,6 +5221,7 @@ def ingest_evidence(evidence_id: str) -> None:
         )
         slow_artifacts: list[dict] = []
         detection_warnings: list = []
+        step_seconds: dict[str, float] = {}
         opensearch_bulk = {
             "attempted": False,
             "success": True,
@@ -5668,7 +5669,10 @@ def ingest_evidence(evidence_id: str) -> None:
             elif stored_path.is_dir():
                 extracted_files, archive_entries = inventory_folder(stored_path, progress_cb=extraction_progress) if use_external_directory else copy_folder(stored_path, extract_dir, progress_cb=extraction_progress)
             elif is_supported_archive_container(stored_path):
+                step_started = time.perf_counter()
                 extracted_files, archive_entries = extract_archive(stored_path, extract_dir, progress_cb=extraction_progress)
+                step_seconds["archive_extraction"] = round(time.perf_counter() - step_started, 2)
+                step_started = time.perf_counter()
                 if archive_entries:
                     extracted_files, archive_entries, disk_image_materialization = _classify_and_dispatch_extracted(
                         db=db,
@@ -5678,6 +5682,7 @@ def ingest_evidence(evidence_id: str) -> None:
                         archive_entries=archive_entries,
                         progress_cb=extraction_progress,
                     )
+                step_seconds["nested_archives_and_classification"] = round(time.perf_counter() - step_started, 2)
             else:
                 target = extract_dir / stored_path.name
                 target.write_bytes(stored_path.read_bytes())
@@ -5707,6 +5712,7 @@ def ingest_evidence(evidence_id: str) -> None:
             manifest["stats"]["wal_shm_files_extracted"] = selective_stats.get("wal_shm_files_extracted", 0)
             manifest["stats"]["processed_files"] = selective_stats.get("selected_files_materialized", 0)
         else:
+            step_started = time.perf_counter()
             for entry in archive_entries:
                 file_path = extract_dir / entry["path"]
                 manifest["files"].append(
@@ -5718,6 +5724,7 @@ def ingest_evidence(evidence_id: str) -> None:
             manifest["stats"]["ignored_files"] = sum(1 for entry in archive_entries if entry.get("ignored"))
             manifest["stats"]["processed_files"] = len(extracted_files)
             write_tree_metadata(reset_staging_dir(evidence.case_id, evidence.id) / "tree.json", extracted_files)
+            step_seconds["manifest_with_file_hashes"] = round(time.perf_counter() - step_started, 2)
         extraction_diagnostics = {
             "archive_size_bytes": stored_path.stat().st_size if stored_path.exists() and stored_path.is_file() else None,
             "container_type": "directory" if stored_path.is_dir() else stored_path.suffix.lower().lstrip(".") or "file",
@@ -5729,6 +5736,8 @@ def ingest_evidence(evidence_id: str) -> None:
             "archive_bytes_extracted": sum(int(entry.get("size") or 0) for entry in archive_entries if not entry.get("ignored")),
             "selected_extraction": bool(is_selected_velociraptor),
             "selected_extraction_stats": selective_stats if is_selected_velociraptor else {},
+            # Wall time of each extraction step, to see where a large collection's time goes.
+            "step_seconds": step_seconds,
         }
         truncation = archive_truncation(archive_entries)
         if truncation:
@@ -5873,7 +5882,13 @@ def ingest_evidence(evidence_id: str) -> None:
             _benchmark_sample_resources(benchmark_state)
 
         if not is_selected_velociraptor:
+            step_started = time.perf_counter()
             artifacts = _select_artifacts(evidence, extract_dir, progress_cb=discovery_progress if evidence.evidence_type == EvidenceType.velociraptor_zip else None)
+            step_seconds["artifact_listing"] = round(time.perf_counter() - step_started, 2)
+            stored_diagnostics = dict((evidence.metadata_json or {}).get("extraction_diagnostics") or {})
+            if stored_diagnostics:
+                stored_diagnostics["step_seconds"] = dict(step_seconds)
+                evidence.metadata_json = merge_evidence_metadata(evidence.metadata_json or {}, {"extraction_diagnostics": stored_diagnostics})
         for artifact_info in artifacts:
             source_path = str(artifact_info.get("source_path") or "")
             if source_path and source_path in disk_source_map:
