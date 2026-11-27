@@ -11821,6 +11821,9 @@ def test_evtx_artifact_progress_callback_preserves_indexed_counts_and_times_out(
             "records_processed_total": 125,
         },
     )
+    # Past EVTX_ARTIFACT_MAX_SECONDS the file is only marked slow; it stops at the total runtime cap.
+    callback({"records_read": 250, "events_buffered": 10, "errors_count": 0})
+    monkeypatch.setattr("app.workers.tasks.settings.evtx_max_active_runtime_seconds", 1)
     with pytest.raises(TimeoutError):
         callback({"records_read": 250, "events_buffered": 10, "errors_count": 0})
     assert updates

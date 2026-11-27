@@ -49,7 +49,8 @@ have no access to Docker on the host, on purpose.
 ## Instance settings
 
 A closed list of settings read when a service starts: log level, wizard advanced options, ingest and
-archive limits and timeouts, disk image ingest and export limits, and, when memory analysis is
+archive limits and timeouts, Windows event log limits (slow mark, stop when stalled, longest time per
+file), disk image ingest and export limits, and, when memory analysis is
 enabled, the Windows memory engine, memory job limits and the memory switches (automatic
 preparation, Run all, MemProcFS crash retry, MemProcFS YARA rules under the Elastic License 2.0,
 Linux symbol uploads).

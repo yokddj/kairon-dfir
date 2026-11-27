@@ -2763,6 +2763,11 @@ def _evtx_fast_batch_size(default_batch_size: int | None) -> int:
     return min(max(int(default_batch_size or 0), 1), 100)
 
 
+class EvtxArtifactLimitExceeded(TimeoutError):
+    """Raised by the progress callback to stop an EVTX file that stalled or ran too long. Never a
+    reason to retry the file with another parser."""
+
+
 def _iter_full_evtx_batches_with_backend(
     *,
     path: Path,
@@ -2777,6 +2782,7 @@ def _iter_full_evtx_batches_with_backend(
 ):
     selection = select_evtx_parser_backend(requested_backend)
     if selection.get("selected") == EVTXECMD_BACKEND_CSV:
+        yielded = False
         try:
             parser = EvtxECmdCsvBackend()
             for result in parser.iter_batches(
@@ -2792,9 +2798,16 @@ def _iter_full_evtx_batches_with_backend(
                 result.metadata["evtx_parser_backend_version"] = selection.get("version") or ""
                 result.metadata["evtx_parser_backend_fallback"] = False
                 result.metadata["evtx_parser_backend_error"] = None
+                yielded = True
                 yield selection, result
             return
+        except EvtxArtifactLimitExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001
+            if yielded:
+                # Batches of this file are already indexed: reading it again with the Python parser
+                # would index them twice.
+                raise
             fallback_selection = {
                 **selection,
                 "selected": EVTX_RAW_PYTHON_BACKEND,
@@ -4873,23 +4886,35 @@ def _artifact_progress_callback(
         current_records_read = int(progress.get("records_read") or 0)
         current_events_buffered = int(progress.get("events_buffered") or 0)
         current_errors = int(progress.get("errors_count") or 0)
-        tracker["last_progress_monotonic"] = now
+        if current_records_read != int(tracker.get("last_records_read") or 0):
+            tracker["last_progress_monotonic"] = now
         tracker["last_records_read"] = current_records_read
         current_records_indexed = int(progress.get("records_indexed") or tracker.get("records_indexed_in_artifact") or 0)
         events_indexed_total = int(progress.get("events_indexed_total") or tracker.get("events_indexed_total") or indexed_count)
         pending_index_records = max(current_records_read - current_records_indexed, 0)
         artifact_elapsed_seconds = max(now - float(tracker.get("artifact_started_monotonic") or now), 0.001)
+        # EVTX_ARTIFACT_MAX_SECONDS only marks a file as slow: a large Security.evtx takes minutes and
+        # must not be cut while it still reads records. It stops when no record is read for
+        # EVTX_NO_PROGRESS_STALL_SECONDS, or after EVTX_MAX_ACTIVE_RUNTIME_SECONDS in all (0 = never).
         max_seconds = max(int(settings.evtx_artifact_max_seconds or 0), 0)
         is_slow = max_seconds > 0 and artifact_elapsed_seconds >= max_seconds
         if is_slow and not tracker.get("slow_artifact_logged"):
             logger.warning(
-                "EVTX artifact %s exceeded max runtime (%ss) after %s records read / %s indexed",
+                "EVTX artifact %s is slow: %ss after %s records read / %s indexed",
                 artifact_name,
                 max_seconds,
                 current_records_read,
                 current_records_indexed,
             )
             tracker["slow_artifact_logged"] = True
+        stall_seconds = max(int(settings.evtx_no_progress_stall_seconds or 0), 0)
+        max_runtime_seconds = max(int(settings.evtx_max_active_runtime_seconds or 0), 0)
+        stalled_for = now - float(tracker.get("last_progress_monotonic") or now)
+        stop_reason = None
+        if stall_seconds and stalled_for >= stall_seconds:
+            stop_reason = f"EVTX artifact read no record for {int(stalled_for)}s"
+        elif max_runtime_seconds and artifact_elapsed_seconds >= max_runtime_seconds:
+            stop_reason = f"EVTX artifact exceeded {max_runtime_seconds}s"
         _update_progress_isolated(
             evidence_id,
             phase="parsing",
@@ -4920,10 +4945,8 @@ def _artifact_progress_callback(
                 "raw_artifacts_not_parsed": raw_artifacts_not_parsed,
             },
         )
-        if is_slow:
-            raise TimeoutError(
-                f"EVTX artifact exceeded {max_seconds}s: {artifact_name} ({current_records_read} read / {current_records_indexed} indexed)"
-            )
+        if stop_reason:
+            raise EvtxArtifactLimitExceeded(f"{stop_reason}: {artifact_name} ({current_records_read} read / {current_records_indexed} indexed)")
 
     _callback._tracker = tracker  # type: ignore[attr-defined]
     return _callback

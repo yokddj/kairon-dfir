@@ -2001,7 +2001,13 @@ function formatReportStatus(status: string | null | undefined) {
             <p className="mt-1">
               Recovered {latestRetryRecoveredCount} · Still failing {latestRetryStillFailedCount} · Skipped {latestRetrySkippedCount}
             </p>
-            {retryRunData.final_message ? <p className="mt-1 text-muted">{retryRunData.final_message}</p> : latestRetryRecoveredCount === 0 && latestRetryStillFailedCount === 0 ? <p className="mt-1 text-muted">No retryable failures remain.</p> : null}
+            {retryActive && String(latestRetryRun?.status ?? "") === "queued" ? (
+              <p className="mt-1 text-muted">Queued: waiting for the ingest worker to pick it up.</p>
+            ) : retryRunData.final_message ? (
+              <p className="mt-1 text-muted">{retryRunData.final_message}</p>
+            ) : !retryActive && latestRetryRecoveredCount === 0 && latestRetryStillFailedCount === 0 && realFailureCount === 0 ? (
+              <p className="mt-1 text-muted">No retryable failures remain.</p>
+            ) : null}
           </div>
         ) : null}
       </section>
