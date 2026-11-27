@@ -1349,6 +1349,7 @@ def _compute_extraction_progress(
     current_action: str,
     total_files: int,
     processed_files: int,
+    archive_percent: int | None = None,
 ) -> tuple[int, str, bool]:
     """Pure decision logic for extraction_progress's phase/percentage/
     indeterminate-flag choice, factored out so it is directly testable
@@ -1385,6 +1386,10 @@ def _compute_extraction_progress(
         if total_files <= 0:
             return 5, phase_name, True
         return min(18, 5 + int((processed_files / max(total_files, 1)) * 13)), phase_name, False
+    if archive_percent is not None:
+        # 7-Zip's own percentage while it unpacks an archive (the long part of a large collection,
+        # before its files can be counted). Each nested archive starts again from 0.
+        return min(18, 5 + int(max(0, min(archive_percent, 100)) * 13 / 100)), "extracting", False
     extraction_pct = 5 if total_files <= 0 else min(18, 5 + int((processed_files / max(total_files, 1)) * 13))
     return extraction_pct, "extracting", False
 
@@ -3802,6 +3807,7 @@ def _classify_and_dispatch_extracted(
     archive_entries: list[dict],
     archive_depth: int = 0,
     progress_cb=None,
+    remove_expanded_archives: bool = False,
 ) -> tuple[list[str], list[dict], Any | None]:
     max_depth = settings.max_archive_depth
     classifier = get_evidence_classifier()
@@ -3929,6 +3935,13 @@ def _classify_and_dispatch_extracted(
                     sub_dir,
                     progress_cb=progress_cb,
                 )
+                if remove_expanded_archives:
+                    # Its contents are now in sub_dir; the original evidence still holds it. Keeping
+                    # the copy doubled the space of a collection (a 6 GB .tar beside its 6 GB of files).
+                    file_path.unlink(missing_ok=True)
+                    expanded_entry = {**entry, "status": "expanded", "local_path": None, "expanded_into": sub_name}
+                else:
+                    expanded_entry = None
 
                 nf, ne, ndm = _classify_and_dispatch_extracted(
                     db=db,
@@ -3938,7 +3951,10 @@ def _classify_and_dispatch_extracted(
                     archive_entries=nested_entries,
                     archive_depth=archive_depth + 1,
                     progress_cb=progress_cb,
+                    remove_expanded_archives=remove_expanded_archives,
                 )
+                if expanded_entry is not None:
+                    result_entries.append(expanded_entry)
 
                 for nested_rel in nf:
                     result_extracted.append(f"{sub_name}/{nested_rel}")
@@ -3974,6 +3990,11 @@ def _classify_and_dispatch_extracted(
                     # the evidence was read, and the evidence says so. A damaged archive among the
                     # files a collection copied is not a problem of the evidence and is only logged.
                     entry = {**entry, "nested_extraction_error": str(getattr(exc, "message", None) or exc)[:500]}
+                if not file_path.exists():
+                    # Already expanded and removed when what failed was reading its contents.
+                    entry = {**entry, "status": "expanded", "local_path": None}
+                    result_entries.append(entry)
+                    continue
                 result_entries.append(entry)
                 result_extracted.append(rel_path)
 
@@ -5283,6 +5304,7 @@ def ingest_evidence(evidence_id: str) -> None:
                 current_action=current_action,
                 total_files=total_files,
                 processed_files=processed_files,
+                archive_percent=int(extra["archive_percent"]) if extra.get("archive_percent") is not None else None,
             )
             estimated_remaining = _estimate_remaining_seconds(elapsed_seconds=elapsed_seconds, progress_pct=extraction_pct)
             now_monotonic = time.perf_counter()
@@ -5323,6 +5345,7 @@ def ingest_evidence(evidence_id: str) -> None:
                     "bytes_total": int(extra.get("total_bytes") or 0),
                     "current_selected_path": extra.get("current_path") if is_selected_velociraptor else None,
                     "current_action": extra.get("current_action"),
+                    "archive_percent": extra.get("archive_percent"),
                     "current_item": extra.get("current_path"),
                     "files_materialized": int(extra.get("files_materialized") or 0),
                     "files_skipped_existing": int(extra.get("files_skipped_existing") or 0),
@@ -5704,6 +5727,8 @@ def ingest_evidence(evidence_id: str) -> None:
                         extracted_files=extracted_files,
                         archive_entries=archive_entries,
                         progress_cb=extraction_progress,
+                        # extract_dir is the managed copy here (an archive is never used in place).
+                        remove_expanded_archives=extract_dir != stored_path,
                     )
                 step_seconds["nested_archives_and_classification"] = round(time.perf_counter() - step_started, 2)
             else:
