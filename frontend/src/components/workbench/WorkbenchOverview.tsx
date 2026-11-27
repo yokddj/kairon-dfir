@@ -16,6 +16,7 @@ const STATUS_LABELS: Record<string, string> = {
   not_collected: "no data",
   empty: "no data",
   not_applicable: "unsupported",
+  on_demand: "search on demand",
 };
 
 const STATUS_STYLES: Record<string, string> = {
@@ -26,6 +27,7 @@ const STATUS_STYLES: Record<string, string> = {
   not_collected: "border-line bg-abyss/70 text-muted",
   empty: "border-line bg-abyss/70 text-muted",
   not_applicable: "border-line bg-abyss/40 text-muted/70",
+  on_demand: "border-mint/30 bg-mint/10 text-mint",
 };
 
 // Evidence priority for routes that carry :evidenceId: (1) an evidence id
@@ -72,7 +74,7 @@ function resolveActiveDomainId(domains: Array<{ id: string }>, requested: string
 // Severity order for the compact per-tab badge: the worst status present
 // wins, so a tab with one failed capability among ten healthy ones still
 // reads as "needs attention" at a glance.
-const READINESS_SEVERITY = ["failed", "degraded", "processing", "not_collected", "empty", "has_data", "not_applicable"];
+const READINESS_SEVERITY = ["failed", "degraded", "processing", "not_collected", "empty", "on_demand", "has_data", "not_applicable"];
 
 function readinessCounts(capabilities: CaseCapability[]): Record<string, number> {
   return capabilities.reduce<Record<string, number>>((acc, capability) => {

@@ -32,7 +32,8 @@ Expected, standard capabilities of a serious DFIR platform. Installed by default
 ### macOS
 
 - Experimental (2026-11): UAC collections only, from a closed list of artifacts — launchd jobs, quarantine events, KnowledgeC, TCC, dslocal accounts and groups, SystemVersion.plist, install.log and wifi.log, the Unix artifacts macOS shares with Linux (shell histories, sudoers, PAM, SSH, cron), browsers including Safari, and UAC live response (also parsed for Linux UAC collections). See `docs/macos/macos-support.md`.
-- Not parsed yet: Unified Logs, FSEvents, ASL, Biome, recent-items lists, UAC's bodyfile; APFS disk images are not supported.
+- FSEvents: searched on demand from the macOS workbench (not indexed).
+- Not parsed yet: Unified Logs, ASL, Biome, recent-items lists, UAC's bodyfile; APFS disk images are not supported.
 - Validated on one real collection only (recent macOS on Apple silicon, UAC 3.4.0).
 
 ### Memory Analysis

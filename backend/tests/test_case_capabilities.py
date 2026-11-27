@@ -244,7 +244,7 @@ def test_registry_static_architecture_consistency():
         assert capability["domain"]
         assert capability["evidence_domain"] in {"filesystem", "memory"}
         assert capability["availability"] == "shipped"
-        assert capability["readiness_source"] in {"artifact_counts", "memory_artifact_counts"}
+        assert capability["readiness_source"] in {"artifact_counts", "memory_artifact_counts", "on_demand_artifacts"}
         assert capability["nav"]["parent"].startswith(f"{capability['platform']}/")
         assert capability["nav"]["order"] > 0
         overview = capability.get("overview")

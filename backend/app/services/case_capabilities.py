@@ -176,6 +176,21 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "readiness_source": "artifact_counts",
     },
     {
+        "id": "macos.filesystem.fsevents",
+        "platform": "macos",
+        "evidence_domain": "filesystem",
+        "domain": "filesystem",
+        "title": "File System Events (FSEvents)",
+        "route": "/cases/:caseId/mac/filesystem/fsevents",
+        "artifact_families": ["macos_fsevents"],
+        "nav": {"parent": "macos/filesystem", "order": 10},
+        "overview": {"priority": 38, "featured": True, "quick_action": "Search FSEvents"},
+        "search": {"priority": 38, "group": "File System", "tags": ["fsevents", "files", "deleted"], "default_filters": {"platform": "macos", "artifact_type": ["macos_fsevents"]}, "preferred_sort": "timestamp_desc", "filters": [], "presets": [{"title": "macOS file system events", "state": {"platform": "macos", "artifact_type": ["macos_fsevents"]}}]},
+        "availability": "shipped",
+        # Searched on demand: never indexed, so its readiness comes from the journal being there.
+        "readiness_source": "on_demand_artifacts",
+    },
+    {
         "id": "macos.host.live_response",
         "platform": "macos",
         "evidence_domain": "filesystem",
@@ -665,6 +680,8 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
             in_scope = case_platforms.get(entry["platform"], 0) > 0
         if not in_scope:
             readiness = "not_applicable"
+        elif source == "on_demand_artifacts":
+            readiness = "on_demand" if artifact_count > 0 else "not_collected"
         elif record_count > 0:
             readiness = "has_data"
         elif artifact_count > 0:
