@@ -4387,7 +4387,8 @@ MACOS_ROW_FIELDS = (
     "tcc_scope", "tcc_service", "tcc_service_label", "tcc_client", "tcc_client_type", "tcc_decision", "tcc_reason",
     "tcc_target", "sensitive_permission",
     "process", "pid", "package", "package_version", "parse_status", "fact_type", "repeat_count", "last_seen",
-    "severity",
+    "severity", "list_name", "item_name", "item_path", "volume_path", "volume_name", "target_created",
+    "list_position", "list_modified",
 )
 UAC_ROW_FIELDS = (
     "artifact_family", "artifact_type", "source_file", "line_number", "message", "event_action", "timestamp_status",
@@ -4507,6 +4508,12 @@ def normalize_macos_row(doc: dict, row: dict, *, source_path: str = "", artifact
             doc["event"].update({"category": "iam", "type": "user"})
         elif action == "login_failed":
             doc["event"]["outcome"] = "failure"
+    elif family == "macos_recent_items":
+        doc["file"]["path"] = row.get("item_path") or None
+        doc["file"]["name"] = row.get("item_name") or None
+        doc["file"]["created"] = row.get("target_created")
+        doc["process"]["application"] = row.get("bundle_id") or None
+        doc["event"]["category"] = "file"
     elif family == "macos_logs":
         doc["process"]["name"] = row.get("process") or None
         doc["process"]["pid"] = row.get("pid")

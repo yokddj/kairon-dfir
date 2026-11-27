@@ -74,3 +74,70 @@ def test_listing_keeps_one_row_for_the_journal(tmp_path: Path) -> None:
     assert len(journal) == 1 and journal[0]["parser"] == "not_implemented" and journal[0]["status"] == "detected_not_parsed"
     # Its pages are neither listed nor counted as unparsed files.
     assert stats["files_seen"] == 0
+
+
+# -- shared file lists ---------------------------------------------------------------------------
+
+import plistlib  # noqa: E402
+
+from app.ingest.macos.shared_file_lists import parse_bookmark, parse_shared_file_list  # noqa: E402
+
+
+def _bookmark(parts: list[str], created: float) -> bytes:
+    """A minimal CFURL bookmark: header, data items, one table of contents."""
+    data = bytearray(b"\0\0\0\0")  # first TOC offset, patched below
+    offsets = []
+    for part in parts:
+        offsets.append(len(data))
+        raw = part.encode()
+        data += struct.pack("<II", len(raw), 0x0101) + raw + b"\0" * (-len(raw) % 4)
+    array_offset = len(data)
+    data += struct.pack("<II", 4 * len(offsets), 0x0601) + b"".join(struct.pack("<I", item) for item in offsets)
+    date_offset = len(data)
+    data += struct.pack("<II", 8, 0x0400) + struct.pack(">d", created)
+    toc_offset = len(data)
+    entries = [(0x1004, array_offset), (0x1040, date_offset)]
+    data += struct.pack("<IIIII", 0, 0xFFFFFFFE, 1, 0, len(entries)) + b"".join(struct.pack("<III", key, offset, 0) for key, offset in entries)
+    struct.pack_into("<I", data, 0, toc_offset)
+    header = b"book" + struct.pack("<III", 48 + len(data), 0x10040000, 48) + b"\0" * 32
+    return header + bytes(data)
+
+
+def _archive(items: list[dict]) -> bytes:
+    objects: list = ["$null"]
+
+    def add(value) -> plistlib.UID:
+        objects.append(value)
+        return plistlib.UID(len(objects) - 1)
+
+    item_uids = []
+    for item in items:
+        keys = [add(key) for key in item]
+        values = [add(value) for value in item.values()]
+        item_uids.append(add({"NS.keys": keys, "NS.objects": values}))
+    items_uid = add({"NS.objects": item_uids})
+    root = add({"NS.keys": [add("items")], "NS.objects": [items_uid]})
+    return plistlib.dumps({"$version": 100000, "$archiver": "NSKeyedArchiver", "$top": {"root": root}, "$objects": objects}, fmt=plistlib.FMT_BINARY)
+
+
+def test_bookmark_path_and_creation() -> None:
+    parsed = parse_bookmark(_bookmark(["Users", "alice", "Documents", "plan.pages"], 789_000_000.0))
+    assert parsed["path"] == "/Users/alice/Documents/plan.pages"
+    assert parsed["target_created"].startswith("2026-")
+    assert parse_bookmark(b"not a bookmark") == {}
+
+
+def test_application_recent_documents(tmp_path: Path) -> None:
+    rel = "[root]/Users/alice/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments/com.example.editor.sfl4"
+    target = tmp_path / rel
+    target.parent.mkdir(parents=True)
+    target.write_bytes(_archive([
+        {"Name": "plan.pages", "Bookmark": _bookmark(["Users", "alice", "Documents", "plan.pages"], 789_000_000.0)},
+        {"Name": "server", "uuid": "x"},
+    ]))
+    rows = parse_shared_file_list(target, source_path=rel)
+    assert [row["item_path"] for row in rows] == ["/Users/alice/Documents/plan.pages", ""]
+    assert rows[0]["list_name"] == "ApplicationRecentDocuments" and rows[0]["bundle_id"] == "com.example.editor"
+    assert rows[0]["username"] == "alice" and rows[0]["list_position"] == 1 and rows[0]["timestamp"] is None
+    artifacts, _ = list_macos_artifacts(tmp_path)
+    assert [item["parser"] for item in artifacts] == ["macos_recent_items_raw"]

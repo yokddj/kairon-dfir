@@ -54,6 +54,7 @@ is counted (`macos_collection_summary.files_not_parsed` in the evidence metadata
 | KnowledgeC | `~/Library/Application Support/Knowledge/knowledgeC.db`, `/private/var/db/CoreDuet/Knowledge/knowledgeC.db` | App usage (bundle id, start, end, duration), web and media usage (URL), app intents, display on/off, device locked, Bluetooth connections, notifications. | `macos_knowledgec` |
 | TCC | `/Library/Application Support/com.apple.TCC/TCC.db`, `~/Library/Application Support/com.apple.TCC/TCC.db` | Privacy permissions per app (Full Disk Access, Accessibility, Screen Recording, camera, microphone...): allowed, denied or limited, why, and when last changed. | `macos_tcc` |
 | Local accounts and groups | `/private/var/db/dslocal/nodes/Default/users/*.plist`, `groups/*.plist` | Name, UID, primary GID, home, shell, real name; creation, last password change and last failed login from `accountPolicyData`; group members (who is in `admin`). Password hashes (`ShadowHashData`) are never read. | `macos_accounts` |
+| Shared file lists | `~/Library/Application Support/com.apple.sharedfilelist/*.sfl2`, `.sfl3`, `.sfl4` (also `ApplicationRecentDocuments/<bundle id>.sfl*`) | Recent documents and applications, per-application recent documents, recent servers and hosts, Finder favourites: the item's name and the path, volume and creation date its bookmark keeps, in list order. Items have no time of their own; the list file's modification time is `macos.list_modified`. | `macos_recent_items` |
 | System version | `/System/Library/CoreServices/SystemVersion.plist` | Product name, version and build, as Host Facts. | `macos_system_info` |
 | install.log | `/private/var/log/install.log` and rotated copies | Every line with its own UTC offset; finished installations (`Installed "Name" (version)`) and package receipts marked. | `macos_logs` |
 | wifi.log | `/private/var/log/wifi.log` and rotated `.bz2` copies | Lines with the year and time zone resolved from the host. Repeats folded (below). | `macos_logs` |
@@ -138,8 +139,8 @@ Timeline; process start times and logins are real events and appear on it.
 - **Search and Timeline**, filterable by family (`macos_launchd`, `macos_knowledgec`...) and by
   `macos.*` / `uac.*` fields.
 - **macOS workbench** (`/cases/<id>/mac`): Command History, App & Device Usage (KnowledgeC),
-  LaunchAgents & LaunchDaemons, Downloads (Quarantine), Privacy Permissions (TCC), File System
-  Events (FSEvents, searched on demand), Live Response.
+  LaunchAgents & LaunchDaemons, Downloads (Quarantine), Recent Items, Privacy Permissions (TCC),
+  File System Events (FSEvents, searched on demand), Live Response.
 - **Host Information**: product name and version, kernel, architecture and time zone as Host Facts;
   local accounts from dslocal, with group membership (including `admin`), in the host's users.
 - **Sigma**: Linux rules run on the shared Unix families as they do on Linux. There are no macOS
@@ -161,8 +162,7 @@ Flags are leads for an analyst, never detections:
 
 ## Not parsed
 
-- **Unified Logs** (`/private/var/db/diagnostics/*.tracev3` with `uuidtext`), **ASL** binary logs, **Biome** and **SEGB** streams, `.sfl2/.sfl3/.sfl4`
-  recent-items lists, Spotlight, Keychains, Mail and Messages: kept in the evidence, not read.
+- **Unified Logs** (`/private/var/db/diagnostics/*.tracev3` with `uuidtext`), **ASL** binary logs, **Biome** and **SEGB** streams, Spotlight, Keychains, Mail and Messages: kept in the evidence, not read.
 - **UAC's bodyfile** (`bodyfile/bodyfile.txt`) and hash lists: kept, not indexed.
 - LaunchAgents and LaunchDaemons under `/System/Library` and `/Library/Apple`: Apple's own, on the
   sealed system volume, not listed.
