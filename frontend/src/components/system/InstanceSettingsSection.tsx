@@ -8,6 +8,7 @@ const QUERY_KEY = ["admin-instance-settings"];
 const GROUP_LABELS: Record<string, string> = {
   general: "General",
   ingest: "Ingest and archives",
+  evtx: "Windows event logs",
   disk: "Disk images",
   memory: "Memory analysis",
 };
