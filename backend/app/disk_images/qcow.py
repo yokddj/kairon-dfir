@@ -15,6 +15,7 @@ from app.disk_images.qemu import (
     qemu_img_check,
     qemu_img_convert_to_raw,
     qemu_img_info,
+    qemu_img_probe,
 )
 
 _MAX_CHAIN_DEPTH = 3
@@ -42,7 +43,7 @@ class QcowImageAdapter:
         header = _read_header(path)
         if header and header[:4] in {b"QFI\xfb", b"QFI\xfe"}:
             return {"format": self.key, "confidence": "magic", "supported": self.readiness()["ready"]}
-        info = qemu_img_info(path)
+        info = qemu_img_probe(path)
         fmt = _format_from_info(info, path)
         if fmt in {"qcow", "qcow2"}:
             return {"format": self.key, "confidence": "qemu_img_format", "variant": fmt, "supported": self.readiness()["ready"]}

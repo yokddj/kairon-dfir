@@ -17,6 +17,7 @@ from app.disk_images.qemu import (
     qemu_img_check,
     qemu_img_convert_to_raw,
     qemu_img_info,
+    qemu_img_probe,
 )
 
 _VMDK_MAGICS = (b"KDMV", b"VMDK", b"# Disk DescriptorFile")
@@ -32,7 +33,7 @@ class VmdkImageAdapter:
         header = _read_header(path, 65536)
         if header and any(magic in header for magic in _VMDK_MAGICS):
             return {"format": self.key, "confidence": "magic", "supported": self.readiness()["ready"]}
-        info = qemu_img_info(path)
+        info = qemu_img_probe(path)
         fmt = _format_from_info(info, path)
         if fmt == "vmdk":
             return {"format": self.key, "confidence": "qemu_img_format", "supported": self.readiness()["ready"]}
