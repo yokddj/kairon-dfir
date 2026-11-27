@@ -71,8 +71,8 @@ to 56,000 rows and 100,000 wifi lines to 8,700.
 
 Each volume's change journal (`/.fseventsd`, `/System/Volumes/Data/.fseventsd`): files and folders
 created, removed, renamed or modified, including files that no longer exist. A Mac holds millions
-of records (17 million on the test Mac), so they are **not indexed**: the macOS workbench's
-**File System Events (FSEvents)** page searches them on demand by path text, change kind and item
+of records (17 million on the test Mac), so they are **not indexed**: **File Changes (FSEvents)**
+in the side menu (shown when the case has macOS evidence) searches them on demand by path text, change kind and item
 type, newest first (about 6-11 seconds over 17 million records). The evidence lists one
 `macos_fsevents` artifact per journal, as detected, not parsed.
 

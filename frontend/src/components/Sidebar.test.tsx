@@ -146,6 +146,14 @@ describe("registry-driven sidebar", () => {
     expect(screen.getByRole("link", { name: "Linux Authentication" })).toHaveAttribute("href", "/cases/case-1/l/access/authentication");
   });
 
+  it("links to macOS file changes only when the case has macOS evidence", async () => {
+    getCaseCapabilitiesMock.mockResolvedValue(registry([workbench({ id: "macos", label: "macOS", icon: "laptop", overview_route: "/cases/case-1/mac" })]));
+    renderSidebar();
+
+    expect(await screen.findByRole("link", { name: "File Changes (FSEvents)" })).toHaveAttribute("href", "/cases/case-1/mac/filesystem/fsevents");
+    expect(screen.queryByRole("link", { name: "Linux Authentication" })).not.toBeInTheDocument();
+  });
+
   it("shows only the views the case has evidence for", async () => {
     getCaseCapabilitiesMock.mockResolvedValue(registry([workbench({ id: "memory" })]));
     renderSidebar();
