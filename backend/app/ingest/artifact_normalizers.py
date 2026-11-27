@@ -4515,7 +4515,7 @@ def normalize_macos_row(doc: dict, row: dict, *, source_path: str = "", artifact
         doc["file"]["created"] = row.get("target_created")
         doc["process"]["application"] = row.get("bundle_id") or None
         doc["event"]["category"] = "file"
-    elif family == "macos_unified_logs":
+    elif family.startswith("macos_ul_"):
         doc["process"]["name"] = row.get("process") or None
         doc["process"]["path"] = row.get("process_path") or None
         doc["process"]["pid"] = row.get("pid")
