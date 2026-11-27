@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json
 from typing import Any
 
@@ -11,6 +11,30 @@ HISTORY_KEYS = (
     "ingest_benchmark_runs",
     "ingest_plan_snapshots",
 )
+
+
+def _parse_when(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+# On a first ingest the worker takes its start time just before it creates the
+# run row, so a start slightly earlier than the row's creation is still its own.
+_RUN_START_GRACE = timedelta(minutes=2)
+
+
+def _not_before(value: Any, floor: Any) -> Any:
+    """``value`` unless it is clearly earlier than ``floor`` (the run's creation), else None."""
+    when = _parse_when(value)
+    if when is None:
+        return None
+    limit = _parse_when(floor)
+    return value if limit is None or when >= limit - _RUN_START_GRACE else None
 
 
 def _coerce_run_list(metadata: dict | None) -> list[dict]:
@@ -255,6 +279,13 @@ def sync_ingest_run_from_metadata(metadata: dict | None, *, run_id: str, ingest_
         raw_status_value = str(ingest_status or merged.get("status") or "running")
         status_value = raw_status_value.split(".")[-1].strip().lower() or "running"
         is_terminal = status_value in terminal_statuses
+        # The evidence metadata keeps the previous run's start time until the
+        # worker picks this run up. A start earlier than the run's creation
+        # belongs to that earlier run and must not be copied (it used to stick
+        # and made a queued re-index show the last run's elapsed time).
+        metadata_started_at = _not_before(next_metadata.get("started_at"), merged.get("created_at"))
+        run_started_at = metadata_started_at or _not_before(merged.get("started_at"), merged.get("created_at"))
+        metadata_is_this_run = metadata_started_at is not None or not merged.get("created_at")
         phase = str(next_metadata.get("current_phase") or merged.get("phase") or "")
         progress = next_metadata.get("progress_pct")
         fatal_error = ((next_metadata.get("error_log") or {}).get("fatal") if isinstance(next_metadata.get("error_log"), dict) else None)
@@ -319,8 +350,8 @@ def sync_ingest_run_from_metadata(metadata: dict | None, *, run_id: str, ingest_
                 "tail_elapsed_seconds": next_metadata.get("tail_elapsed_seconds"),
                 "heartbeat_at": next_metadata.get("heartbeat_at") or merged.get("heartbeat_at"),
                 "created_at": merged.get("created_at"),
-                "started_at": merged.get("started_at") or next_metadata.get("started_at"),
-                "elapsed_seconds": next_metadata.get("elapsed_seconds"),
+                "started_at": run_started_at,
+                "elapsed_seconds": next_metadata.get("elapsed_seconds") if metadata_is_this_run else merged.get("elapsed_seconds"),
                 "last_error": fatal_error or (merged.get("last_error") if status_value in {"completed", "completed_with_errors", "failed", "cancelled"} else None),
                 "warnings": list(next_metadata.get("warnings") or merged.get("warnings") or []),
                 "selected_by_artifact_type": dict(((next_metadata.get("ingest_plan") or {}).get("selected_by_artifact_type") or merged.get("selected_by_artifact_type") or {})),

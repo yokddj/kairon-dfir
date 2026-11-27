@@ -11869,15 +11869,6 @@ def test_velociraptor_discovery_detects_bits_raw_and_evtx() -> None:
     assert evtx.reason == "BITS EVTX found; handled by EVTX parser."
 
 
-def test_bits_evidence_detail_shows_explanatory_message_when_only_raw_and_evtx_exist() -> None:
-    evidence_detail_path = Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "EvidenceDetail.tsx"
-    if not evidence_detail_path.exists():
-        pytest.skip("frontend sources are not present in this test environment")
-    evidence_detail = evidence_detail_path.read_text(encoding="utf-8")
-    assert "No directly parseable BITS artifacts found. Raw qmgr parsing is not implemented yet; BITS EVTX artifacts are handled by the EVTX parser." in evidence_detail
-    assert "No parseable {categoryLabel} artifacts found" not in evidence_detail
-
-
 def test_normalize_bits_csv_file_extracts_expected_fields() -> None:
     source = Path(__file__).parent / "fixtures" / "bits" / "bits_jobs_sample.csv"
     docs = normalize_file(

@@ -37,7 +37,7 @@ Older evidence rows may have `sha256 = null` and `integrity_status = unknown`. T
 
 ## Verifying Integrity
 
-Use the Evidence detail view and click **Verify integrity**. Kairon recalculates SHA-256 from the stored evidence file, compares it with the saved hash, updates `integrity_status`, and records an `integrity_checked` custody event.
+On the evidence page, open the **⋯** menu and choose **Verify integrity**. Kairon recalculates SHA-256 from the stored evidence file, compares it with the saved hash, updates `integrity_status`, and records an `integrity_checked` custody event.
 
 API endpoints:
 
@@ -48,7 +48,7 @@ API endpoints:
 
 ## Exporting a Manifest
 
-Use **Export manifest** in the Evidence detail view or call the manifest endpoint. The manifest is JSON and intentionally omits absolute internal storage paths.
+Use **Export manifest** in the **⋯** menu of the evidence page or call the manifest endpoint. The manifest is JSON and intentionally omits absolute internal storage paths.
 
 Example:
 
