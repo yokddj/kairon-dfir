@@ -415,8 +415,10 @@ def _build_evidence_search_summary(item: Evidence) -> dict[str, Any]:
             "size": 0,
             "query": query,
             "aggs": {
-                "artifact_type": {"terms": {"field": "artifact.type", "size": 12}},
-                "parser": {"terms": {"field": "artifact.parser", "size": 12}},
+                # Every family and parser: the evidence page lists them all, and a
+                # collection easily has more than a dozen (a Mac UAC has 15).
+                "artifact_type": {"terms": {"field": "artifact.type", "size": 500}},
+                "parser": {"terms": {"field": "artifact.parser", "size": 500}},
                 "source_file": {"terms": {"field": source_file_field, "size": 12}},
                 "host": {"terms": {"field": host_field, "size": 12}},
                 "user": {"terms": {"field": user_field, "size": 12}},

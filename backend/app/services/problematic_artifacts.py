@@ -49,6 +49,13 @@ EVTX_HEADER_MAGIC = b"ElfFile\x00"
 DEFERRED_PROBLEMATIC_STATUSES = {"deferred_long_tail", "partial_indexed_deferred"}
 
 
+
+def _no_records_message(parser_name: str) -> str:
+    """Why an artifact produced nothing, worded for its own format (only EVTX has channels)."""
+    if "evtx" in parser_name.lower():
+        return "No records produced / empty or unsupported EVTX channel."
+    return "No records produced: the file was empty or held nothing this parser reads."
+
 def _lookup_artifact_id(
     artifact_id_by_key: dict[tuple[str, str], str],
     *,
@@ -584,7 +591,7 @@ def build_problematic_artifacts_report(
             "records_indexed": records_indexed,
             "bulk_batches": int(ingest_audit.get("bulk_batches") or 0),
             "error_type": error_type or ("warning" if partial_data_indexed else "failure"),
-            "error_message": error_text or ("No records produced / empty or unsupported EVTX channel." if error_type == "no_records" else None),
+            "error_message": error_text or (_no_records_message(str(artifact.get("parser") or "")) if error_type == "no_records" else None),
             "timeout_seconds": int(ingest_audit.get("timeout_seconds") or 0),
             "partial_data_indexed": partial_data_indexed,
             "data_loss_expected": data_loss_expected,
@@ -659,7 +666,7 @@ def build_problematic_artifacts_report(
             if status in {"deferred_long_tail", "partial_indexed_deferred"}
             else "Artifact did not finish before timeout."
             if status in {"failed_timeout", "stalled_timeout"}
-            else "No records produced / empty or unsupported EVTX channel."
+            else _no_records_message(parser_name)
             if no_records_status
             else "Artifact failed during ingest."
         )

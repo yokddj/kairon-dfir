@@ -365,6 +365,41 @@ SURFACE_REGISTRY: list[dict[str, Any]] = [
 ]
 
 
+def _uac_bodyfile_on_disk(evidence: Evidence) -> bool:
+    from app.services.uac_bodyfile import bodyfile_path
+
+    return bodyfile_path(evidence) is not None
+
+
+# Sources searched on demand whose presence can be checked on disk cheaply: an
+# evidence processed before its artifact row was written still has the file, so
+# the workbench must not call it "no data".
+_ON_DEMAND_DISK_PROBES = {"uac_bodyfile": _uac_bodyfile_on_disk}
+
+
+def _on_demand_sources_on_disk(
+    families: list[str],
+    platform: str,
+    evidence_payloads: list[dict[str, Any]],
+    evidence_models: dict[str, Evidence],
+) -> int:
+    """How many evidences of ``platform`` hold one of ``families`` on disk."""
+    probes = [_ON_DEMAND_DISK_PROBES[family] for family in families if family in _ON_DEMAND_DISK_PROBES]
+    if not probes:
+        return 0
+    found = 0
+    for payload in evidence_payloads:
+        evidence = evidence_models.get(payload["id"])
+        if payload["platform"] != platform or evidence is None:
+            continue
+        try:
+            if any(probe(evidence) for probe in probes):
+                found += 1
+        except OSError:
+            continue
+    return found
+
+
 def _surface_entry(surface_id: str) -> dict[str, Any] | None:
     return next((entry for entry in SURFACE_REGISTRY if entry["id"] == surface_id), None)
 
@@ -737,6 +772,8 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
         if not in_scope:
             readiness = "not_applicable"
         elif source == "on_demand_artifacts":
+            if artifact_count == 0:
+                artifact_count = _on_demand_sources_on_disk(families, entry["platform"], evidence_payloads, evidence_models)
             readiness = "on_demand" if artifact_count > 0 else "not_collected"
         elif record_count > 0:
             readiness = "has_data"

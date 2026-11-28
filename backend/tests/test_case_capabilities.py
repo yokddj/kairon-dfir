@@ -430,3 +430,27 @@ def test_legacy_redirect_targets_are_single_hop_terminal_routes():
     for capability in CAPABILITY_REGISTRY:
         route = _route_path(capability["route"])
         assert route not in legacy_sources, f"Registry route {route} uses a legacy alias"
+
+
+def test_bodyfile_on_disk_is_searchable_without_an_artifact_row(tmp_path, monkeypatch):
+    """An evidence processed before the bodyfile artifact row existed still has
+    the file: the workbench offers it on demand instead of saying "no data"."""
+    from app.services import uac_bodyfile
+
+    db = _db()
+    _case(db)
+    _evidence(db, LINUX_EVIDENCE_ID, "uac.tar.gz", EvidenceType.linux_triage, "linux")
+    extract = tmp_path / "extract"
+    monkeypatch.setattr(uac_bodyfile, "evidence_extract_dir", lambda case_id, evidence_id: extract)
+
+    def bodyfile_readiness():
+        body = _client(db).get(f"/api/cases/{CASE_ID}/capabilities").json()
+        return next(item for item in body["capabilities"] if item["id"] == "linux.filesystem.bodyfile")["readiness"]
+
+    assert bodyfile_readiness() == "not_collected"
+    root = extract / "collection"
+    (root / "bodyfile").mkdir(parents=True)
+    (root / "live_response").mkdir()
+    (root / "uac.log").write_text("x")
+    (root / "bodyfile/bodyfile.txt").write_text("0|/etc/hosts|3|-rw-r--r--|0|0|10|0|1600000000|1600000000|1600000000\n")
+    assert bodyfile_readiness() == "on_demand"
