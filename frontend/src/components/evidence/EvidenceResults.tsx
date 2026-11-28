@@ -34,6 +34,7 @@ export default function EvidenceResults({
   evidenceId,
   totalDocs,
   artifactTypeCounts,
+  countsLoaded = true,
   problems,
   onRetry,
   retryBusy,
@@ -43,6 +44,8 @@ export default function EvidenceResults({
   evidenceId: string;
   totalDocs: number;
   artifactTypeCounts: Record<string, number>;
+  /** False until the per-family counts arrive: until then nothing is claimed about them. */
+  countsLoaded?: boolean;
   problems: ProblemBuckets;
   onRetry: (artifactIds: string[]) => void;
   retryBusy: boolean;
@@ -77,9 +80,9 @@ export default function EvidenceResults({
               </li>
             ))}
           </ul>
-        ) : (
+        ) : countsLoaded ? (
           <p className="mt-3 text-sm text-muted">Nothing searchable was indexed from this evidence.</p>
-        )}
+        ) : null}
         {problems.emptyCount ? (
           <p className="mt-3 text-xs text-muted" data-testid="evidence-empty-note">
             {problems.emptyCount.toLocaleString()} file{problems.emptyCount === 1 ? "" : "s"} held no records and {problems.emptyCount === 1 ? "was" : "were"} skipped.

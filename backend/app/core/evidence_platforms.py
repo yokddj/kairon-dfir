@@ -95,7 +95,7 @@ PLATFORM_REGISTRY: dict[str, dict[str, Any]] = {
         "id": EvidencePlatform.macos.value,
         "label": "macOS",
         "upload_label": "macOS (UAC)",
-        "upload_description": "UAC collections of a Mac (uac -p full or -p ir_triage). Only a fixed list of macOS artifacts is parsed: launchd jobs, quarantine events, KnowledgeC, TCC, local accounts, install.log, shell histories, browsers and UAC live response.",
+        "upload_description": "UAC collections of a Mac (uac -p full or -p ir_triage). Only a fixed list of macOS artifacts is parsed: Unified Logs (by topic), launchd jobs, quarantine events, KnowledgeC, TCC, recent items, local accounts, install.log, shell histories, browsers and UAC live response; FSEvents and the UAC bodyfile are searched on demand.",
     },
     EvidencePlatform.bsd.value: {
         "id": EvidencePlatform.bsd.value,

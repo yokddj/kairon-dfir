@@ -125,6 +125,13 @@ describe("EvidenceDetail", () => {
     expect(screen.getByRole("navigation", { name: "Open this evidence in" })).toHaveTextContent("Timeline");
   });
 
+  it("claims nothing about the families while their counts are still loading", async () => {
+    setup();
+    mocks.getEvidenceSearchSummary.mockReturnValue(new Promise(() => {}));
+    const results = await screen.findByTestId("evidence-results");
+    expect(within(results).queryByText(/Nothing searchable was indexed/)).not.toBeInTheDocument();
+  });
+
   it("lists real failures and retries only the retryable ones", async () => {
     mocks.retryProblematicArtifact.mockResolvedValue({});
     setup({

@@ -178,7 +178,7 @@ export function problematicRecoveryText(artifact: ProblematicArtifact) {
     return "The original or staged file is no longer available for health check, but indexed events are searchable.";
   }
   if (["skipped_empty", "completed_no_records", "unsupported_no_records"].includes(effectiveStatus)) {
-    return "No records produced. Empty or unsupported EVTX channels are not investigation blockers.";
+    return "No records produced. Empty files are not investigation blockers.";
   }
   if (effectiveStatus === "parsed_with_warning" || effectiveStatus === "accepted_warning" || effectiveStatus === "health_check_only_valid") {
     return "All read records were indexed.";

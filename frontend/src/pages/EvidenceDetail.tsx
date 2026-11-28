@@ -334,6 +334,7 @@ export default function EvidenceDetail() {
           evidenceId={evidenceId}
           totalDocs={indexedDocs}
           artifactTypeCounts={artifactTypeCounts}
+          countsLoaded={Boolean(summary)}
           problems={problems}
           onRetry={(ids) => retry.mutate(ids)}
           retryBusy={retry.isPending}

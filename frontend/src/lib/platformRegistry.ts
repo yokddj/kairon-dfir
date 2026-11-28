@@ -13,7 +13,7 @@ export const UI_PLATFORM_REGISTRY: UiPlatformDefinition[] = [
   { id: "linux", label: "Linux", description: "Use for Linux triage artifacts, logs, inventory, persistence and related collections." },
   { id: "memory", label: "Memory", description: "Memory evidence exposes memory-first capabilities and can coexist with disk platforms in mixed evidence." },
   { id: "mixed", label: "Mixed", description: "A single evidence source that contains multiple platform families, such as Linux plus Memory." },
-  { id: "macos", label: "macOS (UAC)", description: "UAC collections of a Mac (uac -p full or -p ir_triage). Only a fixed list of macOS artifacts is parsed: launchd jobs, quarantine events, KnowledgeC, TCC, local accounts, install.log, shell histories, browsers and UAC live response." },
+  { id: "macos", label: "macOS (UAC)", description: "UAC collections of a Mac (uac -p full or -p ir_triage). Only a fixed list of macOS artifacts is parsed: Unified Logs (by topic), launchd jobs, quarantine events, KnowledgeC, TCC, recent items, local accounts, install.log, shell histories, browsers and UAC live response; FSEvents and the UAC bodyfile are searched on demand." },
   { id: "bsd", label: "BSD planned", description: "FreeBSD/NetBSD/OpenBSD installations are detected inside disk images, but dedicated BSD artifact collection is not supported yet.", disabled: true },
   { id: "unknown", label: "Unknown / Other", description: "Use when the source platform is unclear or non-OS-specific." },
 ];
